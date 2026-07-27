@@ -54,6 +54,34 @@ graph LR
 Cross-cutting work that gates Phase 0 and Phase 1. None of it produces a finding; all of it
 prevents rework later.
 
+### F-00 Pinned Linux development and CI target
+
+**Depends on:** —
+**Exit:** A reproducible Linux environment (fixed kernel version, fixed overlayfs mount
+options) that development and CI can both target, documented as such.
+
+Referenced as blocking in [ADR-007](adr/007-implementation-language.md) ("sandbox is
+unbuildable on the macOS host by construction... this is now blocking") and in
+`crates/sandbox/src/lib.rs` ("untestable on the primary development host. That is F-00's
+problem") since the language decision was made, but never actually added to this backlog
+until now — a real gap between the docs and the tracked work, found while scoping the
+census staging below.
+
+**Gates P1-02 onward, not Phase 0.** Stage 0/1 census (registry metadata; `initialize` +
+`tools/list` against remote HTTP servers) touches no sandbox code. Stage 2 census (Class A
+servers, which requires locally executing the server to discover it) needs *containment*
+but not *this* — a stock container runtime is adequate for containment-without-observation,
+per the reasoning in the P0-06/P0-07 notes below. F-00 is specifically about the
+fixed-kernel-version precision that *observation-grade* overlayfs work (Phase 1+) needs,
+which containerized execution without observation does not.
+
+- [ ] Choose the target: a pinned VM image (recommended — a container shares the host
+      kernel, which defeats "pinned" if the host itself isn't fixed) vs. a dedicated
+      bare-metal/cloud Linux box
+- [ ] Pin the kernel version and record it
+- [ ] Pin overlayfs mount options
+- [ ] Document how a contributor gets local access matching CI's environment
+
 ### F-01 ⚑ Choose implementation language and workspace layout — ADR-007
 
 **Depends on:** —
@@ -208,12 +236,60 @@ exercised in both directions (accepted when it should be, rejected when it shoul
       (no update/delete method there either) so immutability holds on both sides of the
       evidence/metadata split
 
+### F-07 Canonical evidence-tree serialisation — ADR-009
+
+**Depends on:** F-05
+**Exit:** ADR-009 merged defining how a directory tree (the overlay upper layer) serialises
+into the byte blob F-05's content-addressed store actually stores.
+
+Referenced in [ADR-007](adr/007-implementation-language.md) ("the primary evidence artifact
+is a directory tree, not a byte string, and F-05's content addressing needs a tree format
+before it means anything") and in `datamodel`'s `RawEvidence` doc comment ("shape is
+deferred to ADR-009") since F-05 landed, but never actually added to this backlog until
+now — found alongside the F-00 gap while scoping the census work below. Blocks P1-04
+(Observation collector), the first component with an actual directory tree to harvest.
+
+- [ ] Decide the serialisation format (git-tree-like, tar-like, or bespoke) and its
+      reproducibility properties — ordering, mtimes, whiteouts; design.md §9's overlayfs
+      semantics apply directly
+- [ ] The format must stay lossless per `RawEvidence`'s existing contract: *"capture is
+      lossless... discarding [mtimes/inode data] at capture time is normalisation, and
+      ADR-005 requires normalisation to be a pure function of stored evidence"*
+- [ ] Two independent captures of the same directory tree must serialise to byte-identical
+      output — this is what makes F-05's content addressing meaningful for tree evidence,
+      not just single blobs, the same property P1-02 proves for the base layer itself
+
 ---
 
 ## Phase 0 — Census
 
 No sandbox code. Ships a publishable finding on its own (ADR-001), which is what inverts the
 project's risk profile.
+
+**Staging, added once P0-01–P0-05 landed and it became clear the phase decomposes further
+than P0-06/07/08 originally implied:**
+
+- **Stage 0 — registry-metadata census.** `registry::fetch_all` → `catalogue::ingest` →
+  `classify::classify` → `census::coverage::tally`, over `server.json` documents alone.
+  **Zero contact with any third-party MCP server** — the Class A/B/`unclassifiable` ratio
+  needs nothing else. This decouples P0-08 from P0-07: the ratio does not need the full
+  annotation census to exist first, only the registry listing, so it can and should ship
+  before Stage 1/2 do.
+- **Stage 1 — Class B annotation census.** `initialize` + `tools/list` over HTTP against
+  live remote (Class B) servers. No local execution, no tool calls — exactly what any MCP
+  client does on connect. Needs politeness controls (rate limiting, a `User-Agent`
+  identifying the study, honest failure/timeout reporting per P0-07's own requirement).
+- **Stage 2 — Class A annotation census.** Same as Stage 1, but discovering a Class A
+  (locally-launchable) server means executing it (`npx`, `uvx`, a container image, ...) to
+  speak stdio to it — this is execution, unlike Stage 0/1. It needs *containment* (don't let
+  an adversarial server hurt the host) but, critically, **not the observation** the Phase
+  1+ sandbox exists for (no changeset, no noise floor — census reads only what
+  `tools/list` says, never what the tool does). A stock container runtime is adequate
+  containment for that narrower job, and using one for Stage 2 does not compromise the
+  hand-rolled-sandbox decision in ADR-007, which is about observation quality, not
+  containment per se. Record how each server was discovered (bare host vs. containerized)
+  as provenance on the result, so census data is never silently pooled across the two the
+  way ADR-002 already forbids pooling across oracles.
 
 ### P0-01 ⚑ Discovery client
 
@@ -354,7 +430,9 @@ tools together produce the same combined counts.
 **Exit:** Census completes over 100 servers; pin stability and coverage taxonomy validated
 against hand inspection of a sample.
 
-architecture.md §12 item 1.
+architecture.md §12 item 1. This is Stage 1/2 work (see the Phase 0 staging note above) —
+it needs real `initialize`/`tools/list` exchanges with live servers, not just registry
+metadata.
 
 - [ ] Hand-verify the taxonomy on ≥20 tools; fix the taxonomy, not the data
 - [ ] Re-run discovery on the same 100 and confirm pins are stable
@@ -365,14 +443,19 @@ architecture.md §12 item 1.
 **Exit:** Coverage numbers over ≥1,000 servers written to `results/census/`. **Publishable.**
 
 This is the Phase 0 exit criterion and plausibly the headline result — open question 1 asks
-whether the story is about *mismatch* or about *absence*.
+whether the story is about *mismatch* or about *absence*. Stage 1/2 work, same as P0-06.
 
 - [ ] Throughput profile suitable for the corpus size
 - [ ] Failure/timeout rate reported alongside the coverage rate
 
 ### P0-08 Class A / Class B ratio report
 
-**Depends on:** P0-07
+**Depends on:** P0-04 — *not* P0-07, as originally listed. See "Staging" under Phase 0
+above: the ratio needs only registry metadata (Stage 0), never a `tools/list` exchange with
+any server, so it does not need to wait for the full annotation census to exist. The
+dependency on P0-07 in the original phasing conflated "publish the ratio" with "publish it
+*alongside* the full coverage numbers," which is a presentation choice, not a data
+dependency.
 **Exit:** Ratio published with the census.
 
 architecture.md §2 design note: if most public servers are remote-only, *"most of the
