@@ -1214,6 +1214,52 @@ content; and the accessor methods round-tripping exactly what each constructor b
 **Depends on:** P1-07, P0-01
 **Exit:** One real `readOnlyHint` verdict on one real tool from one real MCP server, end to
 end. **This is the Phase 1 exit criterion.**
+**Status:** Done — `cargo xtask first-verdict` (`xtask/src/first_verdict.rs`),
+`results/conformance/p1_08_first_verdict.json`. Target: the official MCP reference
+"everything" server, `@modelcontextprotocol/server-everything`, published by the
+`modelcontextprotocol` org on npm, resolved via `npx` exactly the way Stage 2 census already
+resolves any npm Class A package. Its `echo` tool declares `readOnlyHint: true`; confirmed by
+hand (a throwaway Node script driving the real `initialize`/`tools/list`/`tools/call`
+sequence directly) before wiring this run, not assumed from the package name — the same
+discipline P0-06/B-01's hand-verification already followed.
+
+**Every Phase 1 component runs for real, wired together, against a live third-party
+package** — not a synthetic assembly of already-unit-tested pieces:
+`sandbox::base_layer::build` (an empty base — this demo needs no pre-seeded fixture content),
+`sandbox::spawn` (real `unshare`/mount-namespace/overlay), a hand-rolled newline-delimited
+JSON-RPC exchange over the returned pipes (`initialize` → `notifications/initialized` →
+`tools/list` → `tools/call`, reusing `discovery::jsonrpc::encode_request`/
+`encode_notification` rather than extending `discovery::DiscoveryClient`, which structurally
+cannot call a tool by design — see the module's own doc comment for why that boundary stays
+intact here too), `SandboxHandle::wait`, `integrity::decide`, `observe::harvest` +
+`observe::evtree::decode`, `orchestrator::load_ruleset` against the real
+`rulesets/v1.json`, `normalise::normalise`, and finally `verdict::read_only_hint`.
+
+**Result, run twice for stability** (same evidence digest both times, since the tool writes
+nothing): `echo` invoked with `{"message": "hello from mcp-conformance P1-08"}` → tool
+responds `"Echo: hello from mcp-conformance P1-08"` → sandbox exits cleanly, not timed out →
+gate accepts → upper-layer capture is the bare `evtree1` header, **zero entries** → canonical
+changeset empty, `user_state_is_empty() == true` → **`Assessment { outcome: Holds, reason:
+None, oracle: KernelChangeset }`**. `echo` really is read-only, and the harness said so, top
+to bottom, through real kernel primitives.
+
+**A real bug found running this against a live SDK-generated server, not only fakes**
+(same discipline as every prior hand-rolled-JSON-RPC script in this codebase): the reference
+server sends an unsolicited `notifications/tools/list_changed` notification that arrived
+interleaved *before* this script's own `tools/list` response during the very first run,
+which a naive "the next line is always my response" reader misread as an id mismatch and
+failed on. Fixed in `RawClient::call` to skip any message with no `id` field (a notification,
+by JSON-RPC definition) and keep reading until the actual matching response arrives — a
+response with a genuinely *mismatched* id is still a hard protocol error, not silently
+skipped too.
+
+**Containment scope, stated plainly, not implied:** per architecture.md §10's Phase 1 scope
+(mount namespace + overlay + timeout only — no `pivot_root`/chroot, no PID/user namespace
+yet), `npx`/`node` run against the real host filesystem outside the sandboxed working
+directory; only writes relative to that directory are contained and captured. `echo` makes
+none, which is exactly the case this run demonstrates — a tool that *did* write somewhere
+else on the host between init and exit would not be caught by Phase 1's gate, and that gap is
+P2-01's to close, not silently this task's success.
 
 ### P1-09 ⚑ Replay test
 

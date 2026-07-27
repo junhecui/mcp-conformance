@@ -10,14 +10,28 @@ census.workspace = true
 datamodel.workspace = true
 discovery.workspace = true
 intake.workspace = true
+integrity.workspace = true
+normalise.workspace = true
+orchestrator.workspace = true
 probe.workspace = true
 store.workspace = true
+verdict.workspace = true
 serde_json = "1.0.151"
 # Named directly (not just transitively via `store`) so `probe_stage1.rs` can name
 # `rusqlite::Connection` in its own function signatures. Same `0.32` line `store` already
 # depends on — Cargo unifies features across one resolved version, so this does not need to
 # repeat `store`'s `bundled` feature to get it.
 rusqlite = "0.32"
+
+# `sandbox`/`observe` compile to empty crates off Linux (their own crate-root `cfg`), so
+# depending on them unconditionally is harmless there; `first_verdict.rs` — the one module
+# that actually calls into them — is itself gated `#[cfg(target_os = "linux")]` in `lib.rs`,
+# same posture as the crates it calls.
+sandbox.workspace = true
+observe.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tempfile = "3.27.0"
 
 [lints]
 workspace = true

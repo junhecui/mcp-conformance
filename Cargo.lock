@@ -852,10 +852,17 @@ dependencies = [
  "datamodel",
  "discovery",
  "intake",
+ "integrity",
+ "normalise",
+ "observe",
+ "orchestrator",
  "probe",
  "rusqlite",
+ "sandbox",
  "serde_json",
  "store",
+ "tempfile",
+ "verdict",
 ]
 
 [[package]]

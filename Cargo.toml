@@ -29,6 +29,7 @@ verdict = { path = "crates/verdict" }
 destructive = { path = "crates/destructive" }
 store = { path = "crates/store" }
 probe = { path = "crates/probe" }
+orchestrator = { path = "crates/orchestrator" }
 
 [workspace.lints.rust]
 unsafe_code = "warn"

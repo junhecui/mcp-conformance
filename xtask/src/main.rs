@@ -11,6 +11,7 @@ fn main() -> ExitCode {
         Some("census-pin-stability") => census_pin_stability(),
         Some("probe-stage1") => probe_stage1(),
         Some("dump-tools") => dump_tools(),
+        Some("first-verdict") => first_verdict(),
         Some(other) => {
             eprintln!("unknown task `{other}`\n\n{USAGE}");
             ExitCode::FAILURE
@@ -22,7 +23,24 @@ fn main() -> ExitCode {
     }
 }
 
-const USAGE: &str = "usage: cargo xtask <purity|census|census-stage1 [sample_size]|census-stage2-class-a [sample_size]|census-pin-stability <input.json>|probe-stage1 [sample_size]|dump-tools <url>>";
+const USAGE: &str = "usage: cargo xtask <purity|census|census-stage1 [sample_size]|census-stage2-class-a [sample_size]|census-pin-stability <input.json>|probe-stage1 [sample_size]|dump-tools <url>|first-verdict>";
+
+#[cfg(target_os = "linux")]
+fn first_verdict() -> ExitCode {
+    match xtask::first_verdict::run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("first-verdict failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn first_verdict() -> ExitCode {
+    eprintln!("first-verdict requires Linux (sandbox/observe are Linux-only)");
+    ExitCode::FAILURE
+}
 
 fn dump_tools() -> ExitCode {
     let Some(url) = std::env::args().nth(2) else {

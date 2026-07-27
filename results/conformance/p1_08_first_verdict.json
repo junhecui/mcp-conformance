@@ -1,0 +1,21 @@
+{
+  "declared_read_only_hint": true,
+  "negotiated_spec_revision": "2025-11-25",
+  "resolution": "npx -y @modelcontextprotocol/server-everything stdio",
+  "server": "@modelcontextprotocol/server-everything",
+  "task": "P1-08",
+  "tool": "echo",
+  "tool_call_result": {
+    "content": [
+      {
+        "text": "Echo: hello from mcp-conformance P1-08",
+        "type": "text"
+      }
+    ]
+  },
+  "verdict": {
+    "oracle": "kernel_changeset",
+    "outcome": "holds",
+    "reason": null
+  }
+}
