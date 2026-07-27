@@ -798,6 +798,11 @@ dependencies = [
 [[package]]
 name = "xtask"
 version = "0.1.0"
+dependencies = [
+ "datamodel",
+ "intake",
+ "serde_json",
+]
 
 [[package]]
 name = "zerocopy"

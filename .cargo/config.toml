@@ -2,3 +2,5 @@
 xtask = "run --quiet --package xtask --bin xtask --"
 # F-04: assert the ADR-005 purity firewall over the dependency graph.
 purity = "run --quiet --package xtask --bin xtask -- purity"
+# P0-08: run the Stage 0 registry census (registry metadata only, no third-party contact).
+census = "run --quiet --package xtask --bin xtask -- census"

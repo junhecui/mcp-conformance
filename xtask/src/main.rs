@@ -5,12 +5,23 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     match std::env::args().nth(1).as_deref() {
         Some("purity") => purity(),
+        Some("census") => census(),
         Some(other) => {
-            eprintln!("unknown task `{other}`\n\nusage: cargo xtask purity");
+            eprintln!("unknown task `{other}`\n\nusage: cargo xtask <purity|census>");
             ExitCode::FAILURE
         }
         None => {
-            eprintln!("usage: cargo xtask purity");
+            eprintln!("usage: cargo xtask <purity|census>");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn census() -> ExitCode {
+    match xtask::census::run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("census failed: {e}");
             ExitCode::FAILURE
         }
     }
