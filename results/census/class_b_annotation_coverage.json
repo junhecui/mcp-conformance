@@ -1,0 +1,812 @@
+{
+  "annotation_tally": {
+    "destructiveHint": {
+      "absent": 133,
+      "defaulted": 12,
+      "explicit": 144
+    },
+    "idempotentHint": {
+      "absent": 133,
+      "defaulted": 133,
+      "explicit": 23
+    },
+    "openWorldHint": {
+      "absent": 133,
+      "defaulted": 127,
+      "explicit": 29
+    },
+    "readOnlyHint": {
+      "absent": 133,
+      "defaulted": 6,
+      "explicit": 150
+    }
+  },
+  "attempted": 100,
+  "failed": 74,
+  "failure_categories": {
+    "protocol": 14,
+    "server_error": 1,
+    "transport": 59
+  },
+  "generated_at_unix": 1785128305,
+  "sample_size_requested": 100,
+  "servers": [
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ac.inference.sh/mcp",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://sh.inference.ac"
+    },
+    {
+      "name": "ac.tandem/docs-mcp",
+      "outcome": "success",
+      "tool_count": 13,
+      "transport_type": "streamable-http",
+      "url": "https://tandem.ac/mcp"
+    },
+    {
+      "name": "ag.hood/name-service",
+      "outcome": "success",
+      "tool_count": 5,
+      "transport_type": "streamable-http",
+      "url": "https://www.hood.ag/api/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "agency.lona/trading",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://mcp.lona.agency/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.1325/mcp",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://agoclnqfyinwjxdmjnns.supabase.co/functions/v1/mcp"
+    },
+    {
+      "failure_category": "protocol",
+      "failure_detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "ai.aarna/atars-mcp",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://mcp.aarna.ai/mcp"
+    },
+    {
+      "failure_category": "server_error",
+      "failure_detail": "-32600: Mcp-Session-Id header is required for this request.",
+      "name": "ai.abmeter/abmeter",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://mcp.abmeter.ai"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.adadvisor/mcp-server",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://api.adadvisor.ai/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.adramp/google-ads",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://mcp.adramp.ai"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.adside/adside",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://api.adside.ai/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.adweave/meta-ads-mcp",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://mcp.adweave.ai/meta-ads-mcp"
+    },
+    {
+      "failure_category": "protocol",
+      "failure_detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "ai.agentberg/agentberg",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://agentberg.ai/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.agentdm/agentdm",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://api.agentdm.ai/mcp/v1/grid"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.agentic-news/mcp",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://api.agentic-news.ai/mcp"
+    },
+    {
+      "name": "ai.agenticfabricationnetwork/ufp",
+      "outcome": "success",
+      "tool_count": 8,
+      "transport_type": "streamable-http",
+      "url": "https://agenticfabricationnetwork.ai/mcp"
+    },
+    {
+      "name": "ai.agenticshelf/graffeo",
+      "outcome": "success",
+      "tool_count": 7,
+      "transport_type": "streamable-http",
+      "url": "https://api.agenticshelf.ai/m/graffeo/mcp"
+    },
+    {
+      "name": "ai.agenticshelf/mcp",
+      "outcome": "success",
+      "tool_count": 7,
+      "transport_type": "streamable-http",
+      "url": "https://api.agenticshelf.ai/mcp"
+    },
+    {
+      "name": "ai.agenticshelf/puroair",
+      "outcome": "success",
+      "tool_count": 7,
+      "transport_type": "streamable-http",
+      "url": "https://api.agenticshelf.ai/m/puroair/mcp"
+    },
+    {
+      "failure_category": "protocol",
+      "failure_detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "ai.agenticterminal/directory",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://mcp.agenticterminal.ai/mcp"
+    },
+    {
+      "name": "ai.agentrapay/agentra",
+      "outcome": "success",
+      "tool_count": 6,
+      "transport_type": "sse",
+      "url": "https://api.agentrapay.ai/mcp"
+    },
+    {
+      "name": "ai.ai-akari/agent-trust-receipt",
+      "outcome": "success",
+      "tool_count": 1,
+      "transport_type": "streamable-http",
+      "url": "https://ai-akari.ai/mcp-trust"
+    },
+    {
+      "name": "ai.ai-akari/one-minute-akari",
+      "outcome": "success",
+      "tool_count": 3,
+      "transport_type": "streamable-http",
+      "url": "https://ai-akari.ai/mcp"
+    },
+    {
+      "name": "ai.ai-portal/ai-portal",
+      "outcome": "success",
+      "tool_count": 4,
+      "transport_type": "streamable-http",
+      "url": "https://www.ai-portal.ai/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.aient/mcp",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://aient.ai/mcp"
+    },
+    {
+      "failure_category": "protocol",
+      "failure_detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "ai.airshelf/catalog",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://mcp.airshelf.ai/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.aisecuritygateway/mcp-gateway",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://api.aisecuritygateway.ai/mcp"
+    },
+    {
+      "name": "ai.alphacreek/alphacreek-mcp",
+      "outcome": "success",
+      "tool_count": 4,
+      "transport_type": "streamable-http",
+      "url": "https://mcp.alphacreek.ai/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.alpic.mcp/alpic-mcp",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://mcp.alpic.ai"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "io: failed to lookup address information: nodename nor servname provided, or not known",
+      "name": "ai.alpic.test/test-mcp-server",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://test.alpic.ai/"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.ambix/ambix",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://mcp.ambix.ai"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.anzenna/anzenna",
+      "outcome": "failed",
+      "transport_type": "sse",
+      "url": "https://mcp.anzenna.ai/sse"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.appdeploy/deploy-app",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://api-v2.appdeploy.ai/mcp"
+    },
+    {
+      "name": "ai.arclan/registry",
+      "outcome": "success",
+      "tool_count": 4,
+      "transport_type": "streamable-http",
+      "url": "https://arclan.ai/mcp"
+    },
+    {
+      "failure_category": "protocol",
+      "failure_detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "ai.argushq/enforcement-database",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://argushq.ai/api/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.arpi/arpi-mcp",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://mcp.arpi.ai/mcp"
+    },
+    {
+      "name": "ai.artidrop/artidrop",
+      "outcome": "success",
+      "tool_count": 4,
+      "transport_type": "streamable-http",
+      "url": "https://artidrop.ai/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.assetlog/assetlog",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://api.assetlog.ai/mcp"
+    },
+    {
+      "failure_category": "protocol",
+      "failure_detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "ai.atdev/supershopping",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://supershopping-mcp.atdev.ai/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.atlasverified/atlas-mcp",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://api.atlasverified.ai/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.augmentev/paseo",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://api.augmentev.ai/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.augworlds/travel-world",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://travel.augworlds.ai/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.auralogs/auralogs",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://mcp.auralogs.ai/mcp"
+    },
+    {
+      "name": "ai.auteng/docs",
+      "outcome": "success",
+      "tool_count": 7,
+      "transport_type": "streamable-http",
+      "url": "https://auteng.ai/mcp/docs"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "redirect failed",
+      "name": "ai.auteng/mcp",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://auteng.ai/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.authoryze/authoryze",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://authoryze.ai/api/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http: invalid uri character",
+      "name": "ai.autorfp/mcp",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://{api_host}/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.auxen/auxen",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://api.auxen.ai/mcp"
+    },
+    {
+      "name": "ai.aviado/health",
+      "outcome": "success",
+      "tool_count": 9,
+      "transport_type": "streamable-http",
+      "url": "https://aviado.ai/api/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.axonagentic/neuroautomata",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://mcp.neuroautomata.axonagentic.ai/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.backengine/backengine-mcp",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://backengine-prod.backengine.ai/mcp"
+    },
+    {
+      "failure_category": "protocol",
+      "failure_detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "ai.bankee/inferventis-mcp",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://mcp-server-295985738387.europe-west1.run.app/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.bareun/bareun",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://api.bareun.ai/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "io: failed to lookup address information: nodename nor servname provided, or not known",
+      "name": "ai.baselight/baselight",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://api.baselight.app/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.basethread/basethread",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://mcp.basethread.ai/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.bassethound/bassethound",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://mcp.bassethound.ai/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.beatbandit/beatbandit",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://beatbandit.ai/api/mcp"
+    },
+    {
+      "name": "ai.benroberts/b4-index",
+      "outcome": "success",
+      "tool_count": 5,
+      "transport_type": "streamable-http",
+      "url": "https://b4-index.vercel.app/mcp"
+    },
+    {
+      "failure_category": "protocol",
+      "failure_detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "ai.betterpost/server",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://betterpost.ai/mcp"
+    },
+    {
+      "failure_category": "protocol",
+      "failure_detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "ai.bezal/local-commerce",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://app.bezal.ai/api/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.biddeed/biddeed-mcp",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://mcp.biddeed.ai/api/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 400",
+      "name": "ai.biel/biel-ai",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://mcp.biel.ai/v2/{project_slug}/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.bittlebits/bittlebits",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://bittlebits.ai/mcp"
+    },
+    {
+      "name": "ai.blast-radius/blast-radius",
+      "outcome": "success",
+      "tool_count": 7,
+      "transport_type": "streamable-http",
+      "url": "https://blast-radius.ai/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.bloopo/bloopo",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://mcp.bloopo.ai/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.bluenexus/universal-mcp",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://api.bluenexus.ai/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.bodenrichtwert/mcp",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://mcp.bodenrichtwert.ai/mcp"
+    },
+    {
+      "name": "ai.boolsai/directory",
+      "outcome": "success",
+      "tool_count": 19,
+      "transport_type": "streamable-http",
+      "url": "https://directory.boolsai.ai/mcp"
+    },
+    {
+      "name": "ai.boolsai/grep",
+      "outcome": "success",
+      "tool_count": 4,
+      "transport_type": "streamable-http",
+      "url": "https://grep.boolsai.ai/mcp"
+    },
+    {
+      "name": "ai.boolsai/scan",
+      "outcome": "success",
+      "tool_count": 2,
+      "transport_type": "streamable-http",
+      "url": "https://boolsai.ai/mcp"
+    },
+    {
+      "name": "ai.boolsai/signals",
+      "outcome": "success",
+      "tool_count": 12,
+      "transport_type": "streamable-http",
+      "url": "https://signals.boolsai.ai/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.boundaryai/boundaryai",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://mcp.boundaryai.ai/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.brainattic/knowledge-base",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://app.brainattic.ai/api/mcp"
+    },
+    {
+      "name": "ai.bringyour/bringyour",
+      "outcome": "success",
+      "tool_count": 7,
+      "transport_type": "streamable-http",
+      "url": "https://bringyour.ai/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.bunzee/bunzee",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://bunzee.ai/mcp-server"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.buron/buron",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://app.buron.ai/api/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.butlerbrain/mcp",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://api.butlerbrain.ai/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "io: failed to lookup address information: nodename nor servname provided, or not known",
+      "name": "ai.buyersense/buyersense",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://mcp.buyersense.ai/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.buywhere/catalog-api",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://mcp.buywhere.ai/mcp"
+    },
+    {
+      "failure_category": "protocol",
+      "failure_detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "ai.byteask/embedded-docs",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://mcp.byteask.ai/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.byteray/byteray-mcp",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://mcp.byteray.ai/mcp"
+    },
+    {
+      "name": "ai.cabrini/market-data",
+      "outcome": "success",
+      "tool_count": 15,
+      "transport_type": "streamable-http",
+      "url": "https://cabrini.ai/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 403",
+      "name": "ai.calendarmcp/server",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://calendarmcp.ai/api/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.calfeed/calfeed",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://calfeed.ai/api/mcp"
+    },
+    {
+      "name": "ai.canaryusers/canaryusers",
+      "outcome": "success",
+      "tool_count": 3,
+      "transport_type": "streamable-http",
+      "url": "https://www.canaryusers.ai/api/mcp"
+    },
+    {
+      "name": "ai.canivibe/status",
+      "outcome": "success",
+      "tool_count": 2,
+      "transport_type": "streamable-http",
+      "url": "https://canivibe.ai/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.canvora/canvora",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://api.canvora.ai/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.caulo/caulo",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://mcp.caulo.ai/mcp"
+    },
+    {
+      "failure_category": "protocol",
+      "failure_detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "ai.certscore/mcp-light",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://mcp.certscore.ai/mcp/light"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.chatthing/chat-thing",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://app.chatthing.ai/mcp"
+    },
+    {
+      "failure_category": "protocol",
+      "failure_detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "ai.childadhd/library",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://childadhd.ai/api/mcp/v1"
+    },
+    {
+      "failure_category": "protocol",
+      "failure_detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "ai.childanxiety/library",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://childanxiety.ai/api/mcp/v1"
+    },
+    {
+      "failure_category": "protocol",
+      "failure_detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "ai.childpsychiatry/library",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://childpsychiatry.ai/api/mcp/v1"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 400",
+      "name": "ai.chinamarketing/intelligence",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://api.chinamarketing.ai/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.cirra/salesforce-mcp",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://mcp.cirra.ai/sfdc/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "io: failed to lookup address information: nodename nor servname provided, or not known",
+      "name": "ai.clarid/compliance",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://mcp.clarid.ai/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.clarid/hmda",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://api.clarid.ai/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.clawterminal/markets",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://mcp.clawterminal.ai"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.cobbles/cobbles",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://api.cobbles.ai/mcp"
+    },
+    {
+      "failure_category": "transport",
+      "failure_detail": "http status: 401",
+      "name": "ai.cofoundagent/cofound",
+      "outcome": "failed",
+      "transport_type": "streamable-http",
+      "url": "https://mcp.cofoundagent.ai/mcp"
+    },
+    {
+      "name": "ai.com.mcp/contabo",
+      "outcome": "success",
+      "tool_count": 124,
+      "transport_type": "streamable-http",
+      "url": "https://contabo.run.mcp.com.ai/mcp"
+    }
+  ],
+  "stage": "1 — initialize+tools/list against live Class B servers",
+  "succeeded": 26,
+  "tools_discovered": 289
+}
