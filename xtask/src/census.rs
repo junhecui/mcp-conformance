@@ -47,6 +47,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             };
             servers.push(ServerRecord { name, class: classification.class, reason: classification.reason });
         }
+        true // Stage 0 wants the whole registry — never stop early.
     })?;
 
     let total = servers.len();

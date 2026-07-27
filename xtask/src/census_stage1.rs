@@ -71,9 +71,6 @@ pub fn run(sample_size: usize) -> Result<(), Box<dyn std::error::Error>> {
     let registry = RegistryClient::new();
     let mut candidates = Vec::new();
     registry.fetch_all(100, std::time::Duration::from_millis(200), |page| {
-        if candidates.len() >= sample_size {
-            return;
-        }
         for raw in &page.entries_raw {
             if candidates.len() >= sample_size {
                 break;
@@ -83,6 +80,7 @@ pub fn run(sample_size: usize) -> Result<(), Box<dyn std::error::Error>> {
                 candidates.push(candidate);
             }
         }
+        candidates.len() < sample_size // stop once the sample is full
     })?;
 
     eprintln!("census-stage1: attempting discovery against {} Class B servers...", candidates.len());

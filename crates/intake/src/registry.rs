@@ -122,8 +122,13 @@ impl RegistryClient {
         })
     }
 
-    /// Fetch every page, calling `on_page` as each one arrives rather than buffering the
-    /// whole registry in memory before the caller sees anything.
+    /// Fetch pages, calling `on_page` as each one arrives rather than buffering the whole
+    /// registry in memory before the caller sees anything.
+    ///
+    /// `on_page` returns `true` to keep going, `false` to stop after this page — a caller
+    /// that only needs the first N matching entries (Stage 1's Class B sample, for
+    /// instance) can stop as soon as it has enough, rather than scanning every remaining
+    /// page in the registry for no reason.
     ///
     /// `delay_between_pages` is a voluntary politeness pause — the registry's OpenAPI spec
     /// documents no rate limit, so this is a courtesy, not a measured requirement. Pass
@@ -132,13 +137,16 @@ impl RegistryClient {
         &self,
         page_limit: u32,
         delay_between_pages: Duration,
-        mut on_page: impl FnMut(&Page),
+        mut on_page: impl FnMut(&Page) -> bool,
     ) -> Result<(), RegistryError> {
         let mut cursor: Option<String> = None;
         loop {
             let page = self.fetch_page(cursor.as_deref(), page_limit)?;
             let next = page.next_cursor.clone();
-            on_page(&page);
+            let keep_going = on_page(&page);
+            if !keep_going {
+                break;
+            }
             match next {
                 Some(c) => {
                     cursor = Some(c);
@@ -284,11 +292,46 @@ mod tests {
         let client = RegistryClient::with_base_url(base_url);
         let mut collected = Vec::new();
         client
-            .fetch_all(30, Duration::ZERO, |page| collected.extend(page.entries_raw.iter().cloned()))
+            .fetch_all(30, Duration::ZERO, |page| {
+                collected.extend(page.entries_raw.iter().cloned());
+                true
+            })
             .expect("fetch_all");
         server.join().expect("server thread");
 
         assert_eq!(collected.len(), 2);
+    }
+
+    /// Proves the stop is real, not just "the caller stops accumulating locally": the fake
+    /// server only ever serves one page, despite that page's `nextCursor` promising a
+    /// second one. If `fetch_all` requested a second page anyway despite the callback
+    /// returning `false`, this test would hang waiting for a connection nobody sends.
+    #[test]
+    fn fetch_all_stops_early_when_the_callback_returns_false() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let base_url = format!("http://{}", listener.local_addr().expect("addr"));
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept the only page served");
+            read_one_http_request(&mut stream);
+            let body = serde_json::json!({
+                "servers": [{"server": {"name": "io.example/a", "packages": [{"registryType":"npm","identifier":"a","version":"1.0.0"}]}}],
+                "metadata": { "count": 1, "nextCursor": "would-be-page-2" }
+            });
+            write_json_response(&mut stream, &serde_json::to_vec(&body).unwrap());
+        });
+
+        let client = RegistryClient::with_base_url(base_url);
+        let mut pages_seen = 0;
+        client
+            .fetch_all(30, Duration::ZERO, |_page| {
+                pages_seen += 1;
+                false
+            })
+            .expect("fetch_all");
+        server.join().expect("server thread");
+
+        assert_eq!(pages_seen, 1);
     }
 
     #[test]

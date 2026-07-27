@@ -194,7 +194,16 @@ impl HttpTransport {
             .agent
             .post(&self.endpoint)
             .header("Content-Type", "application/json")
-            .header("Accept", "application/json")
+            // The Streamable HTTP spec (2025-03-26) requires both content types here even
+            // though this transport only handles the single-JSON-response case: "the client
+            // MUST include an Accept header, listing both application/json and
+            // text/event-stream." Advertising only application/json gets a spec-compliant
+            // server to correctly reject the request with 406 — found running Stage 1
+            // against live servers: 14 of 78 failures were exactly this, not a real
+            // reachability problem. The scope exclusion is unaffected: if a server responds
+            // with an SSE stream anyway, that is still rejected below, just no longer
+            // provoked by an under-declared Accept header in the first place.
+            .header("Accept", "application/json, text/event-stream")
             .header("User-Agent", USER_AGENT);
         if let Some(v) = &self.negotiated_version {
             builder = builder.header("MCP-Protocol-Version", v);

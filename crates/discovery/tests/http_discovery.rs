@@ -78,9 +78,15 @@ fn discover_succeeds_against_a_real_http_server() {
         // initialize
         let (mut stream, _) = listener.accept().expect("accept #1 (initialize)");
         let request = read_one_http_request(&mut stream);
+        let lower = request.to_ascii_lowercase();
         assert!(
-            request.to_ascii_lowercase().contains("user-agent: mcp-conformance-harness"),
+            lower.contains("user-agent: mcp-conformance-harness"),
             "discovery must identify itself to third-party servers, not poll anonymously: {request}"
+        );
+        assert!(
+            lower.contains("accept: application/json, text/event-stream"),
+            "the Streamable HTTP spec requires both content types in Accept, or spec-compliant \
+             servers correctly reject the request with 406: {request}"
         );
         write_json_response(&mut stream, &serde_json::to_vec(&init_result).unwrap());
 
