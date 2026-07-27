@@ -1086,13 +1086,44 @@ value; and `harvest` end-to-end stores a capture and reads back byte-identical b
 **Depends on:** P1-04
 **Exit:** Clean-teardown and timeout checks; a failed run yields `unverifiable` with a reason
 code and no verdict.
+**Status:** Done — `crates/integrity`. `decide(RunSignals) -> GateOutcome` is a pure,
+platform-independent function (`#![forbid(unsafe_code)]`, no dependency on `sandbox`'s or
+`observe`'s concrete types — only on `datamodel::ReasonCode`, the already-established open
+string newtype design.md itself says stays open until P2-11's closed taxonomy exists).
+`RunSignals` has exactly two fields, `timed_out` and `containment_uncertain`, matching
+architecture.md §10's explicit "teardown + timeout only" Phase 1 scope for this crate — the
+other two `§5.1` branches (resource cap, escape-class syscall) need cgroups (P2-02) and
+seccomp (P4-01), neither of which exists yet, so this module doesn't pretend to check them
+early.
 
-ADR-004 — the gate is a hard precondition and **not configurable off**. A timed-out run with
-an empty changeset is not `readOnlyHint: holds`; that is the worst available failure mode.
+**Honest scoping of `containment_uncertain`, worth stating plainly:** Phase 1 has no PID
+namespace (P2-01) to actually enumerate a killed process's surviving descendants —
+`sandbox::supervisor`'s own tests already demonstrated this gap directly (a shell's
+grandchild outliving a `SIGKILL` sent to the shell). No producer in this codebase can set
+`containment_uncertain = true` yet; the field, its reason code, and this gate's behaviour
+around it are defined and tested now anyway, the same "define the check before the thing
+that trips it exists" precedent B-02 already set for the `kernel_changeset` oracle tag
+(untriggerable until P1-07/P1-08 land a Class A verdict, tested via the typed API
+regardless). This is *not* a claim that Phase 1 runs are ever actually gated on orphan
+detection — only that the closed pair of reason codes this crate can produce is ready for
+P2-01 to start setting the flag true, without a second round of gate design then.
 
-- [ ] `containment_uncertain` on orphan PIDs
-- [ ] `timeout` on hard-timeout kill
-- [ ] Not bypassable by configuration. Test that it cannot be disabled.
+5 tests: clean run accepted; timed-out run reports `timeout`; a (currently synthetic)
+containment-uncertain input reports `containment_uncertain`; the two together report
+`containment_uncertain` specifically (matching §5.1's `G1`-before-`G3` branch order, not an
+average of the two); and an explicit sweep over both values of `timed_out` proving nothing
+about that field can mask a true `containment_uncertain` — ADR-004's "not configurable off"
+demonstrated as the literal absence of a bypass path through the only other field that
+exists, not merely asserted.
+
+- [x] `containment_uncertain` on orphan PIDs — reason code and gating behaviour implemented
+      and tested; the actual *detector* that would set the flag true is P2-01's job (see
+      above)
+- [x] `timeout` on hard-timeout kill
+- [x] Not bypassable by configuration. Test that it cannot be disabled — `decide` takes no
+      "skip" parameter at all (structural, not disciplined), and
+      `there_is_no_combination_of_inputs_that_bypasses_a_true_containment_uncertain_flag`
+      is the literal test
 
 ### P1-06 Normaliser + ruleset v1
 
