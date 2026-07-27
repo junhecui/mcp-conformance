@@ -6,3 +6,5 @@ purity = "run --quiet --package xtask --bin xtask -- purity"
 census = "run --quiet --package xtask --bin xtask -- census"
 # P0-06/07 Stage 1: sample Class B servers and run initialize+tools/list against each.
 census-stage1 = "run --quiet --package xtask --bin xtask -- census-stage1"
+# P0-06: re-discover a prior Stage 1 run's successful servers twice and confirm pins match.
+census-pin-stability = "run --quiet --package xtask --bin xtask -- census-pin-stability"

@@ -7,12 +7,31 @@ fn main() -> ExitCode {
         Some("purity") => purity(),
         Some("census") => census(),
         Some("census-stage1") => census_stage1(),
+        Some("census-pin-stability") => census_pin_stability(),
         Some(other) => {
-            eprintln!("unknown task `{other}`\n\nusage: cargo xtask <purity|census|census-stage1 [sample_size]>");
+            eprintln!(
+                "unknown task `{other}`\n\nusage: cargo xtask <purity|census|census-stage1 [sample_size]|census-pin-stability <input.json>>"
+            );
             ExitCode::FAILURE
         }
         None => {
-            eprintln!("usage: cargo xtask <purity|census|census-stage1 [sample_size]>");
+            eprintln!(
+                "usage: cargo xtask <purity|census|census-stage1 [sample_size]|census-pin-stability <input.json>>"
+            );
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn census_pin_stability() -> ExitCode {
+    let Some(input_path) = std::env::args().nth(2) else {
+        eprintln!("usage: cargo xtask census-pin-stability <path-to-stage1-output.json>");
+        return ExitCode::FAILURE;
+    };
+    match xtask::pin_stability::run(&input_path) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("census-pin-stability failed: {e}");
             ExitCode::FAILURE
         }
     }

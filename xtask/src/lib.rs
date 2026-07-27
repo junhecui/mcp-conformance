@@ -2,4 +2,5 @@
 
 pub mod census;
 pub mod census_stage1;
+pub mod pin_stability;
 pub mod purity;
