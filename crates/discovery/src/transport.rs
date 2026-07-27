@@ -13,6 +13,15 @@ use serde_json::Value;
 use crate::jsonrpc::{self, ResponseEnvelope};
 use crate::DiscoveryError;
 
+/// Identifies this harness to any HTTP server it discovers against — visible polling, not
+/// anonymous, the same disclosure posture `intake::registry` uses against the registry
+/// itself.
+const USER_AGENT: &str = concat!(
+    "mcp-conformance-harness/",
+    env!("CARGO_PKG_VERSION"),
+    " (annotation conformance research; read-only discovery; contact: see repository)"
+);
+
 /// One raw JSON-RPC response, exactly as received, before any parsing.
 ///
 /// P0-01: "the pin depends on this." These bytes ride untouched all the way out to
@@ -185,7 +194,8 @@ impl HttpTransport {
             .agent
             .post(&self.endpoint)
             .header("Content-Type", "application/json")
-            .header("Accept", "application/json");
+            .header("Accept", "application/json")
+            .header("User-Agent", USER_AGENT);
         if let Some(v) = &self.negotiated_version {
             builder = builder.header("MCP-Protocol-Version", v);
         }

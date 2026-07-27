@@ -12,7 +12,7 @@ use std::thread;
 
 use discovery::DiscoveryClient;
 
-fn read_one_http_request(stream: &mut TcpStream) {
+fn read_one_http_request(stream: &mut TcpStream) -> String {
     let mut buf = Vec::new();
     let mut byte = [0u8; 1];
     loop {
@@ -22,7 +22,7 @@ fn read_one_http_request(stream: &mut TcpStream) {
             break;
         }
     }
-    let headers = String::from_utf8_lossy(&buf);
+    let headers = String::from_utf8_lossy(&buf).into_owned();
     let content_length: usize = headers
         .lines()
         .find_map(|line| {
@@ -34,6 +34,7 @@ fn read_one_http_request(stream: &mut TcpStream) {
         .unwrap_or(0);
     let mut body = vec![0u8; content_length];
     stream.read_exact(&mut body).expect("read body");
+    headers
 }
 
 fn write_json_response(stream: &mut TcpStream, body: &[u8]) {
@@ -76,7 +77,11 @@ fn discover_succeeds_against_a_real_http_server() {
 
         // initialize
         let (mut stream, _) = listener.accept().expect("accept #1 (initialize)");
-        read_one_http_request(&mut stream);
+        let request = read_one_http_request(&mut stream);
+        assert!(
+            request.to_ascii_lowercase().contains("user-agent: mcp-conformance-harness"),
+            "discovery must identify itself to third-party servers, not poll anonymously: {request}"
+        );
         write_json_response(&mut stream, &serde_json::to_vec(&init_result).unwrap());
 
         // notifications/initialized
