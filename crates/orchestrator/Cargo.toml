@@ -1,0 +1,25 @@
+[package]
+name = "orchestrator"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+datamodel.workspace = true
+intake.workspace = true
+discovery.workspace = true
+census.workspace = true
+planner.workspace = true
+world.workspace = true
+argsynth.workspace = true
+sandbox.workspace = true
+observe.workspace = true
+integrity.workspace = true
+normalise.workspace = true
+verdict.workspace = true
+destructive.workspace = true
+store.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,6 @@
+# Pinned exactly, per ADR-007. Reproducibility is the project's central claim; a
+# floating `stable` would let the compiler drift underneath stored evidence.
+# Bumping this is a deliberate act — see F-00 for the matching kernel pin.
+[toolchain]
+channel = "1.85.1"
+components = ["clippy"]

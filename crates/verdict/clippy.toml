@@ -1,0 +1,21 @@
+# ADR-005 purity, Layer 2. The dependency-graph assertion (`cargo purity`) cannot see
+# `std`: a crate can have an empty dependency tree and still read a clock. Under the
+# current `#![no_std]` this is belt-and-braces, and that is deliberate — it becomes the
+# load-bearing layer the moment a pure crate relaxes to `std` (see P1-06, where path
+# matching may force it).
+#
+# Scoped per-crate, not workspace-root: `sandbox`, `store`, and `observe` legitimately
+# need every method banned here.
+
+disallowed-methods = [
+  { path = "std::time::SystemTime::now", reason = "ADR-005: derivation must not read a clock" },
+  { path = "std::time::Instant::now", reason = "ADR-005: derivation must not read a clock" },
+  { path = "std::env::var", reason = "ADR-005: reads ambient state outside (evidence, ruleset)" },
+  { path = "std::env::vars", reason = "ADR-005: reads ambient state outside (evidence, ruleset)" },
+]
+
+disallowed-types = [
+  { path = "std::path::PathBuf", reason = "ADR-005: no filesystem access in the pure core" },
+  { path = "std::fs::File", reason = "ADR-005: no filesystem access in the pure core" },
+  { path = "std::net::TcpStream", reason = "ADR-005: no network access in the pure core" },
+]

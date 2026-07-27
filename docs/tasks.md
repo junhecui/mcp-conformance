@@ -58,26 +58,44 @@ prevents rework later.
 
 **Depends on:** —
 **Exit:** ADR-007 merged in `docs/adr/`, recording the choice and the rejected options.
+**Status:** Done — [ADR-007](adr/007-implementation-language.md). **Rust**, edition 2024,
+single Cargo workspace, hand-rolled MCP client.
 
 architecture.md §8 deliberately leaves this open (`crates/ (or packages/)`). It cannot stay
 open — the purity constraint in ADR-005 is materially easier to enforce in a language with a
 real module/dependency graph, and the sandbox layer is Linux syscall work.
 
-- [ ] Evaluate against: syscall ergonomics (namespaces, overlayfs, cgroups, seccomp), ability
-      to enforce the `normalise`/`verdict` purity rule statically, MCP client library maturity
-- [ ] Record the decision and consequences as ADR-007
-- [ ] Note explicitly which parts, if any, are permitted to be a second language
+- [x] Evaluate against: syscall ergonomics (namespaces, overlayfs, cgroups, seccomp), ability
+      to enforce the `normalise`/`verdict` purity rule statically, ~~MCP client library
+      maturity~~ — **criterion struck.** SDK maturity points the wrong way: mature SDKs
+      discard wire bytes during deserialisation, which breaks P0-01's byte-exact capture and
+      therefore P0-02's pin, and they expose a tool-call method that P0-01 forbids
+      structurally. Decision rests on the first two criteria.
+- [x] Record the decision and consequences as ADR-007
+- [x] Note explicitly which parts, if any, are permitted to be a second language — fixtures /
+      mock backends / P4-05 hostile server (any language, never in the harness build graph),
+      and `results/` analysis (Python). Everything else is Rust, `destructive` included.
 
 ### F-02 Scaffold the repository skeleton
 
 **Depends on:** F-01
 **Exit:** Every directory in architecture.md §8 exists with a placeholder module that builds.
+**Status:** Done — `cargo build --workspace` and `cargo clippy --workspace --all-targets`
+both clean on the macOS host.
 
-- [ ] `intake` `discovery` `census` `planner` `world` `argsynth` `sandbox` `observe`
+- [x] `intake` `discovery` `census` `planner` `world` `argsynth` `sandbox` `observe`
       `integrity` `normalise` `verdict` `destructive` `store` `orchestrator`
-- [ ] `rulesets/` `fixtures/generic/` `fixtures/per-server/` `results/census/`
+- [x] `rulesets/` `fixtures/generic/` `fixtures/per-server/` `results/census/`
       `results/conformance/` `docs/adr/`
-- [ ] `sandbox` gated as Linux-only at the build level, not by runtime check
+- [x] `sandbox` gated as Linux-only at the build level, not by runtime check —
+      `#![cfg(target_os = "linux")]` at the crate root, so off Linux it compiles to an empty
+      crate and the workspace still builds
+- [x] **One crate added beyond architecture.md §8: `datamodel`.** Shared vocabulary, pure
+      data types, no behaviour, `no_std`. It is what lets `normalise` and `verdict` name
+      their inputs without reaching for an I/O crate. Named `datamodel` rather than `model`
+      because "model" already means *language model* throughout these docs — and this crate
+      sits inside the pure allowlist, where that ambiguity would be actively dangerous.
+- [x] `xtask/` added for workspace tooling (hosts the F-04 check)
 
 ### F-03 CI: build, test, lint
 
@@ -93,14 +111,32 @@ real module/dependency graph, and the sandbox layer is Linux syscall work.
 **Depends on:** F-02
 **Exit:** A deliberately-added edge from `verdict` to `store` fails CI. Demonstrate it, then
 revert.
+**Status:** Done — `cargo purity`. Demonstrated: with `store.workspace = true` added to
+`crates/verdict/Cargo.toml`, `cargo build --workspace` **succeeds** (the edge is legal Rust —
+which is precisely why the check must exist) and `cargo purity` **fails with exit 1**, naming
+the offending edge. Reverted; check green.
 
 ADR-005 is the invariant that makes reproducibility real rather than aspirational.
 architecture.md §8: *"If that edge ever appears in the dependency graph, reproducibility is
 gone."* A rule nobody checks is a comment.
 
-- [ ] Dependency-graph assertion: `normalise` and `verdict` may not depend on `sandbox`,
-      `observe`, `store`, or any I/O, clock, network, or model dependency
-- [ ] Negative test proving the check fires
+- [x] Dependency-graph assertion — implemented as an **allowlist**, not the denylist this
+      task's wording implies. A pure crate's transitive closure must be a *subset* of
+      `PURE_ALLOWLIST` (currently `{datamodel}`). Strictly stronger: a denylist passes for
+      any I/O crate nobody thought to name.
+- [x] Negative test proving the check fires — `xtask/tests/purity.rs`, 6 tests. Run against
+      *synthetic* graphs, so proving the rule bites does not require leaving a broken edge in
+      the tree. Includes the literal `verdict` → `store` case and unforeseen offenders
+      (`tokio`, `reqwest`, `chrono`, …) that are caught without being enumerated.
+- [x] Layer 2 — per-crate `clippy.toml` in `normalise` and `verdict` banning clock, path,
+      file, and socket types. A crate can have an empty dependency tree and still call `std`.
+- [x] Layer 3 — `#![no_std]` on `datamodel`, `normalise`, and `verdict`. Taking a clock as a
+      dependency is not a mistake CI catches after the fact; it is code that does not link.
+      For `normalise` this is provisional, per ADR-007 — P1-06 tests whether real path
+      matching can stay `no_std`.
+
+**Note for F-03:** `cargo purity` must be its own CI step, not a test. `cargo tree` inside
+`cargo test` is a recursive cargo invocation contending for the same package-cache lock.
 
 ### F-05 Content-addressed evidence store
 

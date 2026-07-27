@@ -21,3 +21,6 @@
 .env.*
 !.env.example
 /config.local.*
+
+# Rust build artifacts
+/target/

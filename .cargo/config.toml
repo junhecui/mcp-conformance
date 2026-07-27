@@ -1,0 +1,4 @@
+[alias]
+xtask = "run --quiet --package xtask --bin xtask --"
+# F-04: assert the ADR-005 purity firewall over the dependency graph.
+purity = "run --quiet --package xtask --bin xtask -- purity"
