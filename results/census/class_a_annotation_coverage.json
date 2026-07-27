@@ -1,0 +1,982 @@
+{
+  "annotation_tally": {
+    "destructiveHint": {
+      "absent": 399,
+      "defaulted": 224,
+      "explicit": 333
+    },
+    "idempotentHint": {
+      "absent": 399,
+      "defaulted": 208,
+      "explicit": 349
+    },
+    "openWorldHint": {
+      "absent": 399,
+      "defaulted": 98,
+      "explicit": 459
+    },
+    "readOnlyHint": {
+      "absent": 399,
+      "defaulted": 58,
+      "explicit": 499
+    }
+  },
+  "attempted": 100,
+  "execution_provenance": "containerized_docker",
+  "failed": 43,
+  "failure_categories": {
+    "io_or_timeout": 36,
+    "protocol": 5,
+    "unsupported_registry_type": 2
+  },
+  "generated_at_unix": 1785138836,
+  "sample_size_requested": 100,
+  "servers": [
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "tiktapdown-mcp",
+      "name": "io.github.farukkolip/tiktapdown-mcp",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 4,
+      "version": "1.0.1"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "unreal-engine-mcp-server",
+      "name": "io.github.ChiR24/unreal-engine-mcp",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 23,
+      "version": "0.5.30"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "bookie-mcp",
+      "name": "io.github.yuens1002/bookie",
+      "outcome": "failed",
+      "registry_type": "npm",
+      "version": "0.8.5"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "dingdawg-marketing-agent",
+      "name": "io.github.dingdawg/dingdawg-marketing-agent",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 5,
+      "version": "2.0.6"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "mcp-slack-crunchtools",
+      "name": "io.github.crunchtools/slack",
+      "outcome": "success",
+      "registry_type": "pypi",
+      "tool_count": 15,
+      "version": "0.1.2"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "mneme-mcp-server",
+      "name": "io.github.TheGoatPsy/mneme",
+      "outcome": "failed",
+      "registry_type": "npm",
+      "version": "3.5.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "agent-security-mcp",
+      "name": "io.github.mdfifty50-boop/agent-security",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 8,
+      "version": "0.1.3"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "local-delegate-mcp",
+      "name": "io.github.ZahiriNatZuke/local-delegate",
+      "outcome": "success",
+      "registry_type": "pypi",
+      "tool_count": 11,
+      "version": "0.10.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "unsupported_registry_type",
+      "failure_detail": "nuget",
+      "identifier": "FieldCure.Mcp.Essentials",
+      "name": "io.github.fieldcure/essentials",
+      "outcome": "failed",
+      "registry_type": "nuget",
+      "version": "2.6.1"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "unsupported_registry_type",
+      "failure_detail": "nuget",
+      "identifier": "Fuse",
+      "name": "io.github.Litenova-Solutions/fuse",
+      "outcome": "failed",
+      "registry_type": "nuget",
+      "version": "4.3.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "@letmepost/mcp",
+      "name": "io.github.rosekamallove/letmepost",
+      "outcome": "failed",
+      "registry_type": "npm",
+      "version": "0.2.1"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "crewhaus-mcp-server",
+      "name": "io.github.crewhaus/validation",
+      "outcome": "failed",
+      "registry_type": "npm",
+      "version": "1.0.1"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "t1-t2-protocol",
+      "name": "io.github.Fauxetine/t1-t2-protocol",
+      "outcome": "success",
+      "registry_type": "pypi",
+      "tool_count": 3,
+      "version": "0.1.1"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "@arielbk/anki-mcp",
+      "name": "io.github.arielbk/anki-mcp",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 91,
+      "version": "0.3.2"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "heylead",
+      "name": "io.github.D4umak/heylead",
+      "outcome": "success",
+      "registry_type": "pypi",
+      "tool_count": 34,
+      "version": "0.9.5"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "betbetter-mcp",
+      "name": "io.github.edushinka/betbetter-mcp",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 3,
+      "version": "1.0.1"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "icon-composer-mcp",
+      "name": "io.github.ethbak/icon-composer-mcp",
+      "outcome": "failed",
+      "registry_type": "npm",
+      "version": "1.1.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "mcp-media-forge",
+      "name": "io.github.PavelGuzenfeld/media-forge",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 8,
+      "version": "0.2.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "event-planning-ai-mcp",
+      "name": "io.github.CSOAI-ORG/event-planning-ai-mcp",
+      "outcome": "failed",
+      "registry_type": "pypi",
+      "version": "1.0.4"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "strava-mcp-unofficial",
+      "name": "io.github.davidmosiah/strava-mcp",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 28,
+      "version": "0.4.6"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "propstack-mcp-server",
+      "name": "io.github.ashev87/propstack-mcp",
+      "outcome": "failed",
+      "registry_type": "npm",
+      "version": "1.1.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "@registeredbrands/trust-gate-mcp",
+      "name": "io.github.Botagram/trust-gate",
+      "outcome": "failed",
+      "registry_type": "npm",
+      "version": "1.0.1"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "sovereign-api-forge-mcp",
+      "name": "io.github.ryudi84/api",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 3,
+      "version": "1.0.3"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "@saperly/mcp",
+      "name": "io.github.idanbier999/saperly",
+      "outcome": "failed",
+      "registry_type": "npm",
+      "version": "0.1.2"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "@scriptmasterlabs/scriptdocs-mcp-server",
+      "name": "io.github.Timwal78/scriptdocs-mcp-server",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 5,
+      "version": "0.3.1"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "@runapi.ai/gpt-image-mcp",
+      "name": "io.github.runapi-builder/gpt-image-mcp",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 5,
+      "version": "0.1.7"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "@codespar/mcp-btg",
+      "name": "io.github.codespar/mcp-btg",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 12,
+      "version": "0.1.0-alpha.3"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "@vorim/mcp-server",
+      "name": "io.github.Vorim-AI-Labs/vorim-mcp-server",
+      "outcome": "failed",
+      "registry_type": "npm",
+      "version": "1.1.15"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "superhighway-mcp",
+      "name": "io.github.patwalls/superhighway-mcp",
+      "outcome": "failed",
+      "registry_type": "npm",
+      "version": "1.2.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "saudeemdado-mcp",
+      "name": "io.github.pedropaulofernandes88-stack/saudeemdado",
+      "outcome": "success",
+      "registry_type": "pypi",
+      "tool_count": 18,
+      "version": "0.2.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "bling-bag",
+      "name": "io.github.tjclaude88/bling-bag",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 5,
+      "version": "0.2.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "mcparmory-apify",
+      "name": "com.mcparmory/apify",
+      "outcome": "success",
+      "registry_type": "pypi",
+      "tool_count": 112,
+      "version": "1.0.5"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "@mailkite/mcp",
+      "name": "dev.mailkite/mailkite",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 40,
+      "version": "0.13.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "voidfeed-mcp",
+      "name": "io.github.voidfeedai-ops/voidfeed-mcp",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 9,
+      "version": "1.0.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "claude-faf-mcp",
+      "name": "one.faf/claude-faf-mcp",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 13,
+      "version": "5.20.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "meok-enterprise-compliance-suite",
+      "name": "io.github.CSOAI-ORG/meok-enterprise-compliance-suite",
+      "outcome": "failed",
+      "registry_type": "pypi",
+      "version": "1.0.3"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "@three-ws/assistant-mcp",
+      "name": "io.github.nirholas/assistant-widget",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 2,
+      "version": "0.1.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "@gpthuman/mcp-server",
+      "name": "io.github.GPTHuman-ai/humanizer",
+      "outcome": "failed",
+      "registry_type": "npm",
+      "version": "1.0.4"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "dnd-oracle",
+      "name": "io.github.gregario/dnd-oracle",
+      "outcome": "failed",
+      "registry_type": "npm",
+      "version": "0.1.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "mcp-stl",
+      "name": "io.github.daedalus/mcp-stl",
+      "outcome": "failed",
+      "registry_type": "pypi",
+      "version": "0.1.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "runbook-ai-mcp",
+      "name": "io.github.runbook-ai/browser-agent",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 1,
+      "version": "1.0.3"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "s2t-mcp-accelerators",
+      "name": "io.github.S2TConsulting/accelerators",
+      "outcome": "failed",
+      "registry_type": "npm",
+      "version": "1.4.2"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "@mahesvara/discord-mcpserver",
+      "name": "io.github.Oratorian/discord-node-mcp",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 67,
+      "version": "1.1.4"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "setlist-mcp",
+      "name": "io.github.chrischall/setlist-mcp",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 20,
+      "version": "0.9.3"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "protocol",
+      "failure_detail": "response is not valid JSON-RPC: expected value at line 1 column 1",
+      "identifier": "@duongkhuong/mcp-backlog",
+      "name": "io.github.vfa-khuongdv/mcp-backlog",
+      "outcome": "failed",
+      "registry_type": "npm",
+      "version": "1.0.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "posokanei-mcp",
+      "name": "io.github.charistas/posokanei-mcp",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 10,
+      "version": "0.1.1"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "protocol",
+      "failure_detail": "response is not valid JSON-RPC: EOF while parsing a value at line 1 column 0",
+      "identifier": "@onlyswaps/mcp-server",
+      "name": "io.github.nicofains1/onlyswaps",
+      "outcome": "failed",
+      "registry_type": "npm",
+      "version": "0.1.2"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "crossref-mcp",
+      "name": "io.github.jtl-neo/crossref-mcp",
+      "outcome": "success",
+      "registry_type": "pypi",
+      "tool_count": 18,
+      "version": "0.1.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "obsidian-mcp-server",
+      "name": "io.github.cyanheads/obsidian-mcp-server",
+      "outcome": "failed",
+      "registry_type": "npm",
+      "version": "3.2.9"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "@kaditang/402sentinel-mcp",
+      "name": "io.github.kaditang/402sentinel-mcp",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 10,
+      "version": "0.7.1"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "swiss-democracy-mcp",
+      "name": "io.github.malkreide/swiss-democracy-mcp",
+      "outcome": "success",
+      "registry_type": "pypi",
+      "tool_count": 10,
+      "version": "0.2.3"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "password-ai-mcp",
+      "name": "io.github.CSOAI-ORG/password-ai-mcp",
+      "outcome": "failed",
+      "registry_type": "pypi",
+      "version": "1.0.4"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "twzrd-agent-intel",
+      "name": "io.github.twzrd-sol/twzrd-agent-intel",
+      "outcome": "success",
+      "registry_type": "pypi",
+      "tool_count": 18,
+      "version": "0.5.2"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "snapstate-sdk",
+      "name": "io.github.timbassler88/snapstate",
+      "outcome": "failed",
+      "registry_type": "npm",
+      "version": "1.0.2"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "@securecode/mcp-server",
+      "name": "io.github.juanisidoro/securecode",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 17,
+      "version": "0.15.2"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "scannd-mcp",
+      "name": "com.scannd/scannd",
+      "outcome": "failed",
+      "registry_type": "npm",
+      "version": "0.1.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "@tokenlabai/mcp-server",
+      "name": "io.github.hedging8563/tokenlab",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 31,
+      "version": "0.6.17"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "as400-bridge-mcp",
+      "name": "io.github.CSOAI-ORG/as400-bridge-mcp",
+      "outcome": "success",
+      "registry_type": "pypi",
+      "tool_count": 4,
+      "version": "0.1.1"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "@parserelay/mcp",
+      "name": "io.github.parserelay/mcp",
+      "outcome": "failed",
+      "registry_type": "npm",
+      "version": "0.1.1"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "karst",
+      "name": "io.github.Moin105/karst",
+      "outcome": "failed",
+      "registry_type": "pypi",
+      "version": "0.2.9"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "@cyanheads/biorxiv-mcp-server",
+      "name": "io.github.cyanheads/biorxiv-mcp-server",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 6,
+      "version": "0.2.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "protocol",
+      "failure_detail": "response is not valid JSON-RPC: EOF while parsing a value at line 1 column 80",
+      "identifier": "monitoring-aiops",
+      "name": "io.github.AIops-tools/monitoring-aiops",
+      "outcome": "failed",
+      "registry_type": "pypi",
+      "version": "0.6.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "activitypub-mcp",
+      "name": "io.github.cameronrye/activitypub-mcp",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 18,
+      "version": "3.2.1"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "overllm",
+      "name": "io.github.theadamdanielsson/overllm",
+      "outcome": "failed",
+      "registry_type": "pypi",
+      "version": "0.7.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "gliana-ai-mcp",
+      "name": "io.github.Gliana-Labs/gliana-ai-mcp",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 4,
+      "version": "0.3.2"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "@codespar/mcp-midaz",
+      "name": "io.github.codespar/mcp-midaz",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 5,
+      "version": "0.1.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "@arkava-ai/gamma-mcp-server",
+      "name": "io.github.amer-prog/gamma-mcp-server",
+      "outcome": "failed",
+      "registry_type": "npm",
+      "version": "1.0.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "xhelio-spice",
+      "name": "io.github.huangzesen/xhelio-spice",
+      "outcome": "failed",
+      "registry_type": "pypi",
+      "version": "0.5.1"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "illustrator-mcp-server",
+      "name": "io.github.ie3jp/illustrator-mcp-server",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 66,
+      "version": "1.5.1"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "japan-ux-mcp",
+      "name": "io.github.mrslbt/japan-ux",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 11,
+      "version": "2.0.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "swisstopo-mcp",
+      "name": "io.github.malkreide/swisstopo-mcp",
+      "outcome": "success",
+      "registry_type": "pypi",
+      "tool_count": 13,
+      "version": "0.1.3"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "mcp-cryptography",
+      "name": "io.github.daedalus/mcp-cryptography",
+      "outcome": "success",
+      "registry_type": "pypi",
+      "tool_count": 22,
+      "version": "0.1.1"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "@theyahia/sendpulse-mcp",
+      "name": "io.github.theYahia/sendpulse-mcp",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 3,
+      "version": "1.0.3"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "unit-converter-ai-mcp",
+      "name": "io.github.CSOAI-ORG/unit-converter-ai-mcp",
+      "outcome": "failed",
+      "registry_type": "pypi",
+      "version": "1.0.10"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "profitlee-mcp",
+      "name": "io.github.AronLEEdev/profitlee-mcp",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 7,
+      "version": "0.2.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "modelbound-mcp",
+      "name": "io.github.ModelBound/modelbound-mcp",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 14,
+      "version": "0.1.2"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "debmatic-mcp",
+      "name": "io.github.claymore666/debmatic-mcp",
+      "outcome": "failed",
+      "registry_type": "npm",
+      "version": "1.3.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "prolog-reasoner",
+      "name": "io.github.rikarazome/prolog-reasoner",
+      "outcome": "success",
+      "registry_type": "pypi",
+      "tool_count": 5,
+      "version": "0.2.1"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "nordic-data-mcp",
+      "name": "io.github.Mnymann/nordic-data",
+      "outcome": "failed",
+      "registry_type": "npm",
+      "version": "1.5.1"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "env-forge-mcp",
+      "name": "io.github.ryudi84/env-forge-mcp",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 3,
+      "version": "1.0.1"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "canvas-local-mcp",
+      "name": "io.github.admin978/canvas-mcp",
+      "outcome": "failed",
+      "registry_type": "pypi",
+      "version": "0.1.3"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "aeo-mcp",
+      "name": "io.github.arthurcarlsonn/aeo-mcp",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 5,
+      "version": "1.0.1"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "@oktopeak/clio-mcp",
+      "name": "io.github.oktopeak/clio-mcp",
+      "outcome": "failed",
+      "registry_type": "npm",
+      "version": "2.0.1"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "koa-fhe",
+      "name": "io.github.Euda1mon1a/koa-fhe",
+      "outcome": "failed",
+      "registry_type": "pypi",
+      "version": "0.1.2"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "vtimestamp-mcp-write",
+      "name": "io.github.vdappdev2/vtimestamp-write",
+      "outcome": "failed",
+      "registry_type": "npm",
+      "version": "1.0.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "@jdot6/apple-mail-mcp",
+      "name": "io.github.jayvee6/apple-mail-mcp",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 13,
+      "version": "0.1.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "@cyanheads/macos-mcp-server",
+      "name": "io.github.cyanheads/macos-mcp-server",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 13,
+      "version": "0.1.4"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "protocol",
+      "failure_detail": "response is not valid JSON-RPC: expected value at line 1 column 1",
+      "identifier": "android-puppeteer-mcp",
+      "name": "io.github.pedro-rivas/android-puppeteer-mcp",
+      "outcome": "failed",
+      "registry_type": "pypi",
+      "version": "1.0.1"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "opik-mcp",
+      "name": "io.github.comet-ml/opik-mcp",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 10,
+      "version": "2.0.2"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "@beyondwin/fixthis",
+      "name": "io.github.beyondwin/fixthis",
+      "outcome": "failed",
+      "registry_type": "npm",
+      "version": "1.5.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "@flarelink/mcp",
+      "name": "io.github.flarelink-dev/mcp",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 11,
+      "version": "0.1.1"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "jaimenbell-rag-mcp",
+      "name": "io.github.jaimenbell/rag-mcp",
+      "outcome": "failed",
+      "registry_type": "pypi",
+      "version": "0.1.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "@promptwheel/logbook-mcp",
+      "name": "io.github.promptwheel-ai/logbook",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 5,
+      "version": "0.4.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "misata",
+      "name": "io.github.rasinmuhammed/misata",
+      "outcome": "failed",
+      "registry_type": "pypi",
+      "version": "0.8.7.2"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "chromium-bridge",
+      "name": "io.github.dashi96/chromium-bridge",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 18,
+      "version": "0.5.3"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "@unclick/trivia-mcp",
+      "name": "io.github.malamutemayhem/trivia",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 2,
+      "version": "0.1.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "io_or_timeout",
+      "failure_detail": "stdio transport closed before a response was received",
+      "identifier": "zephyr-scale-mcp",
+      "name": "io.github.vilaabo/zephyr-scale-mcp",
+      "outcome": "failed",
+      "registry_type": "npm",
+      "version": "0.4.0"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "failure_category": "protocol",
+      "failure_detail": "response is not valid JSON-RPC: EOF while parsing a value at line 1 column 0",
+      "identifier": "ruv-swarm",
+      "name": "io.github.ruvnet/ruv-swarm",
+      "outcome": "failed",
+      "registry_type": "npm",
+      "version": "1.0.19"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "@lyellr88/buddy-mcp",
+      "name": "io.github.Lyellr88/buddy-mcp",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 9,
+      "version": "1.4.4"
+    },
+    {
+      "execution_provenance": "containerized_docker",
+      "identifier": "google-ads-mcp-unofficial",
+      "name": "io.github.davidmosiah/google-ads-mcp",
+      "outcome": "success",
+      "registry_type": "npm",
+      "tool_count": 30,
+      "version": "0.1.3"
+    }
+  ],
+  "stage": "2 — containerized execution (docker run) against live Class A servers",
+  "succeeded": 57,
+  "tools_discovered": 956
+}

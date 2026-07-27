@@ -35,6 +35,14 @@ fn main() {
             continue;
         }
 
+        // Never responds — stands in for a hung or deliberately stalling server, so
+        // `stdio_with_timeout`'s watchdog has something real to kill.
+        if mode == "hang" && method == "initialize" {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(3600));
+            }
+        }
+
         let response = match method {
             "initialize" if mode == "wrong_id" => serde_json::json!({
                 "jsonrpc": "2.0",

@@ -136,6 +136,30 @@ impl ChildProcessTransport {
         program: impl AsRef<std::ffi::OsStr>,
         args: &[&str],
     ) -> Result<Self, DiscoveryError> {
+        Self::spawn_with_timeout(program, args, None)
+    }
+
+    /// Same as [`Self::spawn`], plus an optional hard wall-clock deadline on the child's
+    /// lifetime.
+    ///
+    /// Exists for Stage 2 census (`docker run` wrapping a locally-launchable Class A
+    /// package): a hostile or merely broken tool under `initialize`/`tools/list` can hang
+    /// indefinitely, and `StdioTransport::recv_line` blocks with no timeout of its own. A
+    /// watcher thread sleeps `timeout` and then sends the child a kill signal if it is still
+    /// running; the killed process's stdout closing is what unblocks a pending
+    /// `recv_line` (it surfaces as the ordinary "peer closed" `DiscoveryError::Io`, the same
+    /// path an early-exiting server already takes).
+    ///
+    /// Best-effort by construction, not a containment mechanism: this is a watchdog for a
+    /// hung *discovery* call, not the sandbox. If the child already exited before the
+    /// deadline, the watcher's kill targets a pid the OS may since have reused — an accepted
+    /// risk for a short (tens-of-seconds) timeout window in a census tool, not something
+    /// Phase 1+'s actual containment may ever rely on.
+    pub(crate) fn spawn_with_timeout(
+        program: impl AsRef<std::ffi::OsStr>,
+        args: &[&str],
+        timeout: Option<Duration>,
+    ) -> Result<Self, DiscoveryError> {
         let mut child = Command::new(program)
             .args(args)
             .stdin(Stdio::piped())
@@ -143,6 +167,17 @@ impl ChildProcessTransport {
             .stderr(Stdio::inherit())
             .spawn()
             .map_err(DiscoveryError::Io)?;
+
+        if let Some(timeout) = timeout {
+            let pid = child.id();
+            std::thread::spawn(move || {
+                std::thread::sleep(timeout);
+                // Best-effort: ignore the exit status entirely. If the child already
+                // exited, this either fails harmlessly or (rarely, pid reuse) kills an
+                // unrelated process — see the doc comment above.
+                let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
+            });
+        }
 
         let stdout = child.stdout.take().expect("spawned with Stdio::piped()");
         let stdin = child.stdin.take().expect("spawned with Stdio::piped()");

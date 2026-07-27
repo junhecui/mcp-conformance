@@ -102,6 +102,20 @@ impl DiscoveryClient {
         Ok(Self { transport: Box::new(transport) })
     }
 
+    /// Same as [`Self::stdio`], with a hard wall-clock deadline on the child process's
+    /// lifetime — see [`crate::transport::ChildProcessTransport::spawn_with_timeout`]. For a
+    /// stdio target this harness does not control the code of (e.g. a containerized Class A
+    /// package under Stage 2 census), unbounded blocking on `recv_line` is not acceptable at
+    /// sweep scale.
+    pub fn stdio_with_timeout(
+        program: impl AsRef<OsStr>,
+        args: &[&str],
+        timeout: std::time::Duration,
+    ) -> Result<Self, DiscoveryError> {
+        let transport = ChildProcessTransport::spawn_with_timeout(program, args, Some(timeout))?;
+        Ok(Self { transport: Box::new(transport) })
+    }
+
     /// Speak MCP Streamable HTTP against `endpoint` (the single-JSON-response case; see
     /// [`crate::transport::HttpTransport`] for the SSE-streaming exclusion). 30s timeout.
     #[must_use]
