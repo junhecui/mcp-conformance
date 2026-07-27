@@ -1643,6 +1643,61 @@ not a protocol this crate implements itself.
 **Depends on:** P2-04, P2-06
 **Exit:** Repeat single-call, double-call in-process, and call/restart/call arms all produce
 independent changesets.
+**Status:** Done — `crates/orchestrator::arms` (Linux-gated at the module boundary, not the
+whole crate, since `load_ruleset` is genuinely cross-platform): `run_arm_1_prime`,
+`run_arm_2`, `run_arm_2r`, each taking an `ArmProgram` (base layer, program, tool name,
+already-synthesised arguments — schema discovery and argument synthesis both happen
+upstream, never inside this module) and returning an `ArmRun` (the overlay's upper layer
+plus the decoded `evtree1` changeset). A local, ~30-line `RawClient` mirrors
+`xtask::first_verdict`'s own one-off JSON-RPC-over-pipes client rather than sharing it — the
+session shape each arm needs (how many `tools/call`s, over how many separate processes)
+differs enough per call site that a shared abstraction would be more indirection than what
+it replaces, the same call `first_verdict`'s own doc comment already made for its client.
+
+**How `Arm 2R`'s "restart" actually works, verified directly rather than assumed from
+overlayfs documentation:** `run_arm_2r` calls `sandbox::spawn` *twice* against the exact same
+`OverlaySpec`. Each `spawn` unshares its own private mount namespace and mounts the overlay
+fresh, but `upperdir` is a real, host-filesystem directory that outlives any one mount
+namespace — so the second `spawn`'s mount starts from exactly what the first process's run
+left behind, plus the same read-only `lower`. This is confirmed by the arm's own test, not
+inferred: `arm_2r_restart_lets_the_second_calls_effect_reappear` shows a second, independent
+process genuinely sees and builds on the first process's on-disk effect.
+
+**Proven against a real (if minimal) stdio program, not a synthetic assembly of
+already-tested pieces:** a purpose-built POSIX-shell MCP stub (`stub_server.sh`, materialised
+via `sandbox::base_layer`) answers `initialize`/`tools/call` over stdio and tracks an
+*in-process-only* call counter — deliberately modelling architecture.md §4.2's exact worry
+("real non-idempotence, environmental noise, and internal caching"): only the first
+`tools/call` a given process instance ever receives writes a line to `effect.txt`; a second
+call in the *same* process is silently suppressed. Three tests exercise this directly:
+`arm_1_prime_runs_are_physically_independent_and_each_shows_one_call` (two separate `Arm 1'`
+invocations land in genuinely non-overlapping upper directories, each independently showing
+its own single write — "independent" in the exit criterion's literal sense);
+`arm_2_double_call_in_process_shows_only_the_first_calls_effect` (`Arm 2`'s two same-process
+calls produce exactly one write — the in-process suppression made visible in a real
+changeset, not asserted about in the abstract); `arm_2r_restart_lets_the_second_calls_effect_
+reappear` (`Arm 2R`'s restart lets the second call's write reappear — the exact signature
+architecture.md §4.2 says distinguishes caching from genuine idempotence, with the same total
+call count as `Arm 2` but a different final changeset because of the restart in between).
+
+**One real concurrency issue found and fixed, not papered over:** running these three tests
+under Rust's default parallel test execution occasionally pushed one sandboxed session's
+wall-clock time past its own 10-second timeout, entirely because of contention between
+concurrently-spawned sandboxes — exactly the failure mode `orchestrator`'s own crate-level
+doc comment already names ("must not run more than one sandbox per worker slot at a time...
+the resulting timing coupling is exactly the noise P2-08's noise floor is trying to
+measure"). Confirmed directly: serialized with `RUST_TEST_THREADS=1`, the same three tests
+consistently complete in a fraction of a second; run concurrently (the default), one
+occasionally took the full ~10s timeout. Fixed by giving this module's own tests a
+process-wide `Mutex` "sandbox slot" they take before spawning anything — obeying the
+constraint the crate already documents, in its own tests, rather than accidentally violating
+it. Verified clean across 8 consecutive runs under default (parallel) test execution after
+the fix, each completing in well under a second.
+
+`orchestrator` grew from 8 tests (6 `load_ruleset`/replay-adjacent, plus the pre-existing
+2-test `replay.rs` integration suite) to 14. `cargo build --workspace`, `cargo clippy
+--workspace --all-targets -- -D warnings`, `cargo xtask purity`, and `cargo test --workspace`
+all pass clean.
 
 ### P2-08 ⚑ Noise floor
 

@@ -21,6 +21,14 @@ use std::path::Path;
 use datamodel::Ruleset;
 use serde::Deserialize;
 
+/// P2-07: execute `Arm 1'`, `Arm 2`, and `Arm 2R` against a real sandboxed program. Gated at
+/// the module boundary, not the whole crate — `load_ruleset` above is genuinely
+/// cross-platform, but everything in `arms` drives `sandbox::spawn` directly.
+#[cfg(target_os = "linux")]
+mod arms;
+#[cfg(target_os = "linux")]
+pub use arms::{run_arm_1_prime, run_arm_2, run_arm_2r, ArmError, ArmProgram, ArmRun};
+
 #[derive(Deserialize)]
 struct RulesetFile {
     version: String,
