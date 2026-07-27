@@ -101,10 +101,29 @@ both clean on the macOS host.
 
 **Depends on:** F-02
 **Exit:** CI green on a trivial PR; Linux runner exercises the `sandbox` module.
+**Status:** Done — `.github/workflows/ci.yml`, `ubuntu-24.04` (version-pinned, matching the
+ADR-007 posture rather than `ubuntu-latest`). Triggers on push to `main` and on pull
+requests. Local baseline confirmed clean before landing: `cargo build`, `cargo test`, and
+`cargo clippy --workspace --all-targets -- -D warnings` all pass with zero warnings on
+1.85.1.
 
-- [ ] Build + test + lint on every push
-- [ ] Linux runner with the kernel features the sandbox needs (overlayfs, cgroups v2, user ns)
-- [ ] Fail the build on warnings in `normalise` and `verdict`
+- [x] Build + test + lint on every push — checkout → cache → `rustup show` (installs the
+      pinned toolchain from `rust-toolchain.toml`) → build → test → clippy → `cargo purity`
+- [x] Linux runner with the kernel features the sandbox needs (overlayfs, cgroups v2, user
+      ns) — a dedicated smoke-check step probes all three (`/sys/fs/cgroup/cgroup.controllers`,
+      `sudo unshare` across mount/uts/ipc/net/pid/user, a real overlay mount/unmount) and
+      fails the build loudly if the runner image lacks one, rather than letting P1-03
+      discover it silently later. Probes run under `sudo` deliberately — they check kernel
+      *subsystem* availability, independent of the unprivileged-userns policy question,
+      which is P1-03's design concern, not this check's.
+- [x] Fail the build on warnings in `normalise` and `verdict` — implemented as
+      `cargo clippy --workspace --all-targets -- -D warnings`, a strict superset of the
+      minimum ask. Workspace is at zero warnings today; the one known future cost is that
+      `unsafe_code = "warn"` (workspace lint) becomes a hard error once P1-03 adds real
+      syscall code to `sandbox`, forcing an explicit `#[allow(unsafe_code)]` per block —
+      consistent with this codebase's existing pattern of demanding explicit justification
+      for risky code (the ADR-005 purity allowlist), so treated as intended friction rather
+      than a defect.
 
 ### F-04 ⚑ Enforce the purity rule in CI
 

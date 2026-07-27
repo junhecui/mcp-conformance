@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-lint:
+    name: build, test, lint
+    # Pinned, not `ubuntu-latest` — same reproducibility posture as rust-toolchain.toml
+    # (ADR-007). A floating runner image can silently change kernel features the
+    # sandbox crate depends on (F-00).
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache cargo registry and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install pinned toolchain (rust-toolchain.toml)
+        run: rustup show
+
+      # F-03: this runner must have the kernel features the sandbox crate needs
+      # (architecture.md §5). Fails loudly if the runner image drops one of them,
+      # rather than letting P1-03 discover it silently later.
+      #
+      # Namespace and overlayfs probes run under `sudo` deliberately: they check that
+      # the kernel *subsystems* are present, independent of the unprivileged-userns
+      # policy question, which is P1-03's design concern, not this check's.
+      - name: Verify sandbox kernel prerequisites
+        run: |
+          set -euo pipefail
+
+          echo "-- cgroups v2 unified hierarchy --"
+          test -f /sys/fs/cgroup/cgroup.controllers
+
+          echo "-- mount/uts/ipc/net/pid/user namespaces --"
+          sudo unshare --mount --uts --ipc --net --pid --user --fork -- true
+
+          echo "-- overlayfs --"
+          workdir="$(mktemp -d)"
+          mkdir -p "$workdir"/lower "$workdir"/upper "$workdir"/work "$workdir"/merged
+          opts="lowerdir=$workdir/lower,upperdir=$workdir/upper,workdir=$workdir/work"
+          sudo mount -t overlay overlay -o "$opts" "$workdir/merged"
+          sudo umount "$workdir/merged"
+          rm -rf "$workdir"
+
+      - name: Build
+        run: cargo build --workspace --all-targets --locked
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+      # Denies warnings workspace-wide, which is a strict superset of F-03's minimum
+      # ask (deny warnings in `normalise` and `verdict`).
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      # ADR-005 / F-04. Its own step, not a test — `cargo tree` inside `cargo test`
+      # recursively invokes cargo and contends for the package-cache lock.
+      - name: Purity firewall
+        run: cargo purity
