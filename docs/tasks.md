@@ -304,13 +304,27 @@ doc's own minimal example rather than an invented fixture.
 
 **Depends on:** P0-03
 **Exit:** Every corpus server carries Class A, Class B, or `unclassifiable`, plus the reason.
+**Status:** Done — `crates/intake::classify`. Reuses `datamodel::ContainabilityClass`
+(already scaffolded in F-02) rather than a second parallel type, so classification can
+never drift from what F-06's `SERVER.containability_class` column and its `CHECK`
+constraint accept. A package target always wins over a coexisting remote — the registry
+schema explicitly allows `packages` and `remotes` on the same entry, and "launchable
+locally" only needs one to be true. 6 tests, including one that constructs the
+"resolved but empty" state directly (bypassing `ingest()`'s own invariant that `Resolved`
+implies a non-empty target list) to prove the classifier doesn't blindly trust an
+invariant it can't see enforced — it degrades to `Unclassifiable` rather than panicking.
 
 architecture.md §12 item 3 — the Class A/B ratio gates how ambitious Phase 5 can be.
 
-- [ ] Class A: launchable locally
-- [ ] Class B: remote HTTP endpoint only
-- [ ] `unclassifiable` is a real class, not a fallback — never guess
-- [ ] Reason string stored alongside the class
+- [x] Class A: launchable locally — any `ResolvedTarget::Package`, regardless of what else
+      the entry also declares
+- [x] Class B: remote HTTP endpoint only — `ResolvedTarget::Endpoint` present, no package
+- [x] `unclassifiable` is a real class, not a fallback — never guess — every classification
+      traces to a concrete fact from `catalogue::ingest`'s output (an `Unresolvable` reason,
+      or the target list's actual contents), never to absence of information defaulting
+      silently to one class
+- [x] Reason string stored alongside the class — always human-readable prose; no closed
+      reason-code taxonomy at this layer the way the verdict engine has one (P2-11)
 
 ### P0-05 Coverage aggregator
 
