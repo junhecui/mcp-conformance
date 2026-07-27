@@ -7,6 +7,15 @@ publish.workspace = true
 
 [dependencies]
 datamodel.workspace = true
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+ureq = { version = "3.3.0", features = ["rustls"] }
 
 [lints]
 workspace = true
+
+# Test-only fixture (P0-01 integration tests). Not part of the harness's own behaviour —
+# ADR-007's "second language" carve-out treats fixtures and test servers as throwaway.
+[[bin]]
+name = "fake-mcp-stdio-server"
+path = "tests/support/fake_mcp_stdio_server.rs"

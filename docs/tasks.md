@@ -220,12 +220,36 @@ project's risk profile.
 **Depends on:** F-02
 **Exit:** `initialize` + `tools/list` succeeds against both a stdio server and a remote HTTP
 server; raw JSON persisted verbatim.
+**Status:** Done — `crates/discovery`. Hand-rolled JSON-RPC 2.0 (per ADR-007; no `rmcp`),
+`serde`/`serde_json` for wire encoding and `ureq` (rustls, no native-tls/openssl) for the
+HTTP transport. Verified against the live MCP spec before implementing rather than assuming
+a revision: current stable is `2025-11-25` (a `2026-07-28` revision is in release-candidate
+status and removes the `initialize` handshake entirely — a shape change for this whole
+module, not a version bump; flagged for O-01, not addressed here). 15 tests: unit tests for
+JSON-RPC framing and response routing (id mismatch, JSON-RPC error objects, malformed JSON,
+peer-closed-without-responding — all via a real bidirectional `UnixStream` pair, not a
+mock), plus true end-to-end integration tests against a real spawned subprocess (stdio) and
+a real hand-rolled `TcpListener`-based HTTP/1.1 server (no external network calls, fully
+hermetic and CI-reproducible). Re-ran 5x locally to rule out flakiness in the
+thread/socket-timing-sensitive tests.
 
-- [ ] stdio transport
-- [ ] Streamable HTTP transport
-- [ ] Raw response captured **byte-exact** before any parsing — the pin depends on this
-- [ ] Must not call any tool. Enforce structurally, not by discipline.
-- [ ] Record the negotiated spec revision into `TOOL_SNAPSHOT.spec_revision`
+- [x] stdio transport — newline-delimited JSON-RPC over a spawned child's stdio; the
+      `Child` is reaped on drop (kill + wait) so a discovery target that never exits can't
+      accumulate as a zombie across a census run
+- [x] Streamable HTTP transport — the single-JSON-response case; a server that upgrades to
+      `text/event-stream` gets a clear rejection rather than silent mishandling (out of
+      scope for this thinnest path, not silently broken)
+- [x] Raw response captured **byte-exact** before any parsing — the pin depends on this;
+      `Discovery.initialize_raw` / `.tools_list_raw` are the untouched wire bytes, and
+      nothing in this crate parses them any further than routing the JSON-RPC envelope
+      (id, result vs. error) to decide success/failure
+- [x] Must not call any tool. Enforce structurally, not by discipline — the `Transport`
+      trait (the only thing that can send an arbitrary MCP method string) is `pub(crate)`;
+      nothing outside this crate can name it. `DiscoveryClient::discover` is the only
+      public entry point, and its three method names (`initialize`,
+      `notifications/initialized`, `tools/list`) are literals in its body, never parameters
+- [x] Record the negotiated spec revision into `TOOL_SNAPSHOT.spec_revision` — taken from
+      the server's own `initialize` response, not the version the client asked for
 
 ### P0-02 ⚑ Metadata pinner
 
