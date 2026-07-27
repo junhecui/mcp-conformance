@@ -799,7 +799,9 @@ dependencies = [
 name = "xtask"
 version = "0.1.0"
 dependencies = [
+ "census",
  "datamodel",
+ "discovery",
  "intake",
  "serde_json",
 ]

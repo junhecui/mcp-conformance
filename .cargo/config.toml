@@ -4,3 +4,5 @@ xtask = "run --quiet --package xtask --bin xtask --"
 purity = "run --quiet --package xtask --bin xtask -- purity"
 # P0-08: run the Stage 0 registry census (registry metadata only, no third-party contact).
 census = "run --quiet --package xtask --bin xtask -- census"
+# P0-06/07 Stage 1: sample Class B servers and run initialize+tools/list against each.
+census-stage1 = "run --quiet --package xtask --bin xtask -- census-stage1"
