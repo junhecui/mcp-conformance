@@ -36,6 +36,13 @@ mod noise;
 #[cfg(target_os = "linux")]
 pub use noise::measure_noise_floor;
 
+/// P2-09: `idempotentHint`'s multi-arm protocol, driven against real sandboxed runs. Same
+/// gating rationale as `arms`.
+#[cfg(target_os = "linux")]
+mod idempotency;
+#[cfg(target_os = "linux")]
+pub use idempotency::content_delta;
+
 #[derive(Deserialize)]
 struct RulesetFile {
     version: String,

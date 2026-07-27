@@ -11,6 +11,9 @@
 
 extern crate alloc;
 
+use alloc::string::String;
+use alloc::vec::Vec;
+
 use datamodel::{CanonicalChangeset, Oracle, Outcome, ReasonCode};
 
 /// The result of applying one verification protocol.
@@ -95,6 +98,57 @@ pub fn read_only_hint(declared: bool, d1: &CanonicalChangeset) -> Assessment {
     Assessment::holds(Oracle::KernelChangeset)
 }
 
+/// The exact reason text this protocol writes for its one internal `Unverifiable` branch —
+/// kept in one place, the same discipline `integrity`'s own reason constants already follow,
+/// so nothing downstream can drift from what this module actually produces by re-deriving
+/// the string at a second call site.
+pub const REASON_CACHING_SUPPRESSED_IN_PROCESS: &str = "caching_suppressed_in_process";
+
+/// Decide `idempotentHint` from architecture.md §4.2's multi-arm decision tree.
+///
+/// Framed the way architecture.md §4.2 itself frames it, in the metamorphic-testing
+/// vocabulary (Segura et al., IEEE TSE 2017): `D1 ≡ D2` is an *equivalence metamorphic
+/// relation* over the state-transformation output, and `noise_floor` (`N = D1 Δ D1'`,
+/// P2-08) is the *tolerance* under which that relation is evaluated — not an exact-equality
+/// check, because two genuinely identical single calls are already known (from measuring
+/// `N` itself) not to produce byte-identical changesets.
+///
+/// Every parameter here is already a computed *difference set* — which paths two evidence
+/// captures disagreed on, however the caller defines "disagreed" (by presence, or by
+/// content). Deciding *how* to compare two captures needs real I/O (reading file content
+/// requires a filesystem, `noise_floor`'s own consistent computation with `d2_delta_d1`/
+/// `d2r_delta_d1` needs to run the same comparison architecture-wide) — this crate's own
+/// "must not call a clock [or] a network" contract already forbids a filesystem read
+/// happening in here, so producing these sets is the caller's job (in practice,
+/// `orchestrator`), and this function's job is only the decision over already-computed sets.
+///
+/// Order matches the diagram exactly: `D2 Δ D1` (`C1`) is checked before `D2R Δ D1` (`C2`) —
+/// a tool whose second call already shows an effect outside the noise floor is `violated`
+/// regardless of what a restart would additionally show. The restart-only branch exists
+/// specifically to separate "genuinely non-idempotent" from "cached only within one
+/// process," and only matters once the simpler explanation is already ruled out.
+#[must_use]
+pub fn idempotent_hint(
+    d2_delta_d1: &[Vec<u8>],
+    d2r_delta_d1: &[Vec<u8>],
+    noise_floor: &[Vec<u8>],
+) -> Assessment {
+    if !is_subset(d2_delta_d1, noise_floor) {
+        return Assessment::violated(Oracle::KernelChangeset);
+    }
+    if !is_subset(d2r_delta_d1, noise_floor) {
+        return Assessment::unverifiable(
+            Oracle::KernelChangeset,
+            ReasonCode(String::from(REASON_CACHING_SUPPRESSED_IN_PROCESS)),
+        );
+    }
+    Assessment::holds(Oracle::KernelChangeset)
+}
+
+fn is_subset(delta: &[Vec<u8>], noise_floor: &[Vec<u8>]) -> bool {
+    delta.iter().all(|path| noise_floor.iter().any(|n| n == path))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,5 +208,75 @@ mod tests {
         let u = Assessment::unverifiable(Oracle::KernelChangeset, reason.clone());
         assert_eq!(u.outcome(), Outcome::Unverifiable);
         assert_eq!(u.reason(), Some(&reason));
+    }
+
+    fn path(s: &str) -> alloc::vec::Vec<u8> {
+        s.as_bytes().to_vec()
+    }
+
+    #[test]
+    fn no_differences_anywhere_holds() {
+        let assessment = idempotent_hint(&[], &[], &[]);
+        assert_eq!(assessment, Assessment::holds(Oracle::KernelChangeset));
+    }
+
+    /// `C1`: a `D2 Δ D1` difference outside the noise floor is `violated`, regardless of
+    /// what `D2R Δ D1` shows — a genuinely non-idempotent tool doesn't need a restart to
+    /// prove it.
+    #[test]
+    fn a_d2_delta_outside_the_noise_floor_is_violated() {
+        let assessment = idempotent_hint(&[path("extra.txt")], &[], &[]);
+        assert_eq!(assessment, Assessment::violated(Oracle::KernelChangeset));
+    }
+
+    /// `C2`: `D2 Δ D1` is fully within `N`, but `D2R Δ D1` shows something outside it — the
+    /// exact caching-confound shape architecture.md §4.2 describes (an effect suppressed
+    /// in-process, reappearing after a restart).
+    #[test]
+    fn a_d2r_delta_outside_the_noise_floor_alone_is_unverifiable_with_the_caching_reason() {
+        let assessment = idempotent_hint(&[], &[path("effect.txt")], &[]);
+        assert_eq!(
+            assessment,
+            Assessment::unverifiable(
+                Oracle::KernelChangeset,
+                ReasonCode(alloc::string::String::from(REASON_CACHING_SUPPRESSED_IN_PROCESS))
+            )
+        );
+    }
+
+    #[test]
+    fn both_deltas_fully_within_the_noise_floor_holds() {
+        let n = [path("noisy.tmp")];
+        let assessment = idempotent_hint(&[path("noisy.tmp")], &[path("noisy.tmp")], &n);
+        assert_eq!(assessment, Assessment::holds(Oracle::KernelChangeset));
+    }
+
+    /// `C1` before `C2`, exactly matching the diagram's own top-to-bottom order: a tool
+    /// whose `D2 Δ D1` *and* `D2R Δ D1` both show a difference outside `N` is still reported
+    /// `violated`, not the restart-only `unverifiable` reason — the diagram never reaches
+    /// `C2` once `C1` has already failed.
+    #[test]
+    fn d2_delta_failing_takes_priority_over_d2r_delta_also_failing() {
+        let assessment =
+            idempotent_hint(&[path("extra.txt")], &[path("another.txt")], &[]);
+        assert_eq!(assessment, Assessment::violated(Oracle::KernelChangeset));
+    }
+
+    /// A larger noise floor than what either delta actually needs does not change the
+    /// outcome — `⊆`, not `==`.
+    #[test]
+    fn a_noise_floor_larger_than_either_delta_still_holds() {
+        let n = [path("a.tmp"), path("b.tmp"), path("c.tmp")];
+        let assessment = idempotent_hint(&[path("a.tmp")], &[path("b.tmp")], &n);
+        assert_eq!(assessment, Assessment::holds(Oracle::KernelChangeset));
+    }
+
+    /// Empty deltas are always a subset of any noise floor, including an empty one — the
+    /// trivial case that every other test's "holds" branch quietly depends on.
+    #[test]
+    fn empty_deltas_are_a_subset_of_any_noise_floor() {
+        let n = [path("whatever.tmp")];
+        assert_eq!(idempotent_hint(&[], &[], &n), Assessment::holds(Oracle::KernelChangeset));
+        assert_eq!(idempotent_hint(&[], &[], &[]), Assessment::holds(Oracle::KernelChangeset));
     }
 }

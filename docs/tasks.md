@@ -1754,11 +1754,57 @@ clean.
 **Depends on:** P2-08
 **Exit:** The decision tree in architecture.md §4.2 implemented.
 
-- [ ] `D2 Δ D1 ⊄ N` → `violated`
-- [ ] `D2R Δ D1 ⊄ N` → `unverifiable`, reason `caching_suppressed_in_process`
-- [ ] Both within `N` → `holds`
-- [ ] Framed as an equivalence metamorphic relation with `N` as the tolerance — say it that
+- [x] `D2 Δ D1 ⊄ N` → `violated`
+- [x] `D2R Δ D1 ⊄ N` → `unverifiable`, reason `caching_suppressed_in_process`
+- [x] Both within `N` → `holds`
+- [x] Framed as an equivalence metamorphic relation with `N` as the tolerance — say it that
       way in the paper
+
+**Status:** Done, split across the pure decision and the effectful production of its inputs,
+the same shape P2-08 used. `verdict::idempotent_hint(d2_delta_d1, d2r_delta_d1, noise_floor)
+-> Assessment` is the pure decision tree — `C1` (`D2 Δ D1 ⊆ N`) checked before `C2` (`D2R Δ
+D1 ⊆ N`), exactly the diagram's top-to-bottom order, so a tool failing both is reported
+`violated`, never the restart-only `unverifiable` reason. `REASON_CACHING_SUPPRESSED_IN_
+PROCESS` is the exact reason string, kept in one place the same way `integrity`'s reason
+constants already are. The doc comment states the metamorphic-testing framing verbatim,
+citing Segura et al. the way architecture.md §4.2 itself does: `D1 ≡ D2` is an equivalence
+metamorphic relation, `N` is the tolerance it's evaluated under — not exact equality, since
+`N` itself exists precisely because two genuinely identical calls are already known not to
+produce byte-identical changesets.
+
+**A real gap found before writing a line of production code, not after:** `P2-08`'s own
+`normalise::noise_floor` is deliberately path-only (for seeding normalisation-rule globs),
+but the caching-confound scenario architecture.md §4.2 exists to catch — same path,
+different content, e.g. `effect.txt` growing from one line to two after a restart — is
+*invisible* to a path-only comparison. `datamodel::EvidenceEntry`'s own doc comment had
+already anticipated exactly this ("content-level idempotency diffing — P2-09... revisit when
+a protocol that needs them actually exists"). Rather than widen ADR-009's `evtree1` wire
+format to carry content digests (real risk: every already-stored evidence blob's
+replay-compatibility is P1-09's own exit criterion, and evolving a wire format live-stored
+evidence depends on is not a decision to make lightly), `orchestrator::content_delta(a, b)`
+compares two arms' real, on-disk upper directories directly with plain `std::fs` — reading
+file bytes needs I/O none of `datamodel`/`normalise`/`verdict` are permitted (ADR-005), so it
+lives in the one crate allowed to depend on everything and touch a filesystem freely.
+Reports a path as differing if it's present in only one tree, is a different type in each,
+or (for two regular files) has different byte content — directories carry no leaf-level
+signal of their own.
+
+**Proven against three real, distinct stub scripts, one branch each, not just synthetic
+unit-test inputs:** a no-op stub (touches nothing) `holds`, trivially; a stub whose *every*
+call unconditionally appends to `effect.txt` (no in-process suppression at all) is `violated`
+by `D2` alone, no restart needed to prove it; and — reusing P2-07's own caching-confound stub
+unchanged — the exact scenario architecture.md §4.2 describes end to end: `D2 Δ D1` is empty
+(the suppressed second call leaves `D2` byte-identical to `D1`) but `D2R Δ D1` is not (the
+restart's extra write makes `effect.txt` two lines instead of one), landing on
+`unverifiable(caching_suppressed_in_process)` exactly. All three ran real `D1`, `D1'`, `D2`,
+and `D2R` sandboxed sessions (12 real sandbox spawns total across the three tests) and
+computed `N` from a genuinely independent pair, not a hardcoded stand-in.
+
+`verdict` grew from 5 to 12 tests; `orchestrator`'s own lib tests grew from 8 to 11 (13 total
+with the separate 2-test `replay.rs` suite). `cargo build --workspace`, `cargo clippy
+--workspace --all-targets -- -D warnings`, `cargo xtask purity`, and `cargo test --workspace`
+all pass clean. Verified clean (no flakes) across 6 consecutive runs of the new tests,
+reusing the same `arms::tests_support` sandbox-slot `Mutex` P2-07/P2-08 already established.
 
 ### P2-10 Ruleset v2, derived from measured noise
 
