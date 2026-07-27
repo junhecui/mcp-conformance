@@ -1441,11 +1441,55 @@ warnings`, `cargo xtask purity`, and `cargo test --workspace` all pass clean.
 **Depends on:** P2-02
 **Exit:** All four gate branches from architecture.md §5.1 implemented.
 
-- [ ] `execution_truncated` on resource-cap hit — a capped run's empty changeset proves
+- [x] `execution_truncated` on resource-cap hit — a capped run's empty changeset proves
       nothing
-- [ ] Escape-class denied syscall sets `adversarial_flag` but **accepts** the evidence;
+- [x] Escape-class denied syscall sets `adversarial_flag` but **accepts** the evidence;
       attempted escapes are among the most interesting findings the harness can produce
-- [ ] Flag follows the record all the way into publication
+- [x] Flag follows the record all the way into publication
+
+**Status:** Done — `crates/integrity`, `RunSignals` gained `resource_cap_hit` and
+`escape_class_syscall_denied`; `GateOutcome::Accept` became `Accept { adversarial_flag: bool
+}`; `decide()` now implements all four §5.1 branches in the diagram's exact top-to-bottom
+order (`G1` teardown → `G2` resource cap → `G3` timeout → `G4` escape-class denial), so a run
+tripping more than one branch always reports the earliest one the diagram would reach, never
+a blend. `G4` is the odd branch out by design: it does not reject, it accepts and flags —
+`REASON_EXECUTION_TRUNCATED` is the new reason code for `G2`; `REASON_CONTAINMENT_UNCERTAIN`
+and `REASON_TIMEOUT` are unchanged from P1-05.
+
+**`escape_class_syscall_denied` is a defined-but-unproduced signal, and that's stated
+outright, not hidden** — the exact same pattern this crate's own `containment_uncertain`
+field followed through all of Phase 1 before P2-01 gave it a real producer. Seccomp (P4-01)
+is the only thing that can ever observe a denied escape-class syscall, and it doesn't exist
+yet, so no caller in this codebase can set this `true` today; the field and its full gating
+behavior are pinned down and tested now regardless, so nothing about the gate's decision
+logic needs to change again once P4-01 lands.
+
+**`resource_cap_hit` has a real producer available today**, unlike its sibling field: P2-02
+already gives `sandbox::cgroup::Cgroup::usage()` real kernel counters
+(`memory.failcnt`/`memory.events`, `pids.events`) a caller can derive this boolean from.
+`xtask::first_verdict`'s existing P1-08 demo run doesn't wire a `Cgroup` into its sandbox
+spawn yet — that lands with P2-04's run planner, the first real caller that will construct
+every run inside one — so it currently passes `resource_cap_hit: false` explicitly, with a
+comment stating why. A disclosed gap on the one signal that already has real underlying
+infrastructure, not a silently-assumed `false`.
+
+**The flag was traced all the way to publication, not stopped at the gate.**
+`xtask::first_verdict::run()` now extracts `adversarial_flag` from the gate outcome before
+consuming it in the match (logging it when true) and threads it into `write_result`, which
+writes it into the published `results/conformance/p1_08_first_verdict.json` record as its
+own top-level field — re-ran the full P1-08 pipeline end to end against the same live
+`@modelcontextprotocol/server-everything` server after this change; identical `Holds` verdict,
+now with `"adversarial_flag": false` present in the published record as proof the field
+survives the whole path rather than being computed and discarded.
+
+`integrity` grew from 5 tests to 10: the 3 pre-existing tests were kept (renamed for the new
+field names), plus new tests for each new branch in isolation, `G1`-before-`G2`, `G2`-before-
+`G3` ordering, and a test proving `G4`'s accept-and-flag path can never override an
+`Unverifiable` outcome from any of `G1`–`G3`; the existing `no_combination_of_inputs_that_
+bypasses_containment_uncertain` bypass-proof test was extended to the full three-field
+Cartesian product now that there are four fields instead of two. `cargo build --workspace`,
+`cargo clippy --workspace --all-targets -- -D warnings`, `cargo xtask purity`, and `cargo test
+--workspace` all pass clean.
 
 ### P2-04 Run planner
 

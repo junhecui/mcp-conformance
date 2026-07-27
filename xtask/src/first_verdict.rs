@@ -242,15 +242,27 @@ pub fn run() -> Result<(), FirstVerdictError> {
     let gate_signals = integrity::RunSignals {
         timed_out: outcome.timed_out,
         containment_uncertain: !outcome.orphans_impossible,
+        // This demo run predates P2-04's run planner, the first real caller that constructs
+        // every run inside a `sandbox::cgroup::Cgroup` — no cap is enforced here yet, so
+        // there is nothing a real cap-hit signal could be derived from. A disclosed gap, not
+        // a hidden one; see `integrity::RunSignals`'s own doc comment.
+        resource_cap_hit: false,
+        // No seccomp instrumentation exists yet (P4-01) to ever set this `true`.
+        escape_class_syscall_denied: false,
     };
     let gate_outcome = integrity::decide(gate_signals);
     println!("integrity gate: {gate_outcome:?}");
+    let adversarial_flag =
+        matches!(&gate_outcome, integrity::GateOutcome::Accept { adversarial_flag: true });
 
     let assessment = match gate_outcome {
         integrity::GateOutcome::Unverifiable(reason) => {
             verdict::Assessment::unverifiable(datamodel::Oracle::KernelChangeset, reason)
         }
-        integrity::GateOutcome::Accept => {
+        integrity::GateOutcome::Accept { adversarial_flag } => {
+            if adversarial_flag {
+                println!("adversarial_flag: true (escape-class syscall denied during this run)");
+            }
             let store_dir = scratch.path().join("evidence-store");
             let blob_store = store::BlobStore::open(&store_dir)?;
             let observation = observe::harvest(
@@ -294,6 +306,7 @@ pub fn run() -> Result<(), FirstVerdictError> {
         declared_read_only,
         &call_result,
         &assessment,
+        adversarial_flag,
     )?;
 
     Ok(())
@@ -304,6 +317,7 @@ fn write_result(
     declared_read_only: bool,
     call_result: &Value,
     assessment: &verdict::Assessment,
+    adversarial_flag: bool,
 ) -> Result<(), FirstVerdictError> {
     let record = json!({
         "task": "P1-08",
@@ -318,6 +332,10 @@ fn write_result(
             "reason": assessment.reason().map(|r| r.0.clone()),
             "oracle": assessment.oracle().as_db_str(),
         },
+        // P2-03: the escape-class-denial flag from the integrity gate's `G4` branch follows
+        // the record all the way into publication, per architecture.md §5.1 — never dropped
+        // once the gate accepts the run, since an attempted escape is itself a finding.
+        "adversarial_flag": adversarial_flag,
     });
     if let Some(parent) = Path::new(RESULT_PATH).parent() {
         std::fs::create_dir_all(parent)?;
