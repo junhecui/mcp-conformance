@@ -46,8 +46,8 @@ fn violated() -> ProbeAssessment {
     ProbeAssessment { outcome: Outcome::Violated, reason: None }
 }
 
-fn unverifiable(reason: &str) -> ProbeAssessment {
-    ProbeAssessment { outcome: Outcome::Unverifiable, reason: Some(ReasonCode(reason.to_string())) }
+fn unverifiable(reason: ReasonCode) -> ProbeAssessment {
+    ProbeAssessment { outcome: Outcome::Unverifiable, reason: Some(reason) }
 }
 
 /// A probe run that never got a usable surface at all — no resources, or `resources/list`
@@ -55,7 +55,7 @@ fn unverifiable(reason: &str) -> ProbeAssessment {
 /// criterion, rather than forcing a verdict the surface can't support.
 #[must_use]
 pub fn no_probe_surface() -> ProbeAssessment {
-    unverifiable("no_probe_surface")
+    unverifiable(ReasonCode::NoProbeSurface)
 }
 
 /// A probe run that reached the invoke step but the call itself failed — most often because
@@ -64,7 +64,7 @@ pub fn no_probe_surface() -> ProbeAssessment {
 /// concrete reason code instead of a silent gap).
 #[must_use]
 pub fn invocation_failed() -> ProbeAssessment {
-    unverifiable("invocation_failed")
+    unverifiable(ReasonCode::InvocationFailed)
 }
 
 /// Decide `readOnlyHint` from one before/after snapshot pair.
@@ -86,7 +86,7 @@ pub fn assess_read_only(declared: bool, before: Digest, after: Digest) -> ProbeA
         (true, false) => holds(),
         (true, true) => violated(),
         (false, true) => holds(),
-        (false, false) => unverifiable("probe_surface_incomplete"),
+        (false, false) => unverifiable(ReasonCode::ProbeSurfaceIncomplete),
     }
 }
 
@@ -111,7 +111,7 @@ pub fn assess_idempotent(declared: bool, s1: Digest, s2: Digest) -> ProbeAssessm
         (true, false) => holds(),
         (true, true) => violated(),
         (false, true) => holds(),
-        (false, false) => unverifiable("probe_surface_incomplete"),
+        (false, false) => unverifiable(ReasonCode::ProbeSurfaceIncomplete),
     }
 }
 
@@ -143,7 +143,7 @@ mod tests {
     fn read_only_declared_false_unchanged_unverifiable_with_reason() {
         let a = assess_read_only(false, A, A);
         assert_eq!(a.outcome, Outcome::Unverifiable);
-        assert_eq!(a.reason, Some(ReasonCode("probe_surface_incomplete".to_string())));
+        assert_eq!(a.reason, Some(ReasonCode::ProbeSurfaceIncomplete));
     }
 
     #[test]
@@ -165,7 +165,7 @@ mod tests {
     fn idempotent_declared_false_second_call_added_nothing_unverifiable() {
         let a = assess_idempotent(false, A, A);
         assert_eq!(a.outcome, Outcome::Unverifiable);
-        assert_eq!(a.reason, Some(ReasonCode("probe_surface_incomplete".to_string())));
+        assert_eq!(a.reason, Some(ReasonCode::ProbeSurfaceIncomplete));
     }
 
     #[test]

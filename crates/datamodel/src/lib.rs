@@ -170,12 +170,85 @@ pub enum ContainabilityClass {
 
 /// Why an [`Outcome::Unverifiable`] was reached.
 ///
-/// Deliberately an open newtype for now. The closed taxonomy is P2-11 — *"`unverifiable`
-/// without a reason is not a finding, it is a shrug"* — and fixing the variants before the
-/// integrity gate and the idempotency protocol have run would be guessing at the very
-/// codes the paper reports.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ReasonCode(pub String);
+/// P2-11's closed taxonomy — *"`unverifiable` without a reason is not a finding, it is a
+/// shrug"* — fixed only once the integrity gate (P2-03) and the idempotency protocol (P2-09)
+/// had actually run and produced real codes to fix, per this crate's own long-standing
+/// deferral: guessing the variants earlier would have been fixing the very codes the paper
+/// reports before there was any evidence for what they should be. Every variant below is a
+/// code some real, already-implemented producer actually emits today — none are speculative
+/// placeholders for a producer that doesn't exist yet (P4-01's seccomp-derived escape-class
+/// codes, for instance, are not here, because nothing produces one yet).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ReasonCode {
+    /// architecture.md §5.1's `G1`: the integrity gate has positive reason to distrust clean
+    /// teardown. Produced by `integrity::decide`.
+    ContainmentUncertain,
+    /// architecture.md §5.1's `G2`: a resource cap was hit, truncating the run before the
+    /// tool finished its work — an empty or partial changeset proves nothing. Produced by
+    /// `integrity::decide`.
+    ExecutionTruncated,
+    /// architecture.md §5.1's `G3`: the sandbox's hard wall-clock timeout fired. Produced by
+    /// `integrity::decide`.
+    Timeout,
+    /// architecture.md §4.2's `C2`: `idempotentHint`'s multi-arm protocol found `D2 Δ D1`
+    /// within the noise floor but `D2R Δ D1` outside it — an effect suppressed within one
+    /// process, reappearing after a restart. Produced by `verdict::idempotent_hint`.
+    CachingSuppressedInProcess,
+    /// Track B's protocol-probe oracle (B-01) found no observable resource/state surface at
+    /// all to probe before or after invocation. Produced by `probe`.
+    NoProbeSurface,
+    /// Track B's protocol-probe oracle: the tool invocation itself failed, so no
+    /// before/after comparison is possible. Produced by `probe`.
+    InvocationFailed,
+    /// Track B's protocol-probe oracle: some, but not all, of the state needed to decide
+    /// the protocol was observable — an absent *observed* change doesn't confirm nothing
+    /// changed, since this oracle only sees what the server chose to expose. Produced by
+    /// `probe`.
+    ProbeSurfaceIncomplete,
+}
+
+impl ReasonCode {
+    /// The exact text this taxonomy writes for `VERDICT.reason_code` (architecture.md §6) —
+    /// kept in one place, the same discipline [`Oracle::as_db_str`]/[`Outcome::as_db_str`]
+    /// already follow, so nothing downstream can drift from what this crate actually
+    /// produces by re-deriving a string literal at a second call site.
+    #[must_use]
+    pub const fn as_db_str(self) -> &'static str {
+        match self {
+            Self::ContainmentUncertain => "containment_uncertain",
+            Self::ExecutionTruncated => "execution_truncated",
+            Self::Timeout => "timeout",
+            Self::CachingSuppressedInProcess => "caching_suppressed_in_process",
+            Self::NoProbeSurface => "no_probe_surface",
+            Self::InvocationFailed => "invocation_failed",
+            Self::ProbeSurfaceIncomplete => "probe_surface_incomplete",
+        }
+    }
+
+    /// The inverse of [`Self::as_db_str`], for reading a stored verdict's `reason_code` back
+    /// out. `None` for anything not in this closed set — including a code an *older* build
+    /// of this codebase might have written before this taxonomy closed; a reader from
+    /// stored data must not guess at a code it doesn't recognise.
+    #[must_use]
+    pub fn from_db_str(s: &str) -> Option<Self> {
+        match s {
+            "containment_uncertain" => Some(Self::ContainmentUncertain),
+            "execution_truncated" => Some(Self::ExecutionTruncated),
+            "timeout" => Some(Self::Timeout),
+            "caching_suppressed_in_process" => Some(Self::CachingSuppressedInProcess),
+            "no_probe_surface" => Some(Self::NoProbeSurface),
+            "invocation_failed" => Some(Self::InvocationFailed),
+            "probe_surface_incomplete" => Some(Self::ProbeSurfaceIncomplete),
+            _ => None,
+        }
+    }
+}
+
+impl core::fmt::Display for ReasonCode {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.as_db_str())
+    }
+}
 
 /// The seven POSIX file types ADR-009's `evtree1` wire format distinguishes generically —
 /// no `whiteout` or `opaque_directory` variant here on purpose. A whiteout is exactly
@@ -369,5 +442,42 @@ impl core::fmt::Display for Digest {
             write!(f, "{byte:02x}")?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::string::ToString;
+
+    /// P2-11's own exit criterion, checked directly: every variant round-trips through
+    /// `as_db_str`/`from_db_str` — the same property `Oracle`/`Outcome`/`Annotation` are
+    /// each already held to. Enumerated explicitly (not derived from some external list)
+    /// so adding a variant without adding it here fails to compile — this is the one
+    /// exhaustiveness guard a closed taxonomy actually needs.
+    #[test]
+    fn every_reason_code_round_trips_through_its_db_string() {
+        let all = [
+            ReasonCode::ContainmentUncertain,
+            ReasonCode::ExecutionTruncated,
+            ReasonCode::Timeout,
+            ReasonCode::CachingSuppressedInProcess,
+            ReasonCode::NoProbeSurface,
+            ReasonCode::InvocationFailed,
+            ReasonCode::ProbeSurfaceIncomplete,
+        ];
+        for code in all {
+            assert_eq!(ReasonCode::from_db_str(code.as_db_str()), Some(code));
+        }
+    }
+
+    #[test]
+    fn an_unrecognised_string_is_not_guessed_at() {
+        assert_eq!(ReasonCode::from_db_str("something_from_a_future_build"), None);
+    }
+
+    #[test]
+    fn display_matches_as_db_str() {
+        assert_eq!(ReasonCode::Timeout.to_string(), "timeout");
     }
 }

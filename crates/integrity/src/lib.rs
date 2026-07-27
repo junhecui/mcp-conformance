@@ -75,26 +75,11 @@ pub enum GateOutcome {
     /// architecture.md §5.1: no evidence proceeds to the verdict engine without this
     /// decision — ADR-004's `unverifiable`.
     ///
-    /// Carries `datamodel::ReasonCode` — still the open string newtype `datamodel`'s own
-    /// doc comment describes ("fixing the variants before the integrity gate... have run
-    /// would be guessing"), not a second, closed taxonomy invented here. P2-11 is where the
-    /// corpus-wide closed set gets fixed, once this gate and the idempotency protocol have
-    /// actually produced codes to fix it from.
+    /// Carries `datamodel::ReasonCode` — P2-11's closed taxonomy, fixed now that this gate
+    /// and the idempotency protocol have both actually run and produced real codes to fix
+    /// it from, rather than a second, parallel taxonomy invented in this crate.
     Unverifiable(ReasonCode),
 }
-
-/// The exact text this gate writes for each reason — kept in one place so nothing downstream
-/// (a future `VERDICT.reason_code` writer) can drift from what this module actually produces
-/// by re-deriving the string at a second call site.
-pub const REASON_CONTAINMENT_UNCERTAIN: &str = "containment_uncertain";
-
-/// `G2`: a resource-cap hit truncated the run before the tool finished its work, so an empty
-/// or partial changeset proves nothing — architecture.md §5.1's own example of the exact
-/// failure mode this gate exists to prevent structurally.
-pub const REASON_EXECUTION_TRUNCATED: &str = "execution_truncated";
-
-/// See [`REASON_CONTAINMENT_UNCERTAIN`].
-pub const REASON_TIMEOUT: &str = "timeout";
 
 /// Decide whether `signals` clears the gate.
 ///
@@ -109,13 +94,13 @@ pub const REASON_TIMEOUT: &str = "timeout";
 #[must_use]
 pub fn decide(signals: RunSignals) -> GateOutcome {
     if signals.containment_uncertain {
-        return GateOutcome::Unverifiable(ReasonCode(REASON_CONTAINMENT_UNCERTAIN.into()));
+        return GateOutcome::Unverifiable(ReasonCode::ContainmentUncertain);
     }
     if signals.resource_cap_hit {
-        return GateOutcome::Unverifiable(ReasonCode(REASON_EXECUTION_TRUNCATED.into()));
+        return GateOutcome::Unverifiable(ReasonCode::ExecutionTruncated);
     }
     if signals.timed_out {
-        return GateOutcome::Unverifiable(ReasonCode(REASON_TIMEOUT.into()));
+        return GateOutcome::Unverifiable(ReasonCode::Timeout);
     }
     GateOutcome::Accept { adversarial_flag: signals.escape_class_syscall_denied }
 }
@@ -123,10 +108,6 @@ pub fn decide(signals: RunSignals) -> GateOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn reason(text: &str) -> ReasonCode {
-        ReasonCode(text.into())
-    }
 
     fn clean() -> RunSignals {
         RunSignals::default()
@@ -141,13 +122,13 @@ mod tests {
     #[test]
     fn timed_out_run_is_unverifiable_with_the_timeout_reason() {
         let outcome = decide(RunSignals { timed_out: true, ..clean() });
-        assert_eq!(outcome, GateOutcome::Unverifiable(reason(REASON_TIMEOUT)));
+        assert_eq!(outcome, GateOutcome::Unverifiable(ReasonCode::Timeout));
     }
 
     #[test]
     fn containment_uncertain_run_is_unverifiable_with_that_reason() {
         let outcome = decide(RunSignals { containment_uncertain: true, ..clean() });
-        assert_eq!(outcome, GateOutcome::Unverifiable(reason(REASON_CONTAINMENT_UNCERTAIN)));
+        assert_eq!(outcome, GateOutcome::Unverifiable(ReasonCode::ContainmentUncertain));
     }
 
     /// `G2`: a resource-cap hit is unverifiable with `execution_truncated`, distinct from
@@ -157,7 +138,7 @@ mod tests {
     #[test]
     fn resource_cap_hit_run_is_unverifiable_with_the_execution_truncated_reason() {
         let outcome = decide(RunSignals { resource_cap_hit: true, ..clean() });
-        assert_eq!(outcome, GateOutcome::Unverifiable(reason(REASON_EXECUTION_TRUNCATED)));
+        assert_eq!(outcome, GateOutcome::Unverifiable(ReasonCode::ExecutionTruncated));
     }
 
     /// `G4`: an escape-class denial on an otherwise-clean run does not reject the evidence —
@@ -176,7 +157,7 @@ mod tests {
     #[test]
     fn containment_uncertain_takes_priority_over_timed_out() {
         let outcome = decide(RunSignals { timed_out: true, containment_uncertain: true, ..clean() });
-        assert_eq!(outcome, GateOutcome::Unverifiable(reason(REASON_CONTAINMENT_UNCERTAIN)));
+        assert_eq!(outcome, GateOutcome::Unverifiable(ReasonCode::ContainmentUncertain));
     }
 
     /// `G1` before `G2`: containment uncertainty outranks a resource-cap hit too — an
@@ -186,7 +167,7 @@ mod tests {
     fn containment_uncertain_takes_priority_over_resource_cap_hit() {
         let outcome =
             decide(RunSignals { containment_uncertain: true, resource_cap_hit: true, ..clean() });
-        assert_eq!(outcome, GateOutcome::Unverifiable(reason(REASON_CONTAINMENT_UNCERTAIN)));
+        assert_eq!(outcome, GateOutcome::Unverifiable(ReasonCode::ContainmentUncertain));
     }
 
     /// `G2` before `G3`, matching the diagram's own top-to-bottom order: a run that both hit
@@ -196,7 +177,7 @@ mod tests {
     #[test]
     fn resource_cap_hit_takes_priority_over_timed_out() {
         let outcome = decide(RunSignals { resource_cap_hit: true, timed_out: true, ..clean() });
-        assert_eq!(outcome, GateOutcome::Unverifiable(reason(REASON_EXECUTION_TRUNCATED)));
+        assert_eq!(outcome, GateOutcome::Unverifiable(ReasonCode::ExecutionTruncated));
     }
 
     /// `G4` never overrides an unverifiable outcome from `G1`–`G3`: an escape attempt during
@@ -206,18 +187,18 @@ mod tests {
     fn escape_class_denial_does_not_rescue_an_otherwise_unverifiable_run() {
         let outcome =
             decide(RunSignals { resource_cap_hit: true, escape_class_syscall_denied: true, ..clean() });
-        assert_eq!(outcome, GateOutcome::Unverifiable(reason(REASON_EXECUTION_TRUNCATED)));
+        assert_eq!(outcome, GateOutcome::Unverifiable(ReasonCode::ExecutionTruncated));
 
         let outcome = decide(RunSignals {
             containment_uncertain: true,
             escape_class_syscall_denied: true,
             ..clean()
         });
-        assert_eq!(outcome, GateOutcome::Unverifiable(reason(REASON_CONTAINMENT_UNCERTAIN)));
+        assert_eq!(outcome, GateOutcome::Unverifiable(ReasonCode::ContainmentUncertain));
 
         let outcome =
             decide(RunSignals { timed_out: true, escape_class_syscall_denied: true, ..clean() });
-        assert_eq!(outcome, GateOutcome::Unverifiable(reason(REASON_TIMEOUT)));
+        assert_eq!(outcome, GateOutcome::Unverifiable(ReasonCode::Timeout));
     }
 
     /// ADR-004, made literal: nothing about a run's *other* properties can be exploited to
@@ -237,7 +218,7 @@ mod tests {
                     });
                     assert_eq!(
                         outcome,
-                        GateOutcome::Unverifiable(reason(REASON_CONTAINMENT_UNCERTAIN)),
+                        GateOutcome::Unverifiable(ReasonCode::ContainmentUncertain),
                         "timed_out={timed_out} resource_cap_hit={resource_cap_hit} \
                          escape_class_syscall_denied={escape_class_syscall_denied} must not \
                          change the outcome when containment is uncertain"

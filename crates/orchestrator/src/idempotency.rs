@@ -230,7 +230,7 @@ done
             assessment,
             verdict::Assessment::unverifiable(
                 datamodel::Oracle::KernelChangeset,
-                datamodel::ReasonCode(verdict::REASON_CACHING_SUPPRESSED_IN_PROCESS.to_string())
+                datamodel::ReasonCode::CachingSuppressedInProcess
             )
         );
     }

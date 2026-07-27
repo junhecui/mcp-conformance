@@ -265,7 +265,7 @@ mod tests {
         let schema = serde_json::json!({"type": "object"});
         let result = probe_read_only_hint(&target(&endpoint, &schema), true).expect("probe");
         assert_eq!(result.outcome, Outcome::Unverifiable);
-        assert_eq!(result.reason, Some(ReasonCode("no_probe_surface".to_string())));
+        assert_eq!(result.reason, Some(ReasonCode::NoProbeSurface));
         server.join().expect("server thread");
     }
 
@@ -287,7 +287,7 @@ mod tests {
         let schema = serde_json::json!({"type": "object"});
         let result = probe_read_only_hint(&target(&endpoint, &schema), true).expect("probe must still return Ok");
         assert_eq!(result.outcome, Outcome::Unverifiable);
-        assert_eq!(result.reason, Some(ReasonCode("invocation_failed".to_string())));
+        assert_eq!(result.reason, Some(ReasonCode::InvocationFailed));
         server.join().expect("server thread");
     }
 

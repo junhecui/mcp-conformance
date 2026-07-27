@@ -11,7 +11,6 @@
 
 extern crate alloc;
 
-use alloc::string::String;
 use alloc::vec::Vec;
 
 use datamodel::{CanonicalChangeset, Oracle, Outcome, ReasonCode};
@@ -98,12 +97,6 @@ pub fn read_only_hint(declared: bool, d1: &CanonicalChangeset) -> Assessment {
     Assessment::holds(Oracle::KernelChangeset)
 }
 
-/// The exact reason text this protocol writes for its one internal `Unverifiable` branch —
-/// kept in one place, the same discipline `integrity`'s own reason constants already follow,
-/// so nothing downstream can drift from what this module actually produces by re-deriving
-/// the string at a second call site.
-pub const REASON_CACHING_SUPPRESSED_IN_PROCESS: &str = "caching_suppressed_in_process";
-
 /// Decide `idempotentHint` from architecture.md §4.2's multi-arm decision tree.
 ///
 /// Framed the way architecture.md §4.2 itself frames it, in the metamorphic-testing
@@ -137,10 +130,7 @@ pub fn idempotent_hint(
         return Assessment::violated(Oracle::KernelChangeset);
     }
     if !is_subset(d2r_delta_d1, noise_floor) {
-        return Assessment::unverifiable(
-            Oracle::KernelChangeset,
-            ReasonCode(String::from(REASON_CACHING_SUPPRESSED_IN_PROCESS)),
-        );
+        return Assessment::unverifiable(Oracle::KernelChangeset, ReasonCode::CachingSuppressedInProcess);
     }
     Assessment::holds(Oracle::KernelChangeset)
 }
@@ -204,8 +194,8 @@ mod tests {
         assert_eq!(a.reason(), None);
         assert_eq!(a.oracle(), Oracle::KernelChangeset);
 
-        let reason = ReasonCode(alloc::string::String::from("timeout"));
-        let u = Assessment::unverifiable(Oracle::KernelChangeset, reason.clone());
+        let reason = ReasonCode::Timeout;
+        let u = Assessment::unverifiable(Oracle::KernelChangeset, reason);
         assert_eq!(u.outcome(), Outcome::Unverifiable);
         assert_eq!(u.reason(), Some(&reason));
     }
@@ -237,10 +227,7 @@ mod tests {
         let assessment = idempotent_hint(&[], &[path("effect.txt")], &[]);
         assert_eq!(
             assessment,
-            Assessment::unverifiable(
-                Oracle::KernelChangeset,
-                ReasonCode(alloc::string::String::from(REASON_CACHING_SUPPRESSED_IN_PROCESS))
-            )
+            Assessment::unverifiable(Oracle::KernelChangeset, ReasonCode::CachingSuppressedInProcess)
         );
     }
 

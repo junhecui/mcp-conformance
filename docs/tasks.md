@@ -1881,6 +1881,55 @@ warnings`, `cargo xtask purity`, and `cargo test --workspace` all pass clean.
 architecture.md §6 invariant 3: *"`unverifiable` without a reason is not a finding, it is a
 shrug."* These codes are what the paper reports.
 
+**Status:** Done — `datamodel::ReasonCode` closes from the open `pub struct ReasonCode(pub
+String)` newtype it was deliberately left as since P1-01 into a genuine closed
+`#[non_exhaustive]`-free enum, with `as_db_str`/`from_db_str`/`Display` following the exact
+pattern `Oracle`/`Outcome`/`Annotation` already established. Closed now, not earlier, for the
+reason the old doc comment already gave: fixing the variants before the integrity gate
+(P2-03) and the idempotency protocol (P2-09) had actually run would have been guessing at
+the very codes the paper reports. Seven variants, every one of them a code some real,
+already-implemented producer emits today — none speculative placeholders for a producer that
+doesn't exist yet (P4-01's future seccomp-derived escape-class codes are deliberately not
+here):
+
+- `ContainmentUncertain`, `ExecutionTruncated`, `Timeout` — `integrity::decide`'s three
+  rejecting branches (architecture.md §5.1's `G1`/`G2`/`G3`)
+- `CachingSuppressedInProcess` — `verdict::idempotent_hint`'s one internal `Unverifiable`
+  branch (§4.2's `C2`)
+- `NoProbeSurface`, `InvocationFailed`, `ProbeSurfaceIncomplete` — Track B's protocol-probe
+  oracle (`probe`), B-01's weaker resources-only path
+
+**Every real producer updated to construct a variant directly, not a string.**
+`integrity`/`verdict` each dropped their own `pub const REASON_*: &str` constants entirely —
+redundant now that the enum itself is the single source of truth, rather than two
+independently-maintained spellings of the same code. `probe::protocol`'s internal
+`unverifiable` helper now takes a `ReasonCode` directly instead of `&str`. Every call site
+across `integrity`, `verdict`, `probe`, `orchestrator`, and `xtask` (`first_verdict.rs`'s own
+published-record writer, `probe_stage1.rs`'s DB insert) was updated in the same change —
+`cargo build --workspace --all-targets` (not just `cargo build`, which doesn't compile
+`#[cfg(test)]` code and would have missed two now-broken test-only call sites) is what
+actually caught every site that needed updating.
+
+`datamodel` gained its first test module ever (3 tests: every variant round-trips through
+`as_db_str`/`from_db_str`, an unrecognised string is not guessed at, `Display` matches
+`as_db_str`) — enumerating all seven variants explicitly in one test means adding an eighth
+variant without updating that test fails to compile, the one exhaustiveness guard a closed
+taxonomy actually needs. `cargo xtask first-verdict` re-run end to end afterward against the
+same live `@modelcontextprotocol/server-everything` server, unaffected. `cargo build
+--workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo xtask purity`,
+and `cargo test --workspace` all pass clean.
+
+---
+
+**Phase 2 is now closed.** Every component architecture.md §10 assigns this phase —
+sandbox (pid/user/cgroups), the full integrity gate, the run planner, world's generic
+fixtures, the argument synthesiser, arms 1′/2/2R, the noise floor, `idempotentHint`'s
+multi-arm protocol, ruleset v2's infrastructure (run for real against the one corpus
+available, with its own empirical shortfall against the ≥50-tool bar disclosed rather than
+hidden), and the reason-code taxonomy — is implemented, tested, and, where the exit
+criterion called for it, run against real sandboxed executions end to end. Phase 3 (network)
+is next.
+
 ---
 
 ## Phase 3 — Network

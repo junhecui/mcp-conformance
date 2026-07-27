@@ -129,7 +129,7 @@ fn run_and_record(
                 "probe-stage1:     {label}: {:?} (reason: {:?})",
                 assessment.outcome, assessment.reason
             );
-            let reason_code = assessment.reason.as_ref().map(|r| r.0.clone());
+            let reason_code = assessment.reason.as_ref().map(|r| r.as_db_str().to_string());
             db::insert_verdict(
                 conn,
                 &VerdictRecord {

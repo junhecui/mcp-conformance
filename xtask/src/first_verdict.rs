@@ -329,7 +329,7 @@ fn write_result(
         "tool_call_result": call_result,
         "verdict": {
             "outcome": assessment.outcome().as_db_str(),
-            "reason": assessment.reason().map(|r| r.0.clone()),
+            "reason": assessment.reason().map(|r| r.as_db_str()),
             "oracle": assessment.oracle().as_db_str(),
         },
         // P2-03: the escape-class-denial flag from the integrity gate's `G4` branch follows
