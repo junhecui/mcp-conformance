@@ -8,6 +8,8 @@
 
 mod client;
 mod jsonrpc;
+mod pin;
 mod transport;
 
 pub use client::{Discovery, DiscoveryClient, DiscoveryError};
+pub use pin::{PinError, ToolPin, pin_tools};

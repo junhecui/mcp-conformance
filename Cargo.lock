@@ -141,6 +141,7 @@ dependencies = [
  "datamodel",
  "serde",
  "serde_json",
+ "sha2",
  "ureq",
 ]
 

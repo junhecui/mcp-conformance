@@ -256,13 +256,25 @@ thread/socket-timing-sensitive tests.
 **Depends on:** P0-01, F-05
 **Exit:** Pin is stable across repeated discovery of an unchanged server, and changes when
 any byte of a tool's name, schema, annotations, or description changes.
+**Status:** Done — `crates/discovery::pin`, built on P0-01's byte-exact capture and reusing
+F-05's `datamodel::Digest`/SHA-256 (one digest format across the system, not a second one
+invented here). Every field is kept as `serde_json::value::RawValue` end to end — never
+routed through `serde_json::Value`, whose `BTreeMap`-backed object type would silently sort
+keys back into canonical order on re-serialisation and defeat the whole point. Per-tool pin
+is a hash-of-hashes over `(name, inputSchema, annotations, description)`, each with a
+presence marker byte so an absent field can never collide with a present-but-empty one; the
+server pin hashes the per-tool pins in response order, so a server that reorders its own
+tool list between two discoveries changes its pin too. 8 tests, including the literal exit
+line ("reorder JSON keys → pin changes") and one that documents rather than papers over a
+real boundary: serde's `Option<T>` collapses an explicit JSON `null` and an absent key
+before `RawValue` ever sees either, so this module can't and doesn't try to tell them apart.
 
 Defends against rug pulls (architecture.md §0). *"A verdict without a pin is meaningless."*
 
-- [ ] Per-tool hash over `(name, inputSchema, annotations, description)` as received
-- [ ] Per-server hash over the tool set
-- [ ] **No normalisation before hashing** — the pin is over bytes, not semantics
-- [ ] Test: reorder JSON keys → pin changes. That is correct behaviour, not a bug.
+- [x] Per-tool hash over `(name, inputSchema, annotations, description)` as received
+- [x] Per-server hash over the tool set
+- [x] **No normalisation before hashing** — the pin is over bytes, not semantics
+- [x] Test: reorder JSON keys → pin changes. That is correct behaviour, not a bug.
 
 ### P0-03 Catalogue ingest
 
