@@ -84,9 +84,15 @@ impl RegistryClient {
     }
 
     /// Fetch one page of the server listing.
+    ///
+    /// Always requests `version=latest`. Without it the registry returns every historical
+    /// version of every server as a separate entry — found the hard way: an unfiltered
+    /// first run produced 59,484 records for what turned out to be 18,664 distinct server
+    /// names (some appearing over 1,000 times), a 3.2x inflation that would have corrupted
+    /// every downstream count. There is no code path in this client that omits the filter.
     pub fn fetch_page(&self, cursor: Option<&str>, limit: u32) -> Result<Page, RegistryError> {
         let limit = limit.clamp(1, 100);
-        let mut url = format!("{}/v0.1/servers?limit={limit}", self.base_url);
+        let mut url = format!("{}/v0.1/servers?version=latest&limit={limit}", self.base_url);
         if let Some(c) = cursor {
             url.push_str("&cursor=");
             url.push_str(&percent_encode_minimal(c));
@@ -216,7 +222,7 @@ mod tests {
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept");
             let request = read_one_http_request(&mut stream);
-            assert!(request.starts_with("GET /v0.1/servers?limit=30"));
+            assert!(request.starts_with("GET /v0.1/servers?version=latest&limit=30"));
             assert!(
                 request.to_ascii_lowercase().contains("user-agent: mcp-conformance-harness"),
                 "request must identify itself: {request}"
