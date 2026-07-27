@@ -8,5 +8,16 @@ publish.workspace = true
 [dependencies]
 datamodel.workspace = true
 
+# Gated to Linux specifically (not just left to the crate root's `#![cfg(target_os =
+# "linux")]`) so a non-Linux dev host never even downloads/compiles these — F-00's
+# "untestable on the primary development host" cost should stop at compile time, not extend
+# to fetch time too.
+[target.'cfg(target_os = "linux")'.dependencies]
+sha2 = "0.11.0"
+filetime = "0.2"
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+tempfile = "3.27.0"
+
 [lints]
 workspace = true

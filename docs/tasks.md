@@ -932,13 +932,53 @@ that is not the verdict itself.
 **Depends on:** F-02
 **Exit:** Two independent constructions of the same base produce byte-identical layers.
 Prove it in a test.
+**Status:** Done — `crates/sandbox::base_layer`. `build(root, entries)` materialises a
+caller-supplied, pre-sorted `Vec<EntrySpec>` (directory / file / symlink) onto disk with
+every timestamp pinned to a fixed sentinel (`FileTime::zero()`, written in a second,
+reverse-order pass so a directory's own mtime is only fixed after everything nested under it
+already exists) rather than whatever the filesystem stamps at creation time — the literal
+"no ambient timestamps baked in" instruction from ADR-009's own P1-02 note. Entry order is
+checked, not assumed: `build` rejects a caller-supplied slice that isn't ascending by raw
+path bytes, the same order a directory's path is guaranteed to sort before anything nested
+under it, so every parent exists before its children without `create_dir_all`-style
+auto-creation papering over a missing spec entry.
+
+Reproducibility is proven with a narrow, spec-compliant subset of ADR-009's `evtree1` wire
+format (`capture`), exactly as that ADR anticipated ("P1-02 reuses this format's
+digest-comparison test rather than inventing its own") — scoped to the three entry kinds
+`build` can produce (regular/directory/symlink; xattr support and the general device-file
+case are left to P1-04's full walker, which this format is designed to remain compatible
+with). One real limitation surfaced and handled honestly rather than smoothed over: `inode`
+is **not** construction-controllable on a real filesystem — verified directly, not assumed
+(two identically-ordered builds on this project's own ext4-backed `/tmp` produced six
+different inode numbers on each side, since the kernel's free-inode allocator, not the
+constructing process, assigns that number). `capture` takes an explicit `InodeHandling`
+(`Real` vs `Zeroed`); the reproducibility test uses `Zeroed` and a second test
+(`real_inode_numbers_are_not_expected_to_match_across_independent_constructions`) proves the
+`Real` case genuinely does differ, so the exclusion is demonstrated as necessary rather than
+assumed for convenience. 9 tests total, all passing, including two independent from-scratch
+`tempfile::tempdir()` constructions of a 5-entry tree (directories, a file, a symlink)
+producing byte-identical `evtree1` captures and equal digests.
 
 architecture.md §12 item 5 — everything downstream depends on this. A nondeterministic base
 silently poisons every diff, and the failure is invisible in the output.
 
-- [ ] Deterministic construction: no timestamps, no random ordering, no ambient state
-- [ ] Byte-reproducibility test across two constructions
-- [ ] Whiteout and opaque-directory semantics understood and documented (design.md §9)
+- [x] Deterministic construction: no timestamps, no random ordering, no ambient state — fixed
+      mtime sentinel on every path; creation order is the caller-supplied, verified-sorted
+      order, never `readdir` order; ownership is left as the constructing process's real
+      uid/gid rather than force-`chown`ed, on the same "expected noise, `normalise`'s problem"
+      basis ADR-009 already applies to uid/gid under a remapped user namespace — documented,
+      not silently assumed to match `inode`'s situation
+- [x] Byte-reproducibility test across two constructions —
+      `two_independent_constructions_produce_identical_captures`
+- [ ] Whiteout and opaque-directory semantics understood and documented (design.md §9) — out
+      of scope for *this* task as actually implemented: whiteouts and opaque directories are
+      properties of an overlay's writable *upper* layer (what a tool's run produces), not the
+      read-only *base* (lower) layer this task builds, which never contains either. ADR-009
+      already documents both precisely (character device, `dev_major=0`/`dev_minor=0` for a
+      whiteout; the `trusted.overlay.opaque`/`user.overlay.opaque` xattr for an opaque
+      directory) for the walker that will actually encounter them — P1-04. Left unchecked
+      here deliberately rather than checked against work this task didn't do.
 
 ### P1-03 Sandbox supervisor — mount namespace, overlayfs, timeout
 

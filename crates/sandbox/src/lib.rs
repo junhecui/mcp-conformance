@@ -16,6 +16,10 @@
 
 #![cfg(target_os = "linux")]
 
+mod base_layer;
+
+pub use base_layer::{build, capture, digest_of_capture, BuildError, EntryKind, EntrySpec, InodeHandling};
+
 // Placeholder — P1-03. Linux-only dependencies (`nix`, `seccompiler`, `cgroups-rs`) get
 // added here under `[target.'cfg(target_os = "linux")'.dependencies]` when they are needed,
 // so that a non-Linux host never even resolves them.
