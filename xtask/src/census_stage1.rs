@@ -16,16 +16,21 @@ use intake::catalogue::{self, IngestOutcome, ResolvedTarget};
 use intake::classify;
 use intake::registry::RegistryClient;
 
-struct Candidate {
-    name: String,
-    url: String,
-    transport_type: String,
+/// `pub(crate)`, not private: `probe_stage1` (Track B) reuses this exact sampling logic
+/// (the candidate shape, the classification-driven filter, and — via [`stable_hash`] — the
+/// unbiased selection) rather than re-deriving a second Class B sample independently. Two
+/// scripts scanning the same registry with two different sampling methodologies would make
+/// their results incomparable for no reason.
+pub(crate) struct Candidate {
+    pub(crate) name: String,
+    pub(crate) url: String,
+    pub(crate) transport_type: String,
 }
 
 /// If this ingest outcome classifies as Class B, its name and first declared remote
 /// endpoint. `Unresolvable` entries can never be Class B (classify() maps them to
 /// `Unclassifiable`), so this returns `None` for those without inspecting them further.
-fn class_b_candidate(outcome: &IngestOutcome) -> Option<Candidate> {
+pub(crate) fn class_b_candidate(outcome: &IngestOutcome) -> Option<Candidate> {
     if classify::classify(outcome).class != ContainabilityClass::B {
         return None;
     }
@@ -70,7 +75,7 @@ fn attempt(url: &str) -> Attempt {
 /// Deterministically hash `name` into a `u64` — `DefaultHasher`'s keys are fixed (unlike
 /// `HashMap`'s `RandomState`, which is randomised per-process to resist HashDoS), so this
 /// is stable across runs and processes, not just within one.
-fn stable_hash(name: &str) -> u64 {
+pub(crate) fn stable_hash(name: &str) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     name.hash(&mut hasher);

@@ -28,6 +28,7 @@ normalise = { path = "crates/normalise" }
 verdict = { path = "crates/verdict" }
 destructive = { path = "crates/destructive" }
 store = { path = "crates/store" }
+probe = { path = "crates/probe" }
 
 [workspace.lints.rust]
 unsafe_code = "warn"

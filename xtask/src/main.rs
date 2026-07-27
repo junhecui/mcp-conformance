@@ -8,6 +8,7 @@ fn main() -> ExitCode {
         Some("census") => census(),
         Some("census-stage1") => census_stage1(),
         Some("census-pin-stability") => census_pin_stability(),
+        Some("probe-stage1") => probe_stage1(),
         Some("dump-tools") => dump_tools(),
         Some(other) => {
             eprintln!("unknown task `{other}`\n\n{USAGE}");
@@ -20,7 +21,7 @@ fn main() -> ExitCode {
     }
 }
 
-const USAGE: &str = "usage: cargo xtask <purity|census|census-stage1 [sample_size]|census-pin-stability <input.json>|dump-tools <url>>";
+const USAGE: &str = "usage: cargo xtask <purity|census|census-stage1 [sample_size]|census-pin-stability <input.json>|probe-stage1 [sample_size]|dump-tools <url>>";
 
 fn dump_tools() -> ExitCode {
     let Some(url) = std::env::args().nth(2) else {
@@ -69,6 +70,17 @@ fn census_stage1() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("census-stage1 failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn probe_stage1() -> ExitCode {
+    let sample_size: usize = std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(100);
+    match xtask::probe_stage1::run(sample_size) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("probe-stage1 failed: {e}");
             ExitCode::FAILURE
         }
     }
