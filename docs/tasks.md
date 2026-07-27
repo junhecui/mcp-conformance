@@ -469,12 +469,33 @@ metadata.
 
 **Depends on:** P0-06
 **Exit:** Coverage numbers over ≥1,000 servers written to `results/census/`. **Publishable.**
+**Status:** Class B half done — `results/census/class_b_annotation_coverage.json`, 1,000
+servers, `cargo xtask census-stage1 1000`. **250 succeeded (25.0%), 3,183 tools
+discovered.** Class A half still needs Stage 2 (not yet built); this is coverage over the
+reachable-without-new-infrastructure slice, not the full corpus.
+
+Sampling was fixed before this ran, not after: taking "the first N" Class B candidates in
+registry order clusters under whichever namespace sorts first alphabetically (every earlier
+sample was all `a*` prefixes) — replaced with a deterministic hash-based selection over the
+*entire* Class B population, so the sample is unbiased with respect to namespace while
+staying reproducible run to run.
 
 This is the Phase 0 exit criterion and plausibly the headline result — open question 1 asks
 whether the story is about *mismatch* or about *absence*. Stage 1/2 work, same as P0-06.
+The `absent` bucket is identical (1,548) across all four annotations at this scale, same as
+the 100-server sample — 48.6% of discovered tools never engage with the annotation system
+at all, which is itself the strongest signal toward *absence* over *mismatch* so far.
 
-- [ ] Throughput profile suitable for the corpus size
-- [ ] Failure/timeout rate reported alongside the coverage rate
+- [x] Throughput profile suitable for the corpus size — sequential requests (never
+      concurrent — unrelated third-party hosts, no reason to burst them), 12s per-request
+      timeout tuned down from the 30s default after the 100-server sample showed responsive
+      servers answer in low seconds; 1,000 servers completed well inside an hour
+- [x] Failure/timeout rate reported alongside the coverage rate — full categorized
+      breakdown in the results file and that commit: dominant reasons are `401` (auth
+      required, reachable but access-gated) and genuine SSE-only servers (out of this
+      transport's declared scope, not a failure of it), plus a long tail of real-world
+      causes (dead hosts, malformed third-party JSON-RPC, TLS misconfiguration) — verified
+      category by category before treating the data as valid, per that commit
 
 ### P0-08 Class A / Class B ratio report
 
