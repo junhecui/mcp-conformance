@@ -429,6 +429,19 @@ tools together produce the same combined counts.
 **Depends on:** P0-04, P0-05
 **Exit:** Census completes over 100 servers; pin stability and coverage taxonomy validated
 against hand inspection of a sample.
+**Status:** In progress — the Class B half is done: `cargo xtask census-stage1 100` against
+100 live Class B servers, `results/census/class_b_annotation_coverage.json`. 26 succeeded
+(74 failed — mostly `401`, i.e. auth required, plus 14 genuine SSE-only servers correctly
+out of this transport's declared scope; see that commit for the full breakdown), 289 tools
+discovered. Two real bugs were found and fixed by running this against live servers rather
+than only fakes: `HttpTransport` was missing `text/event-stream` from its `Accept` header
+(a spec violation that got 14 servers spuriously rejected with `406`, not a real
+reachability problem), and `RegistryClient::fetch_all` had no way to stop early once a
+caller had enough matching entries. Both fixed and tested before this data was produced.
+**Remaining:** the Class A half (needs Stage 2 — containerized execution, not yet built);
+re-running against the same 100 to confirm pin stability; hand-verifying the coverage
+taxonomy on ≥20 tools against the actual `tools/list` JSON. None of these are blocked, they
+just weren't done in this pass.
 
 architecture.md §12 item 1. This is Stage 1/2 work (see the Phase 0 staging note above) —
 it needs real `initialize`/`tools/list` exchanges with live servers, not just registry
