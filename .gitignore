@@ -1,0 +1,23 @@
+# Evidence and results are large, machine-generated, and content-addressed.
+# Committed results live under results/ as curated artifacts only.
+/results/**/raw/
+/evidence/
+*.blob
+
+# Sandbox scratch
+/sandbox-scratch/
+*.upper/
+
+# OS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Local config and secrets
+.env
+.env.*
+!.env.example
+/config.local.*
