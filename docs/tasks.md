@@ -1369,6 +1369,72 @@ the new orphan-teardown proof), and `observe` gained a second `harvest` test cov
 **Depends on:** P2-01
 **Exit:** `memory.max`, `cpu.max`, `pids.max` enforced; a fork bomb is contained; per-run
 resource cost recorded.
+**Status:** Done — `crates/sandbox::cgroup`, `Cgroup::create`/`create_legacy_v1`,
+`ResourceLimits`, `ResourceUsage`. `Cgroup::create` probes a v2 root's `cgroup.controllers`
+for `memory`+`cpu`+`pids` delegation first (the real target, ADR-010's pinned Ubuntu 24.04
+image, is expected to expose pure unified v2) and falls back to four separate legacy v1
+hierarchies otherwise.
+
+**Environment reality, verified rather than assumed.** This project's own dev/CI container
+does *not* get the v2 path: it mounts a hybrid setup — legacy `/sys/fs/cgroup/{memory,cpu,
+pids}` plus a `/sys/fs/cgroup/unified` v2 mount whose own `cgroup.controllers` lists only
+`cpuset hugetlb`, so `memory`/`cpu`/`pids` can never be delegated to any child of that root
+here, confirmed directly. Only the v1 fallback is *reachable* by this module's own tests in
+this container, which the module doc comment says plainly rather than hiding behind an
+assumed-passing v2 test. A second, genuine environment quirk found the same way: `cpu` and
+`cpuacct` are mounted as two entirely separate legacy hierarchies here (not the combined
+`cpu,cpuacct` some distros use) — the first version of this module read `cpuacct.usage` from
+the `cpu` directory, where it doesn't exist, and silently got 0 recorded CPU time until this
+was caught by a real-workload test and fixed with a dedicated `cpuacct` directory tracked
+alongside `cpu`.
+
+**Four real test-design bugs found and fixed, none of them in the production code path:**
+
+1. The first versions of `pids_max_contains_a_fork_bomb` and
+   `resource_usage_is_recorded_for_a_real_workload` both called
+   `cgroup.add_process(nix::unistd::getpid())` — adding the *test harness's own process* to
+   each test's cgroup. Cgroup membership is per-process, not per-thread, and Rust's test
+   harness runs tests as threads inside one shared process, so running both tests
+   concurrently (the default) raced them against each other, each yanking the same shared
+   process between cgroups and corrupting both tests' measurements. Fixed by spawning a
+   dedicated child process per test and adding *that* PID instead — also the more realistic
+   shape, since production code only ever adds the sandboxed target, never its own
+   supervisor, to a cgroup.
+2. Even after moving to child processes, the memory-usage test still intermittently
+   under-reported (a peak of a few hundred KB instead of the real 8 MiB touched), because v1
+   memory accounting charges pages to whichever cgroup a process belongs to *at the moment it
+   touches them* and does not retroactively backfill an already-charged allocation onto a
+   cgroup the process joins later — a race between `Command::spawn()` returning and this
+   test's own `add_process()` call. Fixed by stdin-gating the child (it blocks on
+   `sys.stdin.readline()`/`read` until released), so the allocation is guaranteed to happen
+   strictly after cgroup membership takes effect.
+3. `pids_max_contains_a_fork_bomb` originally killed only its fork-bomb shell after checking
+   containment, leaving that shell's own already-exited `sleep &` grandchildren unreaped —
+   found by hand as seven `[sleep] <defunct>` zombie process-table entries per run in `ps
+   auxww`. Fixed by letting the shell's own trailing `wait` reap its children naturally
+   instead of killing it mid-run, and dropping an assertion on the shell's own exit status
+   (a shell whose fork attempts were mostly refused by `pids.max` doesn't reliably report a
+   clean `0` across implementations — orthogonal to what the test actually needs to prove).
+4. `Cgroup::remove` itself, called after every member process had genuinely exited, still
+   intermittently failed with a transient error and left behind an empty, member-less cgroup
+   directory — found by running the full suite eight times in a row and finding leftover
+   `mcp-conformance-test-*` directories under `/sys/fs/cgroup/{pids,memory,cpuacct,cpu}` even
+   though every test reported passing (the test-cleanup helper's single unretried
+   `cgroup.remove().expect(...)` was in fact panicking, just not on a thread the harness
+   surfaced loudly enough to notice on a casual read). Root cause: the kernel's own cgroup
+   accounting can lag a process's actual exit by a few milliseconds, during which `rmdir`
+   genuinely fails even though the directory holds no members. Fixed in the production code,
+   not just the test: `Cgroup::remove` now retries each `rmdir` for up to 500ms via a new
+   `remove_dir_retrying` helper before propagating a real error — a real orchestrator calling
+   `remove()` right after `SandboxHandle::wait()` returns would hit the identical race, so
+   this belongs in the module, not in test-only cleanup.
+
+**Verified clean, not just "tests pass":** the full `sandbox` test suite (16 tests) was run
+8 times consecutively after the `remove()` fix; every run reports `16 passed; 0 failed`, and
+a post-run sweep of `/sys/fs/cgroup/{pids,memory,cpuacct,cpu}` for
+`mcp-conformance-test-*` directories and `ps auxww` for `<defunct>` entries came back empty
+both times. `cargo build --workspace`, `cargo clippy --workspace --all-targets -- -D
+warnings`, `cargo xtask purity`, and `cargo test --workspace` all pass clean.
 
 ### P2-03 Full integrity gate
 
