@@ -27,21 +27,64 @@ const CLIENT_PROTOCOL_VERSION: &str = "2025-11-25";
 const CLIENT_NAME: &str = "mcp-conformance-harness";
 const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Used only when a successful `server/discover` response doesn't itself carry an explicit
+/// `protocolVersion` field. Per the RC announcement (O-01), protocol version may travel
+/// entirely via `_meta["io.modelcontextprotocol/protocolVersion"]` on ordinary requests
+/// under the new scheme rather than in the handshake result — but `server/discover` did not
+/// exist before this revision, so a server answering it at all is itself evidence of which
+/// revision negotiated. Not a guess invented here: it is the one fact this module can
+/// actually observe (the method existing) standing in for a field the spec may not put in
+/// this particular response.
+const SERVER_DISCOVER_PROTOCOL_VERSION_FALLBACK: &str = "2026-07-28";
+
+/// Which handshake actually produced a successful discovery (P0-09).
+///
+/// A second, orthogonal provenance axis alongside Stage 2 census's
+/// bare-host-vs-containerized `execution_provenance` flag — this one records *how* the
+/// server was discovered, not *where* it ran. Needed because spec revision `2026-07-28`
+/// removes the `initialize`/`notifications/initialized` handshake entirely (see O-01),
+/// replacing it with an optional `server/discover` request; a corpus discovered under a mix
+/// of both paths must never silently pool them as if they were the same measurement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandshakePath {
+    /// The `initialize` + `notifications/initialized` handshake — every spec revision up to
+    /// and including `2025-11-25`.
+    Initialize,
+    /// The `server/discover` fallback — spec revision `2026-07-28` and later, once a server
+    /// stops recognizing `initialize` at all.
+    ServerDiscover,
+}
+
+impl std::fmt::Display for HandshakePath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Initialize => write!(f, "initialize"),
+            Self::ServerDiscover => write!(f, "server_discover"),
+        }
+    }
+}
+
 /// Everything discovery captured about one server.
 ///
-/// `initialize_raw` and `tools_list_raw` are the only fields P0-02's metadata pin may ever
+/// `handshake_raw` and `tools_list_raw` are the only fields P0-02's metadata pin may ever
 /// hash — "the pin is over bytes, not semantics" (architecture.md §3.1). Nothing in this
 /// crate parses them any further than routing the response envelope; that's the pinner's
 /// and census's job.
 #[derive(Debug, Clone)]
 pub struct Discovery {
-    /// The exact bytes of the `initialize` response, before any parsing.
-    pub initialize_raw: Vec<u8>,
+    /// The exact bytes of whichever handshake response succeeded — `initialize`'s result
+    /// when `handshake_path` is [`HandshakePath::Initialize`], `server/discover`'s result
+    /// when it's [`HandshakePath::ServerDiscover`] — before any parsing.
+    pub handshake_raw: Vec<u8>,
     /// The exact bytes of the `tools/list` response, before any parsing.
     pub tools_list_raw: Vec<u8>,
-    /// The `protocolVersion` the server actually returned from `initialize` — for
-    /// `TOOL_SNAPSHOT.spec_revision` (architecture.md §6).
+    /// The `protocolVersion` the server actually negotiated — for
+    /// `TOOL_SNAPSHOT.spec_revision` (architecture.md §6). Populated from the handshake
+    /// response when it carries one explicitly; see [`SERVER_DISCOVER_PROTOCOL_VERSION_FALLBACK`]
+    /// for the one case it isn't.
     pub negotiated_spec_revision: String,
+    /// Which handshake actually succeeded — provenance, per P0-09's exit criterion.
+    pub handshake_path: HandshakePath,
 }
 
 /// Why discovery failed.
@@ -133,28 +176,60 @@ impl DiscoveryClient {
 
     /// Run the full discovery sequence and capture its evidence.
     ///
-    /// Sends exactly three things, in order: `initialize`, the `notifications/initialized`
-    /// notification required by the MCP lifecycle before any other request is valid, then
-    /// `tools/list`. Nothing else. Never calls a tool.
+    /// Tries the `initialize`/`notifications/initialized`/`tools/list` sequence first (every
+    /// spec revision through `2025-11-25`). If `initialize` comes back as an unrecognized
+    /// method — the one unambiguous signal that this server has adopted revision
+    /// `2026-07-28`, which removes `initialize` outright (P0-09; see O-01) — falls back to
+    /// `server/discover` followed by `tools/list` instead, with no `notifications/initialized`
+    /// (that notification belongs to the handshake this fallback exists because the server no
+    /// longer speaks). Any other failure (transport/IO, a different JSON-RPC error, a
+    /// malformed response) is reported as a real discovery failure, never silently retried
+    /// under the second method — retrying on an ambiguous signal would risk masking a genuine
+    /// reachability problem as a spec mismatch at census scale. Never calls a tool, under
+    /// either path.
     pub fn discover(&mut self) -> Result<Discovery, DiscoveryError> {
         let init_params = json!({
             "protocolVersion": CLIENT_PROTOCOL_VERSION,
             "capabilities": {},
             "clientInfo": { "name": CLIENT_NAME, "version": CLIENT_VERSION },
         });
-        let init_response = self.transport.call("initialize", init_params)?;
-        let negotiated_spec_revision = extract_negotiated_version(&init_response.bytes)?;
-        self.transport.set_negotiated_protocol_version(&negotiated_spec_revision);
 
-        self.transport.notify("notifications/initialized", json!({}))?;
+        match self.transport.call("initialize", init_params) {
+            Ok(init_response) => {
+                let negotiated_spec_revision = extract_negotiated_version(&init_response.bytes)?;
+                self.transport.set_negotiated_protocol_version(&negotiated_spec_revision);
 
-        let tools_response = self.transport.call("tools/list", json!({}))?;
+                self.transport.notify("notifications/initialized", json!({}))?;
 
-        Ok(Discovery {
-            initialize_raw: init_response.bytes,
-            tools_list_raw: tools_response.bytes,
-            negotiated_spec_revision,
-        })
+                let tools_response = self.transport.call("tools/list", json!({}))?;
+
+                Ok(Discovery {
+                    handshake_raw: init_response.bytes,
+                    tools_list_raw: tools_response.bytes,
+                    negotiated_spec_revision,
+                    handshake_path: HandshakePath::Initialize,
+                })
+            }
+            Err(DiscoveryError::ServerError { code: -32601, .. }) => {
+                let discover_params = json!({
+                    "clientInfo": { "name": CLIENT_NAME, "version": CLIENT_VERSION },
+                });
+                let discover_response = self.transport.call("server/discover", discover_params)?;
+                let negotiated_spec_revision = extract_negotiated_version(&discover_response.bytes)
+                    .unwrap_or_else(|_| SERVER_DISCOVER_PROTOCOL_VERSION_FALLBACK.to_string());
+                self.transport.set_negotiated_protocol_version(&negotiated_spec_revision);
+
+                let tools_response = self.transport.call("tools/list", json!({}))?;
+
+                Ok(Discovery {
+                    handshake_raw: discover_response.bytes,
+                    tools_list_raw: tools_response.bytes,
+                    negotiated_spec_revision,
+                    handshake_path: HandshakePath::ServerDiscover,
+                })
+            }
+            Err(other) => Err(other),
+        }
     }
 }
 

@@ -660,27 +660,46 @@ data says the opposite is true, which is itself worth publishing.
 `2026-07-28` handshake, with the discovery path (`initialize` vs `server/discover`) recorded
 as provenance on the result — a second, orthogonal provenance axis alongside Stage 2's
 bare-host-vs-containerized flag.
+**Status:** Done, against a hand-built fixture — `crates/discovery::client`. New
+`HandshakePath` enum (`Initialize` / `ServerDiscover`) on `Discovery`, alongside a renamed
+`handshake_raw` field (was `initialize_raw`; now byte-exact over whichever handshake
+response actually succeeded, same "bytes, not semantics" discipline as before). `discover()`
+tries `initialize` first as always; a `ServerError{code: -32601}` (JSON-RPC "method not
+found") — the one unambiguous signal a server has dropped `initialize` per the RC
+announcement, not an ambiguous one — triggers the `server/discover` fallback, then proceeds
+straight to `tools/list` with no `notifications/initialized` (that notification belongs to
+the handshake the fallback exists because the server no longer speaks). Any other failure
+(transport/IO, a different JSON-RPC error, malformed JSON) propagates as a real discovery
+failure and is never retried under the second method — retrying on an ambiguous signal would
+risk silently reclassifying a genuine reachability problem as a spec-version mismatch at
+census scale, the same discipline P0-06's Class A failure-category reporting already
+follows.
 
-Surfaced by O-01's 2026-07-27 check (see "Ongoing" below), not originally anticipated: MCP
-spec revision `2026-07-28` — shipping the day after that check — removes the `initialize` /
-`notifications/initialized` handshake entirely. It's replaced by
-`_meta["io.modelcontextprotocol/protocolVersion"]` on every request plus an optional
-`server/discover` method. P0-01's `DiscoveryClient` hardcodes `initialize` +
-`notifications/initialized` + `tools/list` as literal method names with no fallback — by
-design, to keep tool-calling structurally unreachable from outside the crate — so a server
-that adopts `2026-07-28` becomes silently undiscoverable: there's no loud `initialize`
-failure to catch, just whatever error the new method name produces. Left unfixed, this
-surfaces as unexplained new failures in a future P0-06/P0-07 census run, or worse, in
-P1-08's first-verdict target server, well after the actual cause (a spec revision, not a
-harness bug) has been forgotten.
+`server/discover`'s response shape isn't fully nailed down by the RC announcement — O-01's
+own check notes protocol version may now travel via `_meta` rather than in a handshake
+result. Handled honestly rather than guessed: if the response doesn't carry an explicit
+`protocolVersion`, `negotiated_spec_revision` falls back to a documented constant
+(`SERVER_DISCOVER_PROTOCOL_VERSION_FALLBACK = "2026-07-28"`) — reasoned from the one fact
+actually observable (a method that didn't exist before this revision just answered), not
+invented. 2 new integration tests in `crates/discovery/tests/stdio_discovery.rs` against new
+fake-server modes (`no_initialize`, `neither_handshake`): one drives the fallback path
+end-to-end including the no-`protocolVersion` case, the other proves a server recognizing
+neither handshake surfaces its real error rather than being silently swallowed. All 17
+existing discovery unit tests plus both HTTP integration tests still pass unchanged — the
+fallback is additive to the existing `initialize` path, not a rewrite of it.
 
-- [ ] Attempt `server/discover` when `initialize` gets no response, or an error indicating
-      an unrecognized method, instead of treating that as a bare discovery failure
-- [ ] Record which handshake path succeeded as provenance on the result
-- [ ] `TOOL_SNAPSHOT.spec_revision` (already captured per P0-01) reflects whichever revision
-      was actually negotiated, regardless of which handshake produced it
+- [x] Attempt `server/discover` when `initialize` gets no response, or an error indicating
+      an unrecognized method, instead of treating that as a bare discovery failure —
+      implemented specifically on JSON-RPC code `-32601`, not on transport/IO errors (see
+      above for why that distinction is deliberate)
+- [x] Record which handshake path succeeded as provenance on the result — `Discovery::handshake_path`
+- [x] `TOOL_SNAPSHOT.spec_revision` (already captured per P0-01) reflects whichever revision
+      was actually negotiated, regardless of which handshake produced it —
+      `Discovery::negotiated_spec_revision` is populated on both paths
 - [ ] Re-run against a real `2026-07-28` server once one exists in the wild, not just a
-      hand-built fixture, before trusting this at census scale
+      hand-built fixture, before trusting this at census scale — genuinely can't be done yet:
+      the revision ships tomorrow (2026-07-28) and no live server speaking it exists today.
+      Left open deliberately rather than closed on fixture-only evidence.
 
 ---
 

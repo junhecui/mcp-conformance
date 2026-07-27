@@ -44,6 +44,31 @@ fn main() {
         }
 
         let response = match method {
+            // P0-09 fixtures: a server that has moved to spec revision 2026-07-28 no longer
+            // recognizes `initialize` at all.
+            "initialize" if mode == "no_initialize" || mode == "neither_handshake" => {
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": { "code": -32601, "message": "method not found: initialize" }
+                })
+            }
+            "server/discover" if mode == "no_initialize" => serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    // Deliberately no `protocolVersion` field — exercises
+                    // DiscoveryClient's documented fallback-to-default behaviour rather
+                    // than a value this fixture never actually returned.
+                    "capabilities": {},
+                    "serverInfo": { "name": "fake-mcp-stdio-server", "version": "0.0.0" }
+                }
+            }),
+            "server/discover" if mode == "neither_handshake" => serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": { "code": -32601, "message": "method not found: server/discover" }
+            }),
             "initialize" if mode == "wrong_id" => serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": 999_999,
