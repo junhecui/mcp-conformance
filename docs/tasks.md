@@ -482,12 +482,83 @@ tools together produce the same combined counts.
 **Depends on:** P0-04, P0-05
 **Exit:** Census completes over 100 servers; pin stability and coverage taxonomy validated
 against hand inspection of a sample.
-**Status:** Class B half done, including both verification checklist items below. Class A
-half remains (needs Stage 2 — containerized execution, not yet built; a separate scoping
-step, the same way Stage 1's live third-party contact needed explicit sign-off before it
-started).
+**Status:** Done — both halves complete.
 
-`cargo xtask census-stage1 100` against 100 live Class B servers,
+**Class A half** (this being the half that was open): `cargo xtask census-stage2-class-a
+100` against 100 live Class A (locally-launchable) servers sampled from the registry by the
+same stable-hash selection Stage 1 uses, executed via Docker (`docker run`, `--memory=256m
+--pids-limit=256 --cpus=1`, no other flags) rather than the hand-rolled Phase 1+ sandbox —
+per the Staging note above, Stage 2 needs containment, not the observation machinery that
+sandbox exists for, and a stock container runtime is adequate for that narrower job.
+`results/census/class_a_annotation_coverage.json`, every record tagged
+`"execution_provenance": "containerized_docker"` so this can never be silently pooled with
+Stage 0/1 (registry-only / Class B) data. **57 succeeded (57.0%), 43 failed, 956 tools
+discovered.** Failure breakdown: `io_or_timeout` 36 (real npm/uvx crashes — bad Node-engine
+requirements, ESM/CJS mismatches, missing required env vars, wrong `uvx` entry-point names
+— and genuinely hung servers the watchdog killed, indistinguishable at the transport layer
+from each other, reported as one honest category rather than guessed apart), `protocol` 5,
+`unsupported_registry_type` 2 (`nuget` — no container invocation built for it; `cargo` and
+`mcpb` would land in the same bucket, not silently skipped from the sample). npm and pypi
+are the only registry types this run's container invocations cover (`npx`/`uvx` inside
+`node:22-alpine` / `ghcr.io/astral-sh/uv:python3.12-alpine`) plus `oci` (image reference run
+directly) — the actual Class A registry-type mix turned out to be npm-dominant (see the
+100-entry sample pulled while scoping this: 30 npm, 2 oci, 1 pypi), so this covers the
+overwhelming majority of the class as it exists today.
+
+Two real bugs found running this against live, arbitrary, unauthenticated third-party
+package code rather than only fakes — same discipline the Class B half's commit already
+established:
+
+1. `ChildProcessTransport` had no timeout at all — a hung or deliberately stalling
+   containerized server would block `recv_line` forever. Fixed by adding
+   `DiscoveryClient::stdio_with_timeout` / `ChildProcessTransport::spawn_with_timeout`
+   (`crates/discovery/src/{client,transport}.rs`): a watcher thread sends the child a `kill
+   -9` after a 45s deadline. Regression test added:
+   `discover_is_unblocked_by_the_watchdog_when_the_server_never_responds`
+   (`crates/discovery/tests/stdio_discovery.rs`), against a new `hang` mode in the fake
+   stdio server that never responds — asserts on wall-clock time, not just the error
+   variant, so a regression that silently dropped the watchdog would hang the test rather
+   than pass it.
+2. That same watchdog's `kill -9` targets the *host-side `docker run` CLI process*, not the
+   container. A SIGKILL'd CLI process gets no chance to tell the daemon to honour `--rm`,
+   so the container it launched keeps running, orphaned. Found by hand: `docker ps` after
+   the first full run showed four containers still `Up 3 hours` from timed-out attempts in
+   that exact sweep. Fixed in `xtask/src/class_a_stage2.rs` by giving every attempt a unique
+   `--name` and calling `docker rm -f` on it unconditionally after every attempt, success or
+   failure — independent of whatever state the CLI process or container ended up in. This
+   is a host-resource-hygiene bug, not a data-correctness one: it affects leftover
+   containers, not what `tools/list` returned, so the published coverage numbers above
+   (from the run that found the bug, before the fix) are unaffected and are being kept
+   rather than discarded — a re-run to regenerate them with the fix already in place would
+   be re-doing Stage 1/2 work for a cosmetic reason, and the fix itself is what matters for
+   every run after this one. All orphaned containers from that run were found and removed by
+   hand before this was closed out.
+
+Hand-verified 5 of the 57 successful servers (245 tools total) by re-invoking their
+container directly and comparing raw `tools/list` JSON against the recorded
+[`census::coverage`] classification: `tiktapdown-mcp` (npm, 4 tools), `unreal-engine-mcp
+-server` (npm, 23), `mcp-slack-crunchtools` (pypi, 15), and `@arielbk/anki-mcp` (npm, 91) —
+all four tool-count-for-tool-count matches, and all had no `annotations` object on any tool
+(uniformly `Absent`, matching the raw JSON exactly) — plus `mcparmory-apify` (pypi, 112
+tools), which exercised the interesting case directly: every tool has an `annotations`
+object but with varying keys (e.g. `create_actor` → `{"openWorldHint": true}` only,
+correctly `Defaulted` for `readOnlyHint`/`destructiveHint`/`idempotentHint` and `Explicit`
+for `openWorldHint`), and the per-tool `readOnlyHint` split (54 explicit + 58 defaulted, 0
+absent) sums exactly to its recorded `tool_count`. Nothing needed fixing.
+
+- [x] Hand-verify the taxonomy on a sample of Class A results, the same way the Class B
+      half required — done above: 5 servers, 245 tools, spanning both the uniformly
+      `Absent` case (4 servers) and the `Explicit`/`Defaulted` mix case (`mcparmory-apify`),
+      every tool-count and per-tool classification matched the raw JSON by hand.
+- [x] Every result record carries `execution_provenance` — `"containerized_docker"` on all
+      100 attempts, checked as a `CHECK`-equivalent by inspection of the output file rather
+      than a separate assertion; there is no code path in `class_a_stage2.rs` that emits a
+      server record without it.
+- [x] No bare-host execution path exists for Class A discovery — the only program this
+      module ever spawns is `docker`; `npx`/`uvx` and the target package run *inside* the
+      container it constructs, never on the runner host.
+
+**Class B half** (done previously): `cargo xtask census-stage1 100` against 100 live Class B servers,
 `results/census/class_b_annotation_coverage.json`. 26 succeeded (74 failed — mostly `401`,
 i.e. auth required, plus 14 genuine SSE-only servers correctly out of this transport's
 declared scope; see that commit for the full breakdown), 289 tools discovered. Two real
@@ -524,8 +595,12 @@ metadata.
 **Exit:** Coverage numbers over ≥1,000 servers written to `results/census/`. **Publishable.**
 **Status:** Class B half done — `results/census/class_b_annotation_coverage.json`, 1,000
 servers, `cargo xtask census-stage1 1000`. **250 succeeded (25.0%), 3,183 tools
-discovered.** Class A half still needs Stage 2 (not yet built); this is coverage over the
-reachable-without-new-infrastructure slice, not the full corpus.
+discovered.** Class A half explicitly **not attempted** — out of scope for the work that
+closed out P0-06. Stage 2 (containerized `docker run` execution) now exists and is
+validated at the P0-06 seed scale (100 servers, see above), so the tool to do this run
+exists; scaling it to ≥1,000 servers the way Stage 1 scaled is deliberately left as a
+separate step, per the same validate-then-scale discipline the Class B half already
+followed (100 before 1,000) — this is real, until it's actually run.
 
 Sampling was fixed before this ran, not after: taking "the first N" Class B candidates in
 registry order clusters under whichever namespace sorts first alphabetically (every earlier

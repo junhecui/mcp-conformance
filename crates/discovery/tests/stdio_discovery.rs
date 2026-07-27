@@ -47,3 +47,26 @@ fn discover_rejects_malformed_json_from_the_server() {
     let err = client.discover().expect_err("malformed JSON must not be tolerated");
     assert!(matches!(err, DiscoveryError::Protocol(_)));
 }
+
+/// Stage 2 census's reason for `stdio_with_timeout` existing at all: a server that never
+/// responds must not hang the caller forever. Asserts on wall-clock time, not just the
+/// error variant, so a regression that silently drops the watchdog thread (and falls back
+/// to blocking forever) would hang this test rather than pass it — a stronger failure
+/// signal for CI than a false green.
+#[test]
+fn discover_is_unblocked_by_the_watchdog_when_the_server_never_responds() {
+    let start = std::time::Instant::now();
+    let mut client = DiscoveryClient::stdio_with_timeout(
+        fake_server_path(),
+        &["hang"],
+        std::time::Duration::from_secs(2),
+    )
+    .expect("spawn");
+    let err = client.discover().expect_err("a hung server must not yield a successful discovery");
+    assert!(matches!(err, DiscoveryError::Io(_)), "expected the watchdog's kill to surface as Io, got {err:?}");
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(10),
+        "watchdog should have unblocked discover() within a few seconds of the 2s timeout, took {:?}",
+        start.elapsed()
+    );
+}
