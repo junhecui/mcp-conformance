@@ -15,6 +15,7 @@ datamodel.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 sha2 = "0.11.0"
 filetime = "0.2"
+nix = { version = "0.31", features = ["mount", "sched", "signal", "process", "fs"] }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 tempfile = "3.27.0"

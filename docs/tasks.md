@@ -985,12 +985,62 @@ silently poisons every diff, and the failure is invisible in the output.
 **Depends on:** P1-02
 **Exit:** Tool launches inside a mount namespace over an overlay, is killed at timeout, and
 tears down cleanly.
+**Status:** Done — `crates/sandbox::supervisor`. `spawn(spec)` launches `spec.program`
+via `std::process::Command` with a `pre_exec` closure (post-`fork`, pre-`exec`, in the
+child) that calls `unshare(CLONE_NEWNS)`, remounts `/` recursively private
+(`MS_REC | MS_PRIVATE` — without this the overlay mount below would propagate straight back
+into the host's mount namespace, defeating the whole point), mounts the overlay
+(`lowerdir`/`upperdir`/`workdir` from a P1-02 base layer), and `chdir`s into the merged
+mountpoint before exec. Returns a `SandboxHandle` plus the child's raw `ChildStdin`/
+`ChildStdout` — architecture.md §5's topology (client on host, server in sandbox, protocol
+crosses over stdio) made literal: to whoever calls `spawn`, the sandboxed process is exactly
+as easy to drive as an ordinary `Command` child, because past the return of `spawn` that's
+all it is. `wait()` blocks for exit or the timeout watchdog's `SIGKILL` (same
+sleep-then-kill-best-effort pattern as `discovery::ChildProcessTransport`'s existing
+watchdog) and reports `SandboxOutcome{ upper, exit_status, timed_out }` with zero
+interpretation — deciding what a timeout or exit status *means* is P1-05's job.
 
-- [ ] Mount namespace + overlayfs upper layer
-- [ ] Hard timeout
-- [ ] MCP **client stays on the host**, server runs in the sandbox, protocol crosses over
-      stdio (architecture.md §5 — keeps protocol handling outside the blast radius)
-- [ ] Must not emit any verdict
+**Privileged-vs-rootless mount choice, made:** ADR-010 flagged this as open and deferred it
+here. Decision: privileged — `unshare(CLONE_NEWNS)` as the supervisor's own real user (root
+in every environment this project runs in today), no user-namespace UID remapping, so the
+opaque-directory xattr lands in `trusted.overlay.opaque`, not `user.overlay.opaque` (ADR-010's
+`userxattr` mount option stays off). Rootless operation is P2-01's job, paired with the PID
+namespace it needs anyway.
+
+12 tests total (9 from P1-02 plus 3 new), run for real against actual `unshare`/`mount`
+syscalls in this project's own Linux container (verified root + working overlayfs support
+directly before writing any code, not assumed) — no mocking of the kernel primitives this
+task exists to exercise:
+- A real subprocess writes a file into its sandboxed cwd; the write is verified present in
+  `upper` from the host side afterward (per ADR-009's "read the upper layer from the host
+  side" discipline) and the base layer (`lower`) is verified byte-for-byte untouched —
+  overlayfs containment demonstrated, not assumed.
+- A process sleeping for an hour is killed within the configured 2s timeout and reported
+  `timed_out`, wall-clock-asserted the same way `discovery`'s own watchdog test is.
+- A real bidirectional stdin/stdout exchange across the sandbox boundary.
+
+**A real limitation, found running this against an actual shell rather than only a direct
+binary, and fixed at the test level rather than quietly worked around:** the first version
+of the timeout test ran `/bin/sh -c "sleep 3600"`; killing the direct child (the shell) let
+`wait()` return and the test pass, but `sh` on this container forks a grandchild to actually
+run `sleep` rather than `exec`-ing in place, so that grandchild survived the kill,
+re-parented to init, and kept running for real (confirmed directly via `ps`, `PPid: 1`).
+Phase 1 has no PID namespace (P2-01) to catch a killed process's own children — exactly the
+gap this module's own doc comment already discloses ("detecting and killing a process that
+itself forked children before dying needs a PID namespace to do properly... P2-01's problem,
+not silently this module's success"), now demonstrated rather than only asserted. Fixed by
+running `/bin/sleep` directly as `program` (no shell wrapper) in the test, sidestepping the
+gap rather than leaking a real hour-long orphan process on every test run; the gap itself is
+left exactly as documented, for P2-01 to close.
+
+- [x] Mount namespace + overlayfs upper layer
+- [x] Hard timeout
+- [x] MCP **client stays on the host**, server runs in the sandbox, protocol crosses over
+      stdio (architecture.md §5 — keeps protocol handling outside the blast radius) —
+      `SandboxHandle`'s returned `ChildStdin`/`ChildStdout` are exactly this
+- [x] Must not emit any verdict — by contract, and structurally: `sandbox` has no dependency
+      edge to `normalise` or `verdict` in `Cargo.toml`, so nothing in this crate could reach
+      either type even by accident
 
 ### P1-04 Observation collector — upper layer
 
