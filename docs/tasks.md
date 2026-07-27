@@ -979,6 +979,70 @@ Open question 5. Five SEPs are open and the IG is actively debating runtime eval
 `TOOL_SNAPSHOT.spec_revision` and `VERDICT.protocol_version` exist so results survive a spec
 change, but someone has to notice the change.
 
+**Checked 2026-07-27.**
+
+**⚑ Flagged for other tasks, not just this one: P0-01's `2026-07-28` warning is confirmed
+real, not a false alarm.** Verified three independent ways, not just the blog post: (1) the
+official RC announcement states the `initialize`/`initialized` handshake "is removed" —
+[blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate](https://blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/);
+(2) the live `schema/draft/schema.ts` in `modelcontextprotocol/modelcontextprotocol` (fetched
+today, `LATEST_PROTOCOL_VERSION = "2026-07-28"`) contains **zero** occurrences of
+`initialize`/`InitializeRequest`/`initialized` — the types are simply gone, not deprecated;
+(3) what replaces it is in the same file: protocol version now travels as
+`_meta["io.modelcontextprotocol/protocolVersion"]` on every request, and an optional
+`server/discover` request (`method: "server/discover"`) replaces the old upfront capability
+exchange. RC was locked 2026-05-21; final ships **2026-07-28 — tomorrow, as of this check**.
+As of today the negotiated-and-stable revision genuinely in use across the corpus is still
+`2025-11-25`; nothing needs to change today. But this is a structural break, exactly as
+flagged, not a version bump: **P0-01's `DiscoveryClient` hardcodes `initialize` +
+`notifications/initialized` + `tools/list` as literal method names** (by design, per its own
+status note, to keep tool-calling structurally unreachable) and has no fallback path for a
+server that only speaks `server/discover`. Every server that upgrades to `2026-07-28` becomes
+undiscoverable by the current harness — silently, since there's no `initialize` for it to
+fail loudly against; it'll just get whatever error the server returns for an unrecognized
+method. This will first show up as unexplained new failures in P0-06/P0-07 Class A/B census
+runs and in P1-08's first-verdict target server, well before anyone thinks to check the spec
+revision. Recommend a follow-up task (not created here, since O-01 is check-and-report only):
+teach discovery to attempt `server/discover` when `initialize` gets no response, and record
+which path succeeded as provenance, mirroring the Stage 2 bare-host-vs-containerized
+provenance pattern already used in the Phase 0 staging note.
+
+**Tool annotations themselves (the four this project verifies): unchanged.** Confirmed
+directly against `ToolAnnotations` in the same draft `schema.ts` (lines ~1899–1939, GitHub
+`main`, checked today): `readOnlyHint` (default `false`), `destructiveHint` (default `true`,
+"meaningful only when `readOnlyHint == false`"), `idempotentHint` (default `false`, same
+caveat), `openWorldHint` (default `true`) — names, semantics, and defaults are byte-identical
+to design.md §1's table and to the `2025-11-25` schema. One low-quality secondary source
+(an SEO content site, not cited further here) implied `destructiveHint`'s default might have
+moved to `false`; checked directly against the authoritative schema and that is false — not
+propagating it. No client-requirement changes found either. design.md §1's warning ("verify
+against the current spec revision before implementation") is satisfied for today; re-check
+after `2026-07-28` actually ships and again before P1-07 (`readOnlyHint` verdict engine) is
+implemented for real.
+
+**IG and SEP status.** [Tool Annotations Interest Group charter](https://modelcontextprotocol.io/community/interest-groups/tool-annotations)
+is real and active, chartered 2026-04-20. Facilitators: Sam Morrow (GitHub), Robert Reichel
+(OpenAI); participants from Microsoft, Cloudflare, GitHub, Nordstrom. Meeting cadence is
+listed as "TBD" — no public schedule or minutes exist to check; that part of this task is
+genuinely unknowable via search, not being guessed at. Of the five SEPs architecture.md §11
+counted as open in March 2026 (SEP-1913, SEP-1984, SEP-1561 `unsafeOutputHint`, SEP-1560
+`secretHint`, SEP-1487 `trustedHint`), three are now **closed** — checked live via
+`gh api repos/modelcontextprotocol/modelcontextprotocol/issues/{1561,1560,1487}`, all
+`"state":"closed"`, each closed by a maintainer as "dormant per SEP guidelines" after ~90
+days of inactivity (automated bot reminder, no sponsor, then closure), not merged or accepted
+into the spec. The other two remain open and undrafted-into-spec (`gh api .../pulls/{1913,1984}`,
+both `"state":"open"`, `"merged":false`): SEP-1913 "Trust and Sensitivity Annotations" and
+SEP-1984 "Comprehensive Tool Annotations for Enhanced Governance and UX" are now the IG's
+flagship proposals, per its charter's own "Active SEPs Under Discussion" table, alongside two
+newer, annotation-adjacent-but-not-hint proposals not in architecture.md's original five:
+SEP-1862 (Tool Resolution / preflight checks) and SEP-2417 (Model Preferences for Tools). Net
+effect: the field of proposals narrowed from three single-purpose hint additions plus two
+broad ones, down to the two broad ones — nothing has shipped, and none of it touches the four
+existing annotations this project verifies. The charter's own open-questions list still
+explicitly asks "should runtime annotations... be added to the protocol?", confirming
+architecture.md's "actively debating runtime evaluation" is still accurate today, unresolved
+either way.
+
 ### O-02 Prior-art re-survey before publication
 
 **Exit:** Re-run before each publishable milestone (P0-07, P2-10, P5-04).
