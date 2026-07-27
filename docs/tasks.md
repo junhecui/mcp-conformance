@@ -378,6 +378,16 @@ prevent.
 
 **Depends on:** —
 **Exit:** ADR-008 merged defining `user_state` / `server_internal` / `ephemeral`.
+**Status:** Done — [ADR-008](adr/008-path-taxonomy.md). Rules are versioned glob lists in
+`rulesets/`, not Rust code (P1-06's constraint, applied here). Default is `user_state`
+(the conservative direction — misclassifying something as user state makes a tool look
+*less* read-only than it is, never more, mirroring `unverifiable` over false `holds`).
+Both allowlists (`ephemeral`: `/tmp/**`, lockfiles, PID files, sockets; `server_internal`:
+XDG-style cache/config/state dirs, `__pycache__`, npm's cache layout) are seeded from
+external naming conventions rather than invented, per ADR-003's discipline that an
+unobserved pattern is a guess, not a finding. Explicitly left coarse and empirically
+revisable by P2-10, and explicitly leaves room for the P2-05 world provisioner to override
+the default classification for bespoke fixtures without specifying that interface yet.
 
 architecture.md §12 item 2 — **this blocks ruleset v1.** §4.3 recommends emitting the verdict
 against `user_state` while reporting the other two, so critics have something to argue with
