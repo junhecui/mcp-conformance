@@ -2,4 +2,6 @@
 //!
 //! **Must not:** Touch behavioural evidence.
 //!
-//! Contract: [architecture.md §3.1]. Placeholder — see docs/tasks.md.
+//! Contract: [architecture.md §3.1].
+
+pub mod coverage;

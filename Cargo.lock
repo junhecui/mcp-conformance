@@ -70,6 +70,8 @@ version = "0.1.0"
 dependencies = [
  "datamodel",
  "discovery",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

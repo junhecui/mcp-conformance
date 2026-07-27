@@ -330,10 +330,23 @@ architecture.md §12 item 3 — the Class A/B ratio gates how ambitious Phase 5 
 
 **Depends on:** P0-02
 **Exit:** Per annotation, per tool, per server: `explicit` / `defaulted` / `absent`.
+**Status:** Done — `crates/census::coverage`. `Defaulted` (the tool's `annotations` object
+exists but omits this key) and `Absent` (no `annotations` object at all) are kept as
+separate buckets rather than collapsed into one "not set" — both reach the same spec
+default from a client's point of view, but they're different findings for design.md's open
+question 1 ("mismatch" vs. "absence"). Per-server and corpus-wide rollup are the same
+`tally()` function applied to different-sized input slices — a tally has no notion of a
+server boundary, only the caller's choice of which tools to include does, so a second
+rollup function would have been pure duplication. 6 tests, including one that proves the
+corpus-wide claim directly: tallying two servers separately and tallying their concatenated
+tools together produce the same combined counts.
 
-- [ ] Distinguish explicitly-declared from spec-defaulted from wholly absent
-- [ ] Must not touch behavioural evidence
-- [ ] Roll up to per-server and corpus-wide
+- [x] Distinguish explicitly-declared from spec-defaulted from wholly absent
+- [x] Must not touch behavioural evidence — operates only on the `tools/list` response's
+      `annotations` objects; no dependency on `sandbox`, `observe`, or `store` anywhere in
+      this module
+- [x] Roll up to per-server and corpus-wide — one `tally()` function, scope is just which
+      tools you pass it
 
 ### P0-06 Seed corpus run — 100 servers
 
