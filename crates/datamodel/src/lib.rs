@@ -46,6 +46,116 @@ pub enum Oracle {
     ProtocolProbe,
 }
 
+impl Oracle {
+    /// The exact text F-06's `VERDICT.oracle` `CHECK` constraint accepts
+    /// (`crates/store/migrations/0001_initial_schema.sql`). Kept here, next to the enum
+    /// this constraint mirrors, rather than duplicated as a string literal at every call
+    /// site that needs to write or read one.
+    #[must_use]
+    pub const fn as_db_str(self) -> &'static str {
+        match self {
+            Self::KernelChangeset => "kernel_changeset",
+            Self::ProtocolProbe => "protocol_probe",
+        }
+    }
+
+    /// The inverse of [`Self::as_db_str`], for reading a stored verdict back out.
+    #[must_use]
+    pub fn from_db_str(s: &str) -> Option<Self> {
+        match s {
+            "kernel_changeset" => Some(Self::KernelChangeset),
+            "protocol_probe" => Some(Self::ProtocolProbe),
+            _ => None,
+        }
+    }
+}
+
+impl core::fmt::Display for Oracle {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.as_db_str())
+    }
+}
+
+impl Outcome {
+    /// The exact text F-06's `VERDICT.outcome` `CHECK` constraint accepts.
+    #[must_use]
+    pub const fn as_db_str(self) -> &'static str {
+        match self {
+            Self::Holds => "holds",
+            Self::Violated => "violated",
+            Self::Unverifiable => "unverifiable",
+        }
+    }
+
+    /// The inverse of [`Self::as_db_str`].
+    #[must_use]
+    pub fn from_db_str(s: &str) -> Option<Self> {
+        match s {
+            "holds" => Some(Self::Holds),
+            "violated" => Some(Self::Violated),
+            "unverifiable" => Some(Self::Unverifiable),
+            _ => None,
+        }
+    }
+}
+
+impl core::fmt::Display for Outcome {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.as_db_str())
+    }
+}
+
+/// Which of the four MCP behavioural annotations a verdict assesses.
+///
+/// Shared vocabulary for the same reason [`Oracle`] and [`Outcome`] are: `VERDICT.annotation`
+/// (architecture.md §6) has a closed `CHECK` set, and every producer or consumer of a
+/// verdict — the eventual Class A verdict engine, the Track B protocol-probe oracle, the
+/// coverage aggregator's cousins — should name it the same way rather than each owning a
+/// parallel string literal that can drift.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Annotation {
+    /// `readOnlyHint`.
+    ReadOnlyHint,
+    /// `destructiveHint`.
+    DestructiveHint,
+    /// `idempotentHint`.
+    IdempotentHint,
+    /// `openWorldHint`.
+    OpenWorldHint,
+}
+
+impl Annotation {
+    /// The exact text F-06's `VERDICT.annotation` `CHECK` constraint accepts — the MCP
+    /// wire name, not a Rust-cased variant.
+    #[must_use]
+    pub const fn as_db_str(self) -> &'static str {
+        match self {
+            Self::ReadOnlyHint => "readOnlyHint",
+            Self::DestructiveHint => "destructiveHint",
+            Self::IdempotentHint => "idempotentHint",
+            Self::OpenWorldHint => "openWorldHint",
+        }
+    }
+
+    /// The inverse of [`Self::as_db_str`].
+    #[must_use]
+    pub fn from_db_str(s: &str) -> Option<Self> {
+        match s {
+            "readOnlyHint" => Some(Self::ReadOnlyHint),
+            "destructiveHint" => Some(Self::DestructiveHint),
+            "idempotentHint" => Some(Self::IdempotentHint),
+            "openWorldHint" => Some(Self::OpenWorldHint),
+            _ => None,
+        }
+    }
+}
+
+impl core::fmt::Display for Annotation {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.as_db_str())
+    }
+}
+
 /// Whether a server can be contained, decided at intake (ADR-002).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ContainabilityClass {

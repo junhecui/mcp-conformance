@@ -10,6 +10,7 @@
 //!
 //! Contract: [architecture.md §3.1].
 
+pub mod aggregate;
 pub mod db;
 
 use std::fs;

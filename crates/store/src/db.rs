@@ -61,6 +61,224 @@ fn migrate(conn: &mut Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
+// ---- Typed row insertion (B-02) ----
+//
+// Until this addition, every row this schema has ever received came from a `#[cfg(test)]`
+// module writing raw SQL directly (see below). That was adequate while F-06's only job was
+// proving the schema itself — foreign keys enforced, `CHECK`s firing, immutability holding.
+// B-02's job is different: get a *real* verdict, produced by a real oracle (Track B's
+// `probe` crate today; the Class A kernel-changeset path once P1-07 lands), into this
+// table correctly. Hand-building `INSERT` strings at every call site that needs one is how
+// a column silently drifts from what the `CHECK` constraints actually accept; these
+// functions are the one place that mapping is allowed to live, using
+// `datamodel::{Annotation, Oracle, Outcome}`'s `Display` impls so the TEXT written here can
+// never fall out of sync with the enum it came from.
+
+/// A `SERVER` row (architecture.md §6).
+pub struct ServerRecord<'a> {
+    /// Primary key.
+    pub server_id: &'a str,
+    /// Where this server was reached (a URL for Class B; an install/launch descriptor for
+    /// Class A).
+    pub source_uri: &'a str,
+    /// `A`, `B`, or `Unclassifiable` (P0-04).
+    pub containability_class: datamodel::ContainabilityClass,
+    /// The MCP protocol revision negotiated during discovery.
+    pub spec_revision: &'a str,
+}
+
+fn containability_class_db_str(class: datamodel::ContainabilityClass) -> &'static str {
+    match class {
+        datamodel::ContainabilityClass::A => "A",
+        datamodel::ContainabilityClass::B => "B",
+        datamodel::ContainabilityClass::Unclassifiable => "unclassifiable",
+    }
+}
+
+/// Insert one `SERVER` row.
+///
+/// # Errors
+///
+/// Propagates any `rusqlite` error, including a `CHECK` violation on
+/// `containability_class` (which cannot actually happen here, since
+/// [`containability_class_db_str`] only ever emits one of the three values the constraint
+/// accepts) or a duplicate `server_id`.
+pub fn insert_server(conn: &Connection, record: &ServerRecord<'_>) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO server (server_id, source_uri, containability_class, spec_revision)
+         VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![
+            record.server_id,
+            record.source_uri,
+            containability_class_db_str(record.containability_class),
+            record.spec_revision,
+        ],
+    )?;
+    Ok(())
+}
+
+/// A `TOOL_SNAPSHOT` row (architecture.md §6) — one discovered-and-pinned tool.
+pub struct ToolSnapshotRecord<'a> {
+    /// Primary key.
+    pub snapshot_id: &'a str,
+    /// FK to `SERVER`.
+    pub server_id: &'a str,
+    /// The tool's name, as `tools/list` returned it.
+    pub tool_name: &'a str,
+    /// P0-02's metadata pin, rendered as its hex `Display` form.
+    pub metadata_pin: &'a str,
+    /// The tool's raw `annotations` object, or `"null"` if it had none — must be valid
+    /// JSON per the schema's `json_valid` `CHECK`.
+    pub annotations_raw: &'a str,
+    /// Whether each annotation was explicitly declared (`true`) or defaulted/absent
+    /// (`false`) — P0-05's coverage distinction collapsed to the single boolean this
+    /// column shape wants; `Coverage::Defaulted` and `Coverage::Absent` are both `false`
+    /// here; the two-way split lives in `census::coverage`, not in this table.
+    pub readonly_explicit: bool,
+    /// See `readonly_explicit`.
+    pub destructive_explicit: bool,
+    /// See `readonly_explicit`.
+    pub idempotent_explicit: bool,
+    /// See `readonly_explicit`.
+    pub openworld_explicit: bool,
+    /// When this snapshot was observed, as an ISO-8601-ish string — this schema stores
+    /// timestamps as `TEXT`, matching every other `_at` column.
+    pub observed_at: &'a str,
+}
+
+/// Insert one `TOOL_SNAPSHOT` row.
+///
+/// # Errors
+///
+/// Propagates any `rusqlite` error, including a foreign-key violation if `server_id` does
+/// not reference an existing `SERVER` row, or a `CHECK` violation if `annotations_raw` is
+/// not valid JSON.
+pub fn insert_tool_snapshot(conn: &Connection, record: &ToolSnapshotRecord<'_>) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO tool_snapshot
+         (snapshot_id, server_id, tool_name, metadata_pin, annotations_raw,
+          readonly_explicit, destructive_explicit, idempotent_explicit, openworld_explicit,
+          observed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        rusqlite::params![
+            record.snapshot_id,
+            record.server_id,
+            record.tool_name,
+            record.metadata_pin,
+            record.annotations_raw,
+            record.readonly_explicit,
+            record.destructive_explicit,
+            record.idempotent_explicit,
+            record.openworld_explicit,
+            record.observed_at,
+        ],
+    )?;
+    Ok(())
+}
+
+/// A `VERDICT` row (architecture.md §6). `oracle` is mandatory and typed
+/// ([`datamodel::Oracle`]) rather than a caller-supplied string — the one property B-02
+/// exists to guarantee: every verdict this function can write carries a real oracle value,
+/// never an empty or forgotten one.
+pub struct VerdictRecord<'a> {
+    /// Primary key.
+    pub verdict_id: &'a str,
+    /// FK to `TOOL_SNAPSHOT` — never `(server_id, tool_name)` (architecture.md §6
+    /// invariant 1).
+    pub snapshot_id: &'a str,
+    /// Which of the four annotations this verdict assesses.
+    pub annotation: datamodel::Annotation,
+    /// The declared value this verdict is checking, as text (`"true"`/`"false"` for the
+    /// boolean annotations) — kept as the caller's own rendering rather than re-deriving
+    /// it, since "declared" already means different things across the deterministic and
+    /// protocol-probe paths (explicit vs. effective-with-default).
+    pub declared: &'a str,
+    /// Holds, violated, or unverifiable.
+    pub outcome: datamodel::Outcome,
+    /// Mandatory whenever `outcome` is [`datamodel::Outcome::Unverifiable`] — the schema's
+    /// own `CHECK` enforces this too (F-06), so a caller that gets it wrong fails loudly
+    /// rather than silently.
+    pub reason_code: Option<&'a str>,
+    /// Which observation surface produced this verdict. B-02's whole point.
+    pub oracle: datamodel::Oracle,
+    /// FK to `RULESET`, when a normalisation ruleset was involved. `None` for the
+    /// protocol-probe oracle, which has no changeset to normalise.
+    pub ruleset_version: Option<&'a str>,
+    /// The MCP protocol revision this verdict was derived under.
+    pub protocol_version: &'a str,
+    /// When this verdict was derived.
+    pub derived_at: &'a str,
+}
+
+/// Insert one `VERDICT` row.
+///
+/// # Errors
+///
+/// Propagates any `rusqlite` error, including the `CHECK` that rejects an `unverifiable`
+/// outcome with no `reason_code` (architecture.md §6 invariant 3) or a foreign-key
+/// violation on `snapshot_id`.
+pub fn insert_verdict(conn: &Connection, record: &VerdictRecord<'_>) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO verdict
+         (verdict_id, snapshot_id, annotation, declared, outcome, reason_code, oracle,
+          ruleset_version, protocol_version, derived_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        rusqlite::params![
+            record.verdict_id,
+            record.snapshot_id,
+            record.annotation.as_db_str(),
+            record.declared,
+            record.outcome.as_db_str(),
+            record.reason_code,
+            record.oracle.as_db_str(),
+            record.ruleset_version,
+            record.protocol_version,
+            record.derived_at,
+        ],
+    )?;
+    Ok(())
+}
+
+/// One verdict row read back out, with `annotation`/`outcome`/`oracle` parsed back into
+/// their typed form via each enum's `from_db_str` — the inverse of [`insert_verdict`]'s
+/// `as_db_str` writes. Feeds [`crate::aggregate`] (B-03).
+pub struct VerdictRow {
+    /// Which annotation this verdict assesses.
+    pub annotation: datamodel::Annotation,
+    /// Which oracle produced it.
+    pub oracle: datamodel::Oracle,
+    /// The outcome.
+    pub outcome: datamodel::Outcome,
+}
+
+/// Read back every `VERDICT` row currently stored, for reporting (B-03).
+///
+/// # Errors
+///
+/// Propagates any `rusqlite` error. A stored value that doesn't round-trip through the
+/// corresponding `from_db_str` (which should be impossible — [`insert_verdict`] is the only
+/// writer, and it only ever writes `as_db_str` output) surfaces as
+/// [`rusqlite::Error::InvalidColumnType`] rather than a panic or a silently-dropped row.
+pub fn list_verdicts(conn: &Connection) -> rusqlite::Result<Vec<VerdictRow>> {
+    let mut stmt = conn.prepare("SELECT annotation, oracle, outcome FROM verdict")?;
+    stmt.query_map([], |row| {
+        let annotation_str: String = row.get(0)?;
+        let oracle_str: String = row.get(1)?;
+        let outcome_str: String = row.get(2)?;
+        let annotation = datamodel::Annotation::from_db_str(&annotation_str).ok_or_else(|| {
+            rusqlite::Error::InvalidColumnType(0, "annotation".into(), rusqlite::types::Type::Text)
+        })?;
+        let oracle = datamodel::Oracle::from_db_str(&oracle_str).ok_or_else(|| {
+            rusqlite::Error::InvalidColumnType(1, "oracle".into(), rusqlite::types::Type::Text)
+        })?;
+        let outcome = datamodel::Outcome::from_db_str(&outcome_str).ok_or_else(|| {
+            rusqlite::Error::InvalidColumnType(2, "outcome".into(), rusqlite::types::Type::Text)
+        })?;
+        Ok(VerdictRow { annotation, oracle, outcome })
+    })?
+    .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,5 +498,148 @@ mod tests {
             per_server_without_server.is_err(),
             "per_server fixture must carry a server_id"
         );
+    }
+
+    /// B-02's exit criterion, taken literally: build a real chain through the typed
+    /// helpers (not raw SQL) and confirm a verdict written with `Oracle::ProtocolProbe`
+    /// round-trips as `protocol_probe`, distinct from a `KernelChangeset` verdict on a
+    /// sibling snapshot.
+    #[test]
+    fn typed_insert_helpers_round_trip_the_oracle_correctly() {
+        let conn = open_and_migrate(":memory:").expect("open_and_migrate");
+
+        insert_server(
+            &conn,
+            &ServerRecord {
+                server_id: "srv-b",
+                source_uri: "https://example.com/mcp",
+                containability_class: datamodel::ContainabilityClass::B,
+                spec_revision: "2025-11-25",
+            },
+        )
+        .expect("insert Class B server");
+
+        insert_tool_snapshot(
+            &conn,
+            &ToolSnapshotRecord {
+                snapshot_id: "snap-b",
+                server_id: "srv-b",
+                tool_name: "get_status",
+                metadata_pin: "deadbeef",
+                annotations_raw: r#"{"readOnlyHint":true}"#,
+                readonly_explicit: true,
+                destructive_explicit: false,
+                idempotent_explicit: false,
+                openworld_explicit: false,
+                observed_at: "2026-07-27T00:00:00Z",
+            },
+        )
+        .expect("insert tool snapshot");
+
+        insert_verdict(
+            &conn,
+            &VerdictRecord {
+                verdict_id: "v-probe",
+                snapshot_id: "snap-b",
+                annotation: datamodel::Annotation::ReadOnlyHint,
+                declared: "true",
+                outcome: datamodel::Outcome::Holds,
+                reason_code: None,
+                oracle: datamodel::Oracle::ProtocolProbe,
+                ruleset_version: None,
+                protocol_version: "2025-11-25",
+                derived_at: "2026-07-27T00:00:01Z",
+            },
+        )
+        .expect("insert protocol-probe verdict");
+
+        // A sibling Class A verdict on its own snapshot, tagged with the other oracle —
+        // proves the two never collapse into one value on read-back.
+        insert_server(
+            &conn,
+            &ServerRecord {
+                server_id: "srv-a",
+                source_uri: "stdio://local-tool",
+                containability_class: datamodel::ContainabilityClass::A,
+                spec_revision: "2025-11-25",
+            },
+        )
+        .expect("insert Class A server");
+        insert_tool_snapshot(
+            &conn,
+            &ToolSnapshotRecord {
+                snapshot_id: "snap-a",
+                server_id: "srv-a",
+                tool_name: "read_file",
+                metadata_pin: "cafebabe",
+                annotations_raw: "null",
+                readonly_explicit: false,
+                destructive_explicit: false,
+                idempotent_explicit: false,
+                openworld_explicit: false,
+                observed_at: "2026-07-27T00:00:00Z",
+            },
+        )
+        .expect("insert tool snapshot");
+        insert_verdict(
+            &conn,
+            &VerdictRecord {
+                verdict_id: "v-kernel",
+                snapshot_id: "snap-a",
+                annotation: datamodel::Annotation::ReadOnlyHint,
+                declared: "false",
+                outcome: datamodel::Outcome::Violated,
+                reason_code: None,
+                oracle: datamodel::Oracle::KernelChangeset,
+                // `ruleset_version` is an FK to `RULESET`; `None` here since this test's
+                // focus is the oracle round-trip, not exercising the ruleset table too.
+                ruleset_version: None,
+                protocol_version: "2025-11-25",
+                derived_at: "2026-07-27T00:00:01Z",
+            },
+        )
+        .expect("insert kernel-changeset verdict");
+
+        let rows = list_verdicts(&conn).expect("list_verdicts");
+        assert_eq!(rows.len(), 2);
+        let probe_row = rows.iter().find(|r| r.oracle == datamodel::Oracle::ProtocolProbe).expect("probe row present");
+        assert_eq!(probe_row.annotation, datamodel::Annotation::ReadOnlyHint);
+        assert_eq!(probe_row.outcome, datamodel::Outcome::Holds);
+        let kernel_row = rows.iter().find(|r| r.oracle == datamodel::Oracle::KernelChangeset).expect("kernel row present");
+        assert_eq!(kernel_row.outcome, datamodel::Outcome::Violated);
+
+        // And directly against the raw column, since the whole point is the TEXT written
+        // to disk, not just what comes back through the typed reader.
+        let raw_oracle: String = conn
+            .query_row("SELECT oracle FROM verdict WHERE verdict_id = 'v-probe'", [], |r| r.get(0))
+            .expect("read raw oracle column");
+        assert_eq!(raw_oracle, "protocol_probe");
+    }
+
+    /// [`insert_verdict`] must not bypass the schema's own invariant-3 `CHECK`
+    /// (`unverifiable` requires a `reason_code`) just because it goes through a typed
+    /// helper instead of raw SQL.
+    #[test]
+    fn insert_verdict_still_enforces_the_unverifiable_reason_code_check() {
+        let conn = open_and_migrate(":memory:").expect("open_and_migrate");
+        seed_run(&conn);
+
+        let err = insert_verdict(
+            &conn,
+            &VerdictRecord {
+                verdict_id: "v-bad",
+                snapshot_id: "snap-1",
+                annotation: datamodel::Annotation::IdempotentHint,
+                declared: "false",
+                outcome: datamodel::Outcome::Unverifiable,
+                reason_code: None,
+                oracle: datamodel::Oracle::ProtocolProbe,
+                ruleset_version: None,
+                protocol_version: "2025-11-25",
+                derived_at: "now",
+            },
+        )
+        .expect_err("unverifiable without a reason_code must still violate the CHECK");
+        assert!(format!("{err}").to_lowercase().contains("check"));
     }
 }

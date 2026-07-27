@@ -7,7 +7,7 @@
 //! Contract: [architecture.md §3.1].
 
 mod client;
-mod jsonrpc;
+pub mod jsonrpc;
 mod pin;
 mod transport;
 

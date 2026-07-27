@@ -535,22 +535,192 @@ architecture.md §2.
 **Depends on:** P0-04
 **Exit:** probe → invoke → probe decides `readOnlyHint` for a Class B server that exposes
 resources or state-reflecting read-only tools.
+**Status:** Done — new crate `crates/probe` (not in architecture.md §8's original list;
+added the same way `datamodel` was added beyond §8 in F-02, noted there for the same
+reason). Surface is MCP **resources** only (`resources/list` + `resources/read`) — the
+"state-reflecting read-only tool" half of architecture.md §2's exception is explicitly out
+of scope for this pass, since using a tool-as-probe would need real semantic argument
+synthesis (P2-06, unbuilt) rather than B-01's own placeholder-only
+`probe::synthesize_arguments`. A resources/read snapshot is taken before and after
+invocation and hashed (`probe::snapshot`); `probe::protocol::assess_read_only` /
+`assess_idempotent` are pure decision functions over two digests, unit-tested against the
+full truth table (holds/violated/unverifiable × declared true/false) with no network
+involved. `probe::ProbeClient` (`crates/probe/src/client.rs`) is a second, separate
+JSON-RPC-over-HTTP client from `discovery::DiscoveryClient` — deliberately: P0-01's
+contract is "must not call any tool," enforced structurally by never exposing a
+method-taking call, and this crate's entire job is to call one. Reuses
+`discovery::jsonrpc::encode_request`/`encode_notification` (promoted from `pub(crate)` to
+`pub` for exactly this) rather than duplicating correct JSON-RPC framing, but does not and
+cannot reuse `discovery::transport` (stays `pub(crate)` to `discovery`, untouched). 45 new
+unit/integration tests across `probe`'s five modules, including true end-to-end tests
+against a real `TcpListener`-based fake HTTP server (same technique `discovery`'s own HTTP
+tests and `intake::registry`'s tests already use) that drive `probe_read_only_hint`/
+`probe_idempotent_hint` through every branch of the decision table.
 
-- [ ] Identify servers with a usable probe surface; the rest stay `unverifiable`
-- [ ] Extend to `idempotentHint` where the probe surface supports it
+- [x] Identify servers with a usable probe surface; the rest stay `unverifiable` —
+      `probe::snapshot::discover_surface` treats a `resources/list` JSON-RPC "method not
+      found" (-32601) or an empty list as `ProbeSurface::None`, propagating any other
+      failure as a real error rather than silently guessing. A run that never reaches
+      resources at all, and one whose invocation itself fails (placeholder arguments
+      rejected — design.md §8's "semantic argument validity" limitation, landing here as a
+      concrete `invocation_failed` reason code), both degrade to `Unverifiable` with a
+      distinct reason code, never a forced verdict.
+- [x] Extend to `idempotentHint` where the probe surface supports it —
+      `probe::probe_idempotent_hint` runs invoke → probe (`s1`) → invoke again with
+      identical synthesised arguments → probe (`s2`), and `assess_idempotent` decides from
+      `s1` vs. `s2` alone (architecture.md §4.2's `D1`/`D2` shape, without the noise-floor
+      or restart arms — see the caveat below on why not).
+
+**Validated against live data**, not just synthetic tests: `cargo xtask probe-stage1 500`
+against 500 live Class B servers sampled from the registry by the same stable-hash
+methodology P0-06/P0-07 established (so the sample is comparable to, not a different
+methodology from, the census data). 128/500 discovered successfully (25.6% — consistent
+with P0-07's 25.0% over a similarly-sized Class B sample, cross-validating that this sample
+isn't systematically different from the census one). Of those, 127 had ≥1 declared tool and
+were probed (the 128th hit a genuine third-party bug: a `tools/list` response whose
+`result` was valid JSON-RPC but didn't actually contain a `tools` array — found by this run
+crashing the whole sweep the first time, since `discovery::pin_tools` fails hard on that
+shape and the script originally propagated it with `?`; fixed to record it as a
+`pin_failed` discovery-failure category and move on, per the "ASSUMED HOSTILE" trust model
+— a malformed-but-not-erroring response is exactly the kind of thing that model predicts,
+and one bad server must never abort a 500-server sweep).
+
+Exactly one probe protocol per tool, exactly one tool per server (the first one declared),
+to bound both third-party request volume and the number of real invocations — see the
+crate's own doc comment for why that bound exists (this is the one crate in the workspace
+whose job is to invoke tools against live infrastructure this project doesn't control).
+254 probe protocols run (127 servers × 2 protocols). Of those, 207 produced a verdict; 47
+hit a hard `ProbeError` mid-run (24 for `readOnlyHint`, 23 for `idempotentHint` — mostly a
+`401`/`429`/`400` arriving between the surface-discovery call and the invocation, or a
+malformed non-JSON-RPC response to a call that should have succeeded) and produced no
+verdict at all, logged as a failure rather than coerced into one. Every one of the 207
+verdicts carries `oracle = protocol_probe` (checked directly against the database, not just
+trusted from the code — see B-02).
+
+Outcome breakdown (`results/conformance/track_b_protocol_probe.json`,
+`results/conformance/track_b_probe.sqlite3`):
+
+| annotation | holds | unverifiable | violated |
+|---|---|---|---|
+| `readOnlyHint` | 5 | 96 | 2 |
+| `idempotentHint` | 7 | 96 | 1 |
+
+The dominant outcome is `unverifiable` (96/103 and 96/104) — expected and correct, not a
+weak result: most Class B servers either don't support `resources/list` at all, or support
+it but expose nothing the probe can use to decide a `false`-declared tool's behaviour
+(§ "probe_surface_incomplete" in `probe::protocol`). A harness that mostly returned `holds`
+here would be the "worst available failure mode" design.md §8 warns about, one layer up.
+
+**Hand-verified a sample of the decisive (`holds`/`violated`) outcomes** — 8 servers total,
+checked directly against the live server outside the harness (raw `curl` against
+`initialize` + `resources/list`), not just re-read from the database:
+
+- `racecalendar.app` (`get_f1_season_schedule`, declared `true`/`true`) and
+  `proflightsearch.com` (`get_airport_delay_status`, declared `true`/`true`) both `holds`
+  for both annotations — plausible on its face (a schedule/status lookup with no
+  observable side effect) and the kind of case this oracle is supposed to catch cleanly.
+- `api.mnemom.ai` (`claim_agent`, declared `false`/`false`) — `holds` for both, i.e. state
+  *did* change — consistent with a tool literally named "claim" not being read-only.
+- **A real, useful negative finding**: `mcp.pricetik.com`'s `pricetik_search` (declared
+  `readOnlyHint: true`) came back `violated`. Manually inspecting the server's
+  `resources/list` shows its resources are `ui://pricetik/deal-grid` etc. —
+  MCP-UI *render templates* (`mimeType: text/html;profile=mcp-app`), not durable state.
+  These very plausibly re-render with each tool's own output baked in, meaning a "search"
+  tool changing the rendered deal-grid content is expected UI behaviour, not evidence
+  against `readOnlyHint`. **This is a real limitation of B-01 as built, found by hand
+  -verification rather than assumed**: the probe surface is "any listed resource,"
+  undifferentiated between state-reflecting resources and UI-render resources, and the
+  latter is close to guaranteed to look mutated after any successful tool call regardless
+  of true idempotence or read-only-ness. Recorded here rather than quietly fixed, in the
+  same spirit as design.md §8's other named limitations (external state invisibility,
+  normalisation sensitivity, the caching confound) — a candidate refinement for whoever
+  picks up B-01 next is restricting the probe surface to resources whose `mimeType` isn't
+  a UI-render type, or requiring a resource to be read-stable across two immediate reads
+  with no intervening call before trusting it as a probe surface at all.
+- `api.isittrustready.ai`'s `get_agent` (declared `readOnlyHint: true`,
+  `idempotentHint: true`) also came back `violated` for both. Its resources
+  (`mnemom://catalog/values`, `mnemom://rubric/reputation`, `mnemom://jwks`, ...) read as
+  genuine reference/state data, not render templates — unlike the pricetik case, this one
+  does not have an obvious methodological explanation and is left as a plausible real
+  finding, not confirmed further (a live trust-scoring API updating something after an
+  agent lookup is not an implausible mechanism). Flagged here as *not conclusively
+  resolved* rather than asserted either way — an example of the class of finding
+  disclosure (P5-03) would eventually need to route to the server's maintainer.
+
+**Caveats, stated plainly:** (1) no noise-floor arm (ADR-003's control) and no
+restart-interleaved caching check — architecture.md §4.2's full multi-arm protocol assumes
+independent runs from a byte-identical base, which a live third party offers neither of;
+Track B's protocol is deliberately the simpler two-/three-probe version, and the
+pricetik/isittrustready findings above are exactly the kind of ambiguity that gap leaves
+open. (2) One tool probed per server, not every tool — a scale/politeness bound, not a
+claim that the untested tools on a probed server behave the same way. (3) Sample size is
+127 probed servers out of an ecosystem of thousands; treat the outcome table as indicative,
+not a headline mismatch rate the way P0-07's census numbers are.
 
 ### B-02 Oracle tagging
 
 **Depends on:** B-01, F-06
 **Exit:** Every verdict carries `oracle` = `kernel_changeset` or `protocol_probe`.
+**Status:** Done — the `VERDICT.oracle` column and its `CHECK` constraint already existed
+(F-06); this task was entirely about populating it correctly, per the task brief. Added
+`crates/store/src/db.rs::{ServerRecord, ToolSnapshotRecord, VerdictRecord}` plus
+`insert_server`/`insert_tool_snapshot`/`insert_verdict`/`list_verdicts` — the first typed
+row-insertion API this schema has ever had (every prior row, in every F-06 test, came from
+hand-written raw SQL). `datamodel::{Oracle, Outcome, Annotation}` each gained
+`as_db_str`/`from_db_str`/`Display`, so the exact TEXT written for `oracle` can never drift
+from what `VERDICT`'s `CHECK` constraint accepts — the mapping lives in one place
+(`datamodel`), not re-derived at every call site. 2 new `store::db` tests, including one
+that inserts a `protocol_probe` verdict and a sibling `kernel_changeset` verdict on two
+different snapshots and confirms both round-trip correctly and distinctly — the literal
+exit criterion, exercised through the typed API, not just asserted against a raw string.
+
+**Validated against the same 500-server run as B-01**: queried
+`results/conformance/track_b_probe.sqlite3` directly (`SELECT DISTINCT oracle FROM
+verdict`) — all 207 real verdicts this run produced carry `oracle = 'protocol_probe'`, with
+no other value present. No Class A (`kernel_changeset`) verdicts exist yet in this database
+or anywhere in the codebase — P1-07 (the Class A verdict engine) is still `todo!()`,
+blocked on ADR-008/ADR-009 per its own status — so B-02's "every verdict carries an oracle"
+claim is currently proven for the one oracle that exists in practice; the `kernel_changeset`
+side of the `CHECK` constraint and of `insert_verdict`'s type signature is exercised only by
+the `store::db` unit test referenced above, not yet by a real Class A run. That gap closes
+naturally when P1-08 lands.
 
 ### B-03 ⚑ Cross-oracle aggregation guard
 
 **Depends on:** B-02
 **Exit:** Any report that mixes oracles without separating them fails a test.
+**Status:** Done — `crates/store/src/aggregate.rs`. `aggregate()` is the only correct way
+to build a report from raw verdicts in this codebase: it groups strictly by
+`(annotation, oracle, outcome)`, so oracle is part of the grouping key by construction and
+there is no code path that could merge two oracles' counts. The actual guard,
+`verify_report_matches_records`, is independent of `aggregate()` on purpose — it takes an
+arbitrary reported row (`ReportRow`, with an `Option<Oracle>` specifically so it can
+represent the buggy shape a careless aggregator would produce) plus the raw source records,
+and rejects a row whose oracle is undisclosed or whose count doesn't match exactly the
+records sharing that one oracle.
 
-ADR-002: *"an easy invariant to state and an easy one to violate in a summary table."* Make
-it a test, not a habit.
+ADR-002: *"an easy invariant to state and an easy one to violate in a summary table."* Made
+literally a test, not a habit: `verify_report_matches_records_rejects_a_report_with_no_oracle_disclosed`
+and `verify_report_matches_records_rejects_a_pooled_count_mislabelled_under_one_oracle`
+(`crates/store/src/aggregate.rs`) each construct a deliberately mixed report — 5
+`kernel_changeset` + 3 `protocol_probe` verdicts pooled into one count of 8, once with no
+oracle disclosed at all and once mislabelled under `kernel_changeset` — and assert the
+guard rejects both, with the specific `AggregationError` naming exactly what's wrong. A
+third test (`verify_report_matches_records_accepts_aggregates_own_output`) proves the guard
+never rejects `aggregate()`'s own correct output — the guard has teeth in both directions,
+not just a rejection path with no corresponding acceptance path.
+
+**Dogfooded against the real B-01 data, not only synthetic records**: `probe-stage1`
+reads back all 207 verdicts this run wrote, converts them to `VerdictSummary` via
+`store::db::VerdictRow`'s `From` impl, aggregates them, and calls
+`verify_report_matches_records` on the result before the run is allowed to finish
+(`xtask/src/probe_stage1.rs`) — it passed, as it must, since every verdict this run ever
+produces is tagged `protocol_probe` by construction (`ProbeAssessment::ORACLE` is a `const`,
+not a per-call field). The interesting adversarial case — an actual report that *does* mix
+`kernel_changeset` and `protocol_probe` — can't be dogfooded yet for the same reason noted
+in B-02: no Class A verdicts exist in this codebase until P1-08 lands. The guard is proven
+against synthetic mixed data now and will get its first real mixed-oracle input the day a
+Class A run and a Class B run land in the same report.
 
 ---
 

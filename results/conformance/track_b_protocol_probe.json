@@ -1,0 +1,3556 @@
+{
+  "aggregate": [
+    {
+      "annotation": "idempotentHint",
+      "count": 7,
+      "oracle": "protocol_probe",
+      "outcome": "holds"
+    },
+    {
+      "annotation": "idempotentHint",
+      "count": 96,
+      "oracle": "protocol_probe",
+      "outcome": "unverifiable"
+    },
+    {
+      "annotation": "idempotentHint",
+      "count": 1,
+      "oracle": "protocol_probe",
+      "outcome": "violated"
+    },
+    {
+      "annotation": "readOnlyHint",
+      "count": 5,
+      "oracle": "protocol_probe",
+      "outcome": "holds"
+    },
+    {
+      "annotation": "readOnlyHint",
+      "count": 96,
+      "oracle": "protocol_probe",
+      "outcome": "unverifiable"
+    },
+    {
+      "annotation": "readOnlyHint",
+      "count": 2,
+      "oracle": "protocol_probe",
+      "outcome": "violated"
+    }
+  ],
+  "class_b_candidates_found": 500,
+  "discovery_attempted": 500,
+  "discovery_failure_categories": {
+    "pin_failed": 1,
+    "protocol": 160,
+    "transport": 212
+  },
+  "discovery_succeeded": 128,
+  "generated_at_unix": 1785141657,
+  "probe_protocols_run": 254,
+  "sample_size_requested": 500,
+  "servers": [
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "io.github.srotzin/hive-mcp-audit-readiness",
+      "outcome": "discovery_failed",
+      "url": "https://hive-mcp-audit-readiness.onrender.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "io: failed to lookup address information: nodename nor servname provided, or not known",
+      "name": "app.wishpool/thailand-payments-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://mcp-th.wishpool.app/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 501",
+      "name": "io.github.MarcinDudekDev/the-data-collector",
+      "outcome": "discovery_failed",
+      "url": "https://frog03-20494.wykr.es/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 500",
+      "name": "com.exoquery/mcp-server",
+      "outcome": "discovery_failed",
+      "url": "https://backend.exoquery.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.averta/mcp-gateway",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.averta.io/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "com.cyclingcoachai/cycling-coach-ai",
+      "outcome": "discovery_failed",
+      "url": "https://app.usecoachai.com/api/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "sh.sparkforge/sparkforge",
+      "outcome": "discovery_failed",
+      "url": "https://sparkforge.sh/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "com.walnai/website",
+      "outcome": "discovery_failed",
+      "url": "https://walnai.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "ai.solenium/netsuite-link",
+      "outcome": "discovery_failed",
+      "url": "https://netsuite.solenium.ai/api/v1/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pinalmdave/bookrails",
+      "outcome": "discovery_failed",
+      "url": "https://bookrails-api.azurewebsites.net/mcp/"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "pl.barwa/drukarnia",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.barwa.pl/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "io.github.siowweekoon/agent-companion",
+      "outcome": "discovery_failed",
+      "url": "https://sympodial-hazel-harvestless.ngrok-free.dev/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "live.alpic.staging.mcp-server-template-7b99436a/mcp-server-template",
+      "outcome": "discovery_failed",
+      "url": "https://mcp-server-template-7b99436a.staging.alpic.live"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/okx",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/okx/mcp"
+    },
+    {
+      "name": "online.x-402/mcp",
+      "outcome": "probed",
+      "probed_tool": "weather",
+      "tool_count": 75,
+      "url": "https://api.x-402.online/mcp"
+    },
+    {
+      "name": "shop.theothers/theothers",
+      "outcome": "probed",
+      "probed_tool": "search_products",
+      "tool_count": 5,
+      "url": "https://theothers.shop/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.Deep-Identity-Inc/agent-skill",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.deepidv.com/v1/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "response is not valid JSON-RPC: expected value at line 1 column 1",
+      "name": "bio.lnk/lnkbio",
+      "outcome": "discovery_failed",
+      "url": "https://lnk.bio/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/todoist",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/todoist/mcp"
+    },
+    {
+      "name": "io.github.IDTitanium/clippy",
+      "outcome": "probed",
+      "probed_tool": "create-room-tool",
+      "tool_count": 9,
+      "url": "https://useclippy.cc/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 405",
+      "name": "com.clauxel.agentmemorymcp/agentmemorymcp-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://agentmemorymcp.clauxel.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "io: failed to lookup address information: nodename nor servname provided, or not known",
+      "name": "io.github.Wxt-ai/support-followup-marker-identifier",
+      "outcome": "discovery_failed",
+      "url": "https://antibody-package-occasional-floppy.trycloudflare.com/mcp/support-followup-marker/upstream"
+    },
+    {
+      "name": "ai.agenticfabricationnetwork/ufp",
+      "outcome": "probed",
+      "probed_tool": "get_fabrication_quote",
+      "tool_count": 8,
+      "url": "https://agenticfabricationnetwork.ai/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "redirect failed",
+      "name": "com.artificialwit/mcp",
+      "outcome": "discovery_failed",
+      "url": "https://api.artificialwit.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "io.github.junct-bot/etherscan-api-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://etherscan-api.mcp.junct.dev/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/sec-regulations",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/sec-regulations/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.Taru0208/openfda-mcp-server",
+      "outcome": "discovery_failed",
+      "url": "https://aligned-kettledrum--openfda-mcp-server.apify.actor/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "io: invalid peer certificate: certificate not valid for name \"api.anotherai.dev\"; certificate is only valid for DnsName(\"*.azureedge.net\")",
+      "name": "dev.anotherai/anotherai",
+      "outcome": "discovery_failed",
+      "url": "https://api.anotherai.dev/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "com.mcpbundles/uk-environmental-intelligence",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.mcpbundles.com/bundle/uk-environmental-intelligence/"
+    },
+    {
+      "name": "io.github.OmarNassar1127/x402-vend",
+      "outcome": "probed",
+      "probed_tool": "read",
+      "tool_count": 11,
+      "url": "https://x402.omardev.xyz/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "com.html2img/html-to-image",
+      "outcome": "discovery_failed",
+      "url": "https://app.html2img.com/mcp"
+    },
+    {
+      "name": "io.favcrm/favcrm",
+      "outcome": "probed",
+      "probed_tool": "search_members",
+      "tool_count": 223,
+      "url": "https://api.favcrm.io/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "io: failed to lookup address information: nodename nor servname provided, or not known",
+      "name": "app.wishpool/croatia-payments-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://mcp-hr.wishpool.app/mcp"
+    },
+    {
+      "name": "io.github.theDestI/what2post",
+      "outcome": "probed",
+      "probed_tool": "list_my_posts",
+      "tool_count": 4,
+      "url": "https://what2postapp.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/usda-fdc",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/usda-fdc/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/trakt",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/trakt/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.trunk/mcp-server",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.trunk.io/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "io.github.crossi-dev/latam-tools",
+      "outcome": "discovery_failed",
+      "url": "https://tools.somosvelora.com/api/mcp/public"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 405",
+      "name": "io.github.quack2025/talk2data-insightgenius",
+      "outcome": "discovery_failed",
+      "url": "https://spss.insightgenius.io/mcp/sse?api_key={api_key}"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/datagov-ie",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/datagov-ie/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/homebrew-formulae",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/homebrew-formulae/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "com.hydrata/hydrata-mcp-server",
+      "outcome": "discovery_failed",
+      "url": "https://hydrata.com/mcp/"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.HeyZod/mansa-african-markets",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.mansamarkets.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pineapple-farm/skill-history",
+      "outcome": "discovery_failed",
+      "url": "https://skill-history.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/mitre-cwe",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/mitre-cwe/mcp"
+    },
+    {
+      "name": "io.qt.qt-docs-mcp/qt-documentation",
+      "outcome": "probed",
+      "probed_tool": "qt_documentation_search",
+      "tool_count": 2,
+      "url": "https://qt-docs-mcp.qt.io/mcp"
+    },
+    {
+      "name": "io.github.junoventures/dojoplus-co",
+      "outcome": "probed",
+      "probed_tool": "get_site_info",
+      "tool_count": 28,
+      "url": "https://www.dojoplus.co/mcp"
+    },
+    {
+      "name": "io.github.Br0ski777/phone-validation",
+      "outcome": "probed",
+      "probed_tool": "phone_validate_number",
+      "tool_count": 2,
+      "url": "https://phone-validation.api.klymax402.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "it.piqod/experiences-oracle",
+      "outcome": "discovery_failed",
+      "url": "https://piqod.it/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "com.crashstory/crashstory",
+      "outcome": "discovery_failed",
+      "url": "https://crashstory-mcp-production.up.railway.app/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "dev.sipflow/sipflow",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.sipflow.dev/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.USDVCapital/real-estate-cfo",
+      "outcome": "discovery_failed",
+      "url": "https://api.usdvcapital.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "com.multyplylabs/sec-fundamentals",
+      "outcome": "discovery_failed",
+      "url": "https://sec.multyplylabs.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "eu.ansvar/gateway",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.ansvar.eu/mcp"
+    },
+    {
+      "name": "io.github.basilalshukaili/agent-broker",
+      "outcome": "probed",
+      "probed_tool": "find_business",
+      "tool_count": 14,
+      "url": "https://agent-broker-edge.basil-agent.workers.dev/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "fr.renoolab/mcp",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.renoolab.fr/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "com.medplum/mcp",
+      "outcome": "discovery_failed",
+      "url": "https://api.medplum.com/mcp/stream"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/oxylabs",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/oxylabs/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/entreprises-fr",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/entreprises-fr/mcp"
+    },
+    {
+      "name": "io.github.junoventures/vilabuarque-sampa-br",
+      "outcome": "probed",
+      "probed_tool": "get_site_info",
+      "tool_count": 28,
+      "url": "https://vilabuarque.sampa.br/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 502",
+      "name": "io.github.therealMrFunGuy/test-mailbox",
+      "outcome": "discovery_failed",
+      "url": "https://mail.rjctdlabs.xyz/sse"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.dinof777/mission-control",
+      "outcome": "discovery_failed",
+      "url": "https://mission-control-six-kohl.vercel.app/api/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.DataAssistIO/Dataassist-IO",
+      "outcome": "discovery_failed",
+      "url": "https://app.dataassist.io/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 400",
+      "name": "dev.aatos/aatos",
+      "outcome": "discovery_failed",
+      "url": "https://aatos.dev/mcp"
+    },
+    {
+      "name": "com.whenna/whenna",
+      "outcome": "probed",
+      "probed_tool": "whenna_create_plan",
+      "tool_count": 7,
+      "url": "https://whenna.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "redirect failed",
+      "name": "io.github.RyanByrne/validatethat-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://validatethat.io/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "ai.tinyfish.agent/web-agent",
+      "outcome": "discovery_failed",
+      "url": "https://agent.tinyfish.ai/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.mcp-dir/bb-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://api.mcp.ai/p_bb"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.centricai/centric-demo",
+      "outcome": "discovery_failed",
+      "url": "https://centric-demo-mcp-808053805730.us-central1.run.app/mcp"
+    },
+    {
+      "name": "com.mhsbloom/neutral-skincare-reference",
+      "outcome": "probed",
+      "probed_tool": "lookup_product",
+      "tool_count": 4,
+      "url": "https://europe-west3-mhs-bloom.cloudfunctions.net/bloomMcp"
+    },
+    {
+      "name": "com.dropwatchhq/exclude-feed",
+      "outcome": "probed",
+      "probed_tool": "screen_exclusion",
+      "tool_count": 4,
+      "url": "https://exclude.dropwatchhq.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "uk.co.codecrafted/design",
+      "outcome": "discovery_failed",
+      "url": "https://design.codecrafted.co.uk/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "com.zigpoll/zigpoll-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.zigpoll.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 429",
+      "name": "com.myhairmailtools/agent-tools",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.myhairmailtools.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.testiny/testiny-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://app.testiny.io/api/v1/mcp-server"
+    },
+    {
+      "name": "io.github.precis-finance/precis-finance-mcp",
+      "outcome": "probed",
+      "probed_tool": "precis_orientation",
+      "tool_count": 17,
+      "url": "https://mcp.precis.finance/mcp"
+    },
+    {
+      "name": "com.googleapis.androidmanagement/mcp",
+      "outcome": "probed",
+      "probed_tool": "get_enterprise",
+      "tool_count": 9,
+      "url": "https://androidmanagement.googleapis.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "com.mcpbundles/agent-interviews",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.mcpbundles.com/bundle/agent-interviews/"
+    },
+    {
+      "category": "transport",
+      "detail": "io: failed to lookup address information: nodename nor servname provided, or not known",
+      "name": "io.github.akutishevsky/spotify",
+      "outcome": "discovery_failed",
+      "url": "https://sptfy-mcp.online/mcp"
+    },
+    {
+      "name": "com.olyport/usda-food",
+      "outcome": "probed",
+      "probed_tool": "get_snap_participation",
+      "tool_count": 4,
+      "url": "https://mcp.olyport.com/usda-food/mcp"
+    },
+    {
+      "name": "io.github.mumullickm/wasilah-mcp",
+      "outcome": "probed",
+      "probed_tool": "get_prayer_times",
+      "tool_count": 5,
+      "url": "https://wasilah-mcp.aykiz.workers.dev/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/videogames",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/videogames/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "ai.smithery/blbl147-xhs-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://server.smithery.ai/@blbl147/xhs-mcp/mcp"
+    },
+    {
+      "name": "io.github.mnemom/mnemom",
+      "outcome": "probed",
+      "probed_tool": "claim_agent",
+      "tool_count": 16,
+      "url": "https://api.mnemom.ai/mcp?profile=directory"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "pt.lexbase/legislacao-portuguesa",
+      "outcome": "discovery_failed",
+      "url": "https://api.lexbase.pt/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 405",
+      "name": "io.github.giskard09/search",
+      "outcome": "discovery_failed",
+      "url": "https://search.rgiskard.xyz/sse"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/fda-regulations",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/fda-regulations/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.bitrix24/bitrix24",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.bitrix24.com/mcp/"
+    },
+    {
+      "name": "io.tooloracle/cybershield",
+      "outcome": "probed",
+      "probed_tool": "threat_landscape",
+      "tool_count": 12,
+      "url": "https://tooloracle.io/cybershield/mcp/"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.cloudbees/unify-mcp-server",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.cloudbees.io/v1/mcp"
+    },
+    {
+      "name": "com.thechrisgrey/mcp",
+      "outcome": "probed",
+      "probed_tool": "search_blog",
+      "tool_count": 3,
+      "url": "https://mcp.thechrisgrey.com"
+    },
+    {
+      "name": "io.github.lazymac2x/ai-prompt-optimizer",
+      "outcome": "probed",
+      "probed_tool": "optimize_prompt",
+      "tool_count": 5,
+      "url": "https://api.lazy-mac.com/ai-prompt-optimizer/mcp"
+    },
+    {
+      "name": "io.github.0xDanielLopez/tweetfeed",
+      "outcome": "probed",
+      "probed_tool": "query_iocs",
+      "tool_count": 10,
+      "url": "https://mcp.tweetfeed.live/"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.connerlambden/helium-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://heliumtrades.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 400",
+      "name": "fr.hypotheques-en-ligne/hel",
+      "outcome": "discovery_failed",
+      "url": "https://www.hypotheques-en-ligne.fr/wp-json/hel/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.toolhail/gateway",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.toolhail.com/mcp"
+    },
+    {
+      "name": "com.sonatype/dependency-management-mcp-server",
+      "outcome": "probed",
+      "probed_tool": "getComponentVersion",
+      "tool_count": 3,
+      "url": "https://mcp.guide.sonatype.com/mcp"
+    },
+    {
+      "name": "com.catalystedgescanner/catalyst-edge-mcp",
+      "outcome": "probed",
+      "probed_tool": "get_convergence_picks",
+      "tool_count": 6,
+      "url": "https://catalystedgescanner.com/mcp/"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "ai.smithery/luminati-io-brightdata-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://server.smithery.ai/@luminati-io/brightdata-mcp/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/tle",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/tle/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/datacube-sk",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/datacube-sk/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "dev.repowise/repowise-hosted",
+      "outcome": "discovery_failed",
+      "url": "https://api.repowise.dev/mcp/{owner}/{repo}"
+    },
+    {
+      "name": "io.github.Br0ski777/nft-floor",
+      "outcome": "probed",
+      "probed_tool": "nft_get_collection_data",
+      "tool_count": 4,
+      "url": "https://nft-floor.api.klymax402.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "com.gocosmik/cosmik",
+      "outcome": "discovery_failed",
+      "url": "https://gocosmik.com/api/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "dev.euroref/reference-data",
+      "outcome": "discovery_failed",
+      "url": "https://euroref.dev/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/sbir",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/sbir/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 500",
+      "name": "io.github.varvararatta/country_data_mcp",
+      "outcome": "discovery_failed",
+      "url": "https://country_data_mcp.mcpize.run/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.weavz/weavz",
+      "outcome": "discovery_failed",
+      "url": "https://platform.weavz.io/mcp/weavz"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 400",
+      "name": "io.github.xpaysh/content-research",
+      "outcome": "discovery_failed",
+      "url": "https://content.mcp.xpay.sh/mcp?key={api_key}"
+    },
+    {
+      "category": "transport",
+      "detail": "timeout: global",
+      "name": "io.github.rjandino/zopaf",
+      "outcome": "discovery_failed",
+      "url": "https://zopaf-mcp-production.up.railway.app/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.oytuntez/motaword-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://api.motaword.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/kroger",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/kroger/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "com.solvicus/math-program-solver",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.solvicus.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/soilgrids",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/soilgrids/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.filippogroppi/luviner",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.luviner.com/mcp"
+    },
+    {
+      "name": "io.github.cnnrobrn/claw-cleaning",
+      "outcome": "probed",
+      "probed_tool": "check_availability",
+      "tool_count": 3,
+      "url": "https://claw.cleaning/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "redirect failed",
+      "name": "io.github.cartoonitunes/inlay",
+      "outcome": "discovery_failed",
+      "url": "https://inlay.dev/api/mcp/{site_key}"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/greenhouse",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/greenhouse/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "io.github.luhkas2309/osigu-rcm",
+      "outcome": "discovery_failed",
+      "url": "https://dreamsteam-production.up.railway.app/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/brreg-no",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/brreg-no/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.kimjin8/call-for-me",
+      "outcome": "discovery_failed",
+      "url": "https://call-for-me.fly.dev/mcp/"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "ai.smithery/callmybot-domoticz",
+      "outcome": "discovery_failed",
+      "url": "https://server.smithery.ai/@callmybot/domoticz/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/arcgis-flagstaff",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/arcgis-flagstaff/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 403",
+      "name": "com.benriscore/api",
+      "outcome": "discovery_failed",
+      "url": "https://api.benriscore.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.nexus-mcp-infra/useful-data-source-for-agents-doing-product-price-sdk",
+      "outcome": "discovery_failed",
+      "url": "https://useful-data-source-for-agents-production.up.railway.app/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.jdhart81/taxcredit-engine",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.viridisconservation.com/taxcredit-engine/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/geoapify",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/geoapify/mcp"
+    },
+    {
+      "name": "today.utsuroi/uratori",
+      "outcome": "probed",
+      "probed_tool": "research_vendor_certifications",
+      "tool_count": 2,
+      "url": "https://uratori.utsuroi.today/api/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/openholidays",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/openholidays/mcp"
+    },
+    {
+      "name": "ac.tandem/docs-mcp",
+      "outcome": "probed",
+      "probed_tool": "search_docs",
+      "tool_count": 13,
+      "url": "https://tandem.ac/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/apology",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/apology/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "ai.vidocu/vidocu",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.vidocu.ai/"
+    },
+    {
+      "name": "io.github.IAfanasov/packzoo",
+      "outcome": "probed",
+      "probed_tool": "compare_shipping_prices",
+      "tool_count": 2,
+      "url": "https://packzoo.com/api/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/data-tours",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/data-tours/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 402",
+      "name": "io.github.Evozim/linear-broker",
+      "outcome": "discovery_failed",
+      "url": "https://linear-broker-mcp.vercel.app/api/mcp"
+    },
+    {
+      "name": "io.github.Br0ski777/token-price",
+      "outcome": "probed",
+      "probed_tool": "finance_get_token_price",
+      "tool_count": 1,
+      "url": "https://token-price.api.klymax402.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "org.swapp1990.designforyou/designforyou",
+      "outcome": "discovery_failed",
+      "url": "https://designforyou.swapp1990.org/mcp/v2/"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 405",
+      "name": "io.github.Yoodaekyung/atomic-css",
+      "outcome": "discovery_failed",
+      "url": "https://atomiccss.dev/mcp"
+    },
+    {
+      "name": "com.dropwatchhq/sec-intel",
+      "outcome": "probed",
+      "probed_tool": "whats_new_since",
+      "tool_count": 5,
+      "url": "https://filings.dropwatchhq.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.KingMandase/certvas",
+      "outcome": "discovery_failed",
+      "url": "https://dataco-mcp.northtide.workers.dev/mcp"
+    },
+    {
+      "name": "com.olyport/census",
+      "outcome": "probed",
+      "probed_tool": "get_county_demographics",
+      "tool_count": 5,
+      "url": "https://mcp.olyport.com/census/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "io: failed to lookup address information: nodename nor servname provided, or not known",
+      "name": "app.wishpool/spain-payments-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://mcp-es.wishpool.app/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "timeout: global",
+      "name": "dev.brazilmcp/brazilmcp",
+      "outcome": "discovery_failed",
+      "url": "https://api.brazilmcp.dev/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "ai.smithery/aamangeldi-dad-jokes-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://server.smithery.ai/@aamangeldi/dad-jokes-mcp/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.balldontlie/mcp",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.balldontlie.io/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "redirect failed",
+      "name": "io.aitrips/trip-planner",
+      "outcome": "discovery_failed",
+      "url": "https://aitrips.io/api/ai/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.illumora/craft",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.illumora.io"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "net.hunter-seeker/hunter-seeker",
+      "outcome": "discovery_failed",
+      "url": "https://hunter-seeker.net/api/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "ai.rfix/mcp",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.rfix.ai/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/ine-es",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/ine-es/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "com.mcpbundles/uk-civic-parliamentary",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.mcpbundles.com/bundle/uk-civic-parliamentary/"
+    },
+    {
+      "name": "com.seoapi/openai",
+      "outcome": "probed",
+      "probed_tool": "validate_ip",
+      "tool_count": 1,
+      "url": "https://openai.seoapi.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/cbs-il",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/cbs-il/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "io.github.K-Cupples/mockmcp",
+      "outcome": "discovery_failed",
+      "url": "https://mockmcp.io/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/outlook-contacts",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/outlook-contacts/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "io.github.mintmas/oracle42-intelligence",
+      "outcome": "discovery_failed",
+      "url": "https://app.eno.cx.ua/mcp/"
+    },
+    {
+      "name": "io.github.erliona/tunova",
+      "outcome": "probed",
+      "probed_tool": "generate_song",
+      "tool_count": 3,
+      "url": "https://api.tunova.ai/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "ai.flowstep/mcp",
+      "outcome": "discovery_failed",
+      "url": "https://api.flowstep.ai/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/isc-sans",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/isc-sans/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "io.github.srotzin/hive-mcp-depin",
+      "outcome": "discovery_failed",
+      "url": "https://hive-mcp-gateway.onrender.com/depin/mcp"
+    },
+    {
+      "name": "ai.fugentic/service-provider-index",
+      "outcome": "probed",
+      "probed_tool": "list_trades",
+      "tool_count": 3,
+      "url": "https://spi.fugentic.ai/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.hackle-io/hackle-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.hackle.io/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 400",
+      "name": "io.github.pscale-commons/bsp-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://bsp.hermitcrab.me/mcp/v1"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/artic",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/artic/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/schemastore",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/schemastore/mcp"
+    },
+    {
+      "name": "app.racecalendar/f1",
+      "outcome": "probed",
+      "probed_tool": "get_f1_season_schedule",
+      "tool_count": 15,
+      "url": "https://racecalendar.app/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/mapbox",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/mapbox/mcp"
+    },
+    {
+      "name": "io.usefulapi/metriport",
+      "outcome": "probed",
+      "probed_tool": "metriport_list_facilities",
+      "tool_count": 12,
+      "url": "https://metriport.usefulapi.io/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "live.alpic.staging.mcp-server-template-90a89880/mcp-server-template",
+      "outcome": "discovery_failed",
+      "url": "https://mcp-server-template-90a89880.staging.alpic.live"
+    },
+    {
+      "name": "io.github.Fractera/deploy",
+      "outcome": "probed",
+      "probed_tool": "register_and_deploy",
+      "tool_count": 8,
+      "url": "https://www.fractera.ai/api/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "com.clauxel.unitymcptest/unitymcptest-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://unitymcptest.clauxel.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.ayda212/simceptor",
+      "outcome": "discovery_failed",
+      "url": "https://simceptor.com/api/mcp/sse"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.fasuizu-br/speech-ai",
+      "outcome": "discovery_failed",
+      "url": "https://apim-ai-apis.azure-api.net/mcp/pronunciation/mcp"
+    },
+    {
+      "name": "io.github.maxbeech/denialpath",
+      "outcome": "probed",
+      "probed_tool": "check_claim",
+      "tool_count": 6,
+      "url": "https://denialpath.vercel.app/api/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/data-issy",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/data-issy/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.Shreyas-Profile/docs-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://docs.regiq.in/api/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "io: received fatal alert: HandshakeFailure",
+      "name": "io.github.pinchwork/pinchwork-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://api.pinchwork.dev/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/codestats",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/codestats/mcp"
+    },
+    {
+      "name": "io.github.junoventures/campobelo-sampa-br",
+      "outcome": "probed",
+      "probed_tool": "get_site_info",
+      "tool_count": 28,
+      "url": "https://campobelo.sampa.br/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/setlist-fm",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/setlist-fm/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.scanbimlabs/twinmotion",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.scanbimlabs.io/twinmotion"
+    },
+    {
+      "name": "io.tooloracle/bnboracle",
+      "outcome": "probed",
+      "probed_tool": "bnb_overview",
+      "tool_count": 8,
+      "url": "https://feedoracle.io/bnb/mcp/"
+    },
+    {
+      "name": "io.github.kc23go/anybrowse",
+      "outcome": "probed",
+      "probed_tool": "batch_scrape",
+      "tool_count": 5,
+      "url": "https://anybrowse.dev/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "io.github.namnam57/verifyuk-property-check",
+      "outcome": "discovery_failed",
+      "url": "https://verifyuk-property-check-production.up.railway.app/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/emdb",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/emdb/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 400",
+      "name": "com.theoutdoorsapp/outdoors",
+      "outcome": "discovery_failed",
+      "url": "https://theoutdoorsapp.com/mcp"
+    },
+    {
+      "name": "io.github.vinaybhosle/shippingrates-mcp-server",
+      "outcome": "probed",
+      "probed_tool": "shippingrates_stats",
+      "tool_count": 26,
+      "url": "https://mcp.shippingrates.org/mcp/"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/noaa-spc",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/noaa-spc/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "io.github.junct-bot/aarna-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://aarna.mcp.junct.dev/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.moldy93/smard-x402",
+      "outcome": "discovery_failed",
+      "url": "https://smard-energy-prices-x402.favo.workers.dev/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "redirect failed",
+      "name": "com.norvstar/mcp-server",
+      "outcome": "discovery_failed",
+      "url": "https://norvstar.com/api/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.ryss30/orcool-studio",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.orcool.com"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/nationalize",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/nationalize/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/chess",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/chess/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "com.meetvalis/valis-credit-intelligence",
+      "outcome": "discovery_failed",
+      "url": "https://meetvalis.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "com.versium/REACH",
+      "outcome": "discovery_failed",
+      "url": "https://app.versium.com/mcp/reach"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.veed/fabric-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://www.veed.io/api/v1/mcp"
+    },
+    {
+      "name": "com.lobbyvoices/receptionist-toolkit",
+      "outcome": "probed",
+      "probed_tool": "write_phone_script",
+      "tool_count": 8,
+      "url": "https://lobbyvoices.com/api/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "ai.smithery/ChiR24-unreal_mcp_server",
+      "outcome": "discovery_failed",
+      "url": "https://server.smithery.ai/@ChiR24/unreal_mcp_server/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/tavily",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/tavily/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "live.alpic.staging.mcp-server-a2d17427/mcp-server",
+      "outcome": "discovery_failed",
+      "url": "https://mcp-server-a2d17427.staging.alpic.live"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "com.outliyr/agent-tools",
+      "outcome": "discovery_failed",
+      "url": "https://longevity-stack-mcp.outliyr.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/hunter",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/hunter/mcp"
+    },
+    {
+      "name": "io.github.Br0ski777/gas-oracle",
+      "outcome": "probed",
+      "probed_tool": "gas_get_current_price",
+      "tool_count": 2,
+      "url": "https://gas-oracle.api.klymax402.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.UnbearableDev/k8s-manifest-audit",
+      "outcome": "discovery_failed",
+      "url": "https://unbearable-dev--k8s-manifest-audit.apify.actor/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "ai.smithery/truss44-mcp-crypto-price",
+      "outcome": "discovery_failed",
+      "url": "https://server.smithery.ai/@truss44/mcp-crypto-price/mcp"
+    },
+    {
+      "name": "io.github.lazymac2x/graphql-dos-shield",
+      "outcome": "probed",
+      "probed_tool": "complexity_meter",
+      "tool_count": 3,
+      "url": "https://api.lazy-mac.com/graphql-dos-shield/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "io: failed to lookup address information: nodename nor servname provided, or not known",
+      "name": "dev.slipstack/pdf",
+      "outcome": "discovery_failed",
+      "url": "https://slipstack.dev/api/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "com.generect/generect-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.generect.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/tarot-draw",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/tarot-draw/mcp"
+    },
+    {
+      "name": "ai.com.mcp/registry",
+      "outcome": "probed",
+      "probed_tool": "getV01Servers",
+      "tool_count": 3,
+      "url": "https://registry.run.mcp.com.ai/mcp"
+    },
+    {
+      "name": "io.github.comil27/solrisk-mcp",
+      "outcome": "probed",
+      "probed_tool": "solana_token_risk",
+      "tool_count": 1,
+      "url": "https://solrisk.rugscore.workers.dev/mcp"
+    },
+    {
+      "category": "pin_failed",
+      "detail": "tools/list response is malformed: result is not a tools/list shape: missing field `tools` at line 1 column 145",
+      "name": "ai.trendsmcp/market-research",
+      "outcome": "discovery_failed",
+      "url": "https://market-research.api.trendsmcp.ai/mcp"
+    },
+    {
+      "name": "io.github.Alightttt/chesswithclaw",
+      "outcome": "probed",
+      "probed_tool": "get_companion_guide",
+      "tool_count": 10,
+      "url": "https://chesswithclaw.vercel.app/api/mcp"
+    },
+    {
+      "name": "online.aurinia/connect",
+      "outcome": "probed",
+      "probed_tool": "find_providers",
+      "tool_count": 8,
+      "url": "https://aurinia.online/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.mcp-dir/asa-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://api.mcp.ai/p_asa"
+    },
+    {
+      "name": "tax.zip/ziptax",
+      "outcome": "probed",
+      "probed_tool": "get_account_metrics",
+      "tool_count": 2,
+      "url": "https://mcp.zip-tax.com/sse"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.FoundryNet/market-data-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://market-data-mcp-production.up.railway.app/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "io.github.quadratik-ai/quadratik",
+      "outcome": "discovery_failed",
+      "url": "https://quadratikmcp-production.up.railway.app/"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.neus/neus-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.neus.network/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "com.wix/mcp",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.wix.com/sse"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 530",
+      "name": "io.github.bitMacrocode/charm",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.chatwithcharm.com/mcp"
+    },
+    {
+      "name": "org.memoryapi/property",
+      "outcome": "probed",
+      "probed_tool": "get_home_prices",
+      "tool_count": 3,
+      "url": "https://property.memoryapi.org/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/defillama",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/defillama/mcp"
+    },
+    {
+      "name": "ca.netgrant/canadian-grants",
+      "outcome": "probed",
+      "probed_tool": "search_opportunities",
+      "tool_count": 5,
+      "url": "https://mcp.netgrant.ca/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/arcgis-eagan",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/arcgis-eagan/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "ch.fedlex-connector/fedlex-connector",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.fedlex-connector.ch/"
+    },
+    {
+      "name": "io.github.KunaniGaming/agentic-prompt",
+      "outcome": "probed",
+      "probed_tool": "search_prompts",
+      "tool_count": 4,
+      "url": "https://agentic-prompt.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/alchemy-eth",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/alchemy-eth/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "space.servercardtrust/servercardtrust-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://servercardtrust.space/mcp"
+    },
+    {
+      "name": "io.github.mnemom/isittrustready",
+      "outcome": "probed",
+      "probed_tool": "get_agent",
+      "tool_count": 8,
+      "url": "https://api.isittrustready.ai/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "io: failed to lookup address information: nodename nor servname provided, or not known",
+      "name": "io.github.Wxt-ai/profile-retention-key-identifier",
+      "outcome": "discovery_failed",
+      "url": "https://antibody-package-occasional-floppy.trycloudflare.com/mcp/profile-retention-key/upstream"
+    },
+    {
+      "name": "com.macfax/macfax",
+      "outcome": "probed",
+      "probed_tool": "lookup_mac_serial",
+      "tool_count": 6,
+      "url": "https://macfax.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/arcgis-dukescounty",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/arcgis-dukescounty/mcp"
+    },
+    {
+      "name": "io.usefulapi/instatus",
+      "outcome": "probed",
+      "probed_tool": "instatus_list_pages",
+      "tool_count": 14,
+      "url": "https://instatus.usefulapi.io/mcp"
+    },
+    {
+      "name": "com.buyukesim/mcp",
+      "outcome": "probed",
+      "probed_tool": "search_esim_plans",
+      "tool_count": 11,
+      "url": "https://buyukesim.com/mcp"
+    },
+    {
+      "name": "io.github.georgetranoz/dla-mcp",
+      "outcome": "probed",
+      "probed_tool": "search_dog_problems",
+      "tool_count": 6,
+      "url": "https://www.dogleadershipacademy.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 502",
+      "name": "io.github.therealMrFunGuy/crypto-price",
+      "outcome": "discovery_failed",
+      "url": "https://crypto.rjctdlabs.xyz/sse"
+    },
+    {
+      "name": "com.royashbrook/hush",
+      "outcome": "probed",
+      "probed_tool": "get_skill",
+      "tool_count": 1,
+      "url": "https://royashbrook.com/hush"
+    },
+    {
+      "name": "com.kenoodl/verify",
+      "outcome": "probed",
+      "probed_tool": "verify",
+      "tool_count": 1,
+      "url": "https://kenoodl.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.hyperdrift-io/nextrole",
+      "outcome": "discovery_failed",
+      "url": "https://nextrole.site/api/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/arcgis-sacramento",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/arcgis-sacramento/mcp"
+    },
+    {
+      "name": "io.github.outris-dev-user/outris-identity-mcp",
+      "outcome": "probed",
+      "probed_tool": "investigate_phone",
+      "tool_count": 12,
+      "url": "https://mcp-server.outris.com/http"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/spacenews",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/spacenews/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.caraulani/euacc-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://www.euacc.ai/api/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "com.nikhilkulkarni1755/iridium",
+      "outcome": "discovery_failed",
+      "url": "https://iridium-api.nikhilkulkarni1755.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 400",
+      "name": "io.github.lazymac2x/graphql-rest-bridge",
+      "outcome": "discovery_failed",
+      "url": "https://api.lazy-mac.com/graphql-rest-bridge/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "response id is missing or not an integer",
+      "name": "io.github.Zero-nium/project-substitute-arena",
+      "outcome": "discovery_failed",
+      "url": "https://zero-wispy-shadow-3951.fly.dev/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "ai.smithery/renCosta2025-context7fork",
+      "outcome": "discovery_failed",
+      "url": "https://server.smithery.ai/@renCosta2025/context7fork/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "dev.postproxy/postproxy",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.postproxy.dev/mcp"
+    },
+    {
+      "name": "com.thedailysmark/wrestling",
+      "outcome": "probed",
+      "probed_tool": "list_news",
+      "tool_count": 6,
+      "url": "https://www.thedailysmark.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "com.transcriptmax/transcriptmax",
+      "outcome": "discovery_failed",
+      "url": "https://api.transcriptmax.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.Kubedoll-Heavy-Industries/helm-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://helm-mcp.kubedoll.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "com.crosswire-api/crosswire-polymarket-kalshi-arbitrage",
+      "outcome": "discovery_failed",
+      "url": "https://api.crosswire-api.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "redirect failed",
+      "name": "io.github.bookyo/nsfw-image-detector",
+      "outcome": "discovery_failed",
+      "url": "https://elysiatools.com/mcp/sse?toolId=nsfw-image-detector"
+    },
+    {
+      "name": "com.flevy/flevy",
+      "outcome": "probed",
+      "probed_tool": "search_content",
+      "tool_count": 5,
+      "url": "https://flevy.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.maryadawson-code/openclaw-finops",
+      "outcome": "discovery_failed",
+      "url": "https://openclaw-finops.marywomack.workers.dev/mcp"
+    },
+    {
+      "name": "io.tooloracle/dependencyoracle",
+      "outcome": "probed",
+      "probed_tool": "register_asset",
+      "tool_count": 10,
+      "url": "https://tooloracle.io/dependency/mcp/"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "ai.petraport/agent-commerce",
+      "outcome": "discovery_failed",
+      "url": "https://petraport.ai/api/agent-commerce/v1/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "io.github.Timwal78/402proof",
+      "outcome": "discovery_failed",
+      "url": "https://four02proof.onrender.com/mcp"
+    },
+    {
+      "name": "com.datakoot/regulatory-intel-mcp",
+      "outcome": "probed",
+      "probed_tool": "search_documents",
+      "tool_count": 5,
+      "url": "https://regulatory.datakoot.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "com.teenpsychiatry/library",
+      "outcome": "discovery_failed",
+      "url": "https://teenpsychiatry.com/api/mcp/v1"
+    },
+    {
+      "name": "com.dataroia/data-trust",
+      "outcome": "probed",
+      "probed_tool": "verifier_siret",
+      "tool_count": 8,
+      "url": "https://api.dataroia.com/mcp/"
+    },
+    {
+      "category": "transport",
+      "detail": "io: Connection refused",
+      "name": "com.zahabprice/gold-prices",
+      "outcome": "discovery_failed",
+      "url": "https://www.zahabprice.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/box",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/box/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.Schoasch/backtesting-arena",
+      "outcome": "discovery_failed",
+      "url": "https://tradingstrategies.work/api/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "ai.pathbound/pathbound",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.pathbound.ai/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "ai.smithery/DynamicEndpoints-powershell-exec-mcp-server",
+      "outcome": "discovery_failed",
+      "url": "https://server.smithery.ai/@DynamicEndpoints/powershell-exec-mcp-server/mcp"
+    },
+    {
+      "name": "com.containermath/cbm",
+      "outcome": "probed",
+      "probed_tool": "calculate_cbm",
+      "tool_count": 1,
+      "url": "https://mcp.containermath.com"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "app.clearpolicy/clearpolicy",
+      "outcome": "discovery_failed",
+      "url": "https://api.clearpolicy.app/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.johnisanerd/google-shopping",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.apify.com/?tools=johnvc/google-shopping-api-google-shopping-products-prices-deals"
+    },
+    {
+      "name": "io.github.rabyavalla/nutrition-protocols",
+      "outcome": "probed",
+      "probed_tool": "get_protocol",
+      "tool_count": 2,
+      "url": "https://web-production-ae61.up.railway.app/mcp/nutrition-protocols"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.tlaloc-sh/tlaloc-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://api.tlaloc.sh/mx/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "com.zillapi/zillow-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://api.zillapi.com/mcp"
+    },
+    {
+      "name": "org.memoryapi/cron",
+      "outcome": "probed",
+      "probed_tool": "schedule_task",
+      "tool_count": 4,
+      "url": "https://cron.memoryapi.org/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.OrbiAds/gam",
+      "outcome": "discovery_failed",
+      "url": "https://orbiads.com/mcp"
+    },
+    {
+      "name": "com.seoapi/yandexbot",
+      "outcome": "probed",
+      "probed_tool": "validate_ip",
+      "tool_count": 1,
+      "url": "https://yandexbot.seoapi.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/lens-org",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/lens-org/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "app.nausika/mcp",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.nausika.app"
+    },
+    {
+      "category": "transport",
+      "detail": "io: failed to lookup address information: nodename nor servname provided, or not known",
+      "name": "io.github.Ansvar-Systems/uk-farm-subsidies",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.ansvar.eu/uk-farm-subsidies/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "xyz.picoads/picoads",
+      "outcome": "discovery_failed",
+      "url": "https://picoads.xyz/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "so.anteroom/anteroom",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.anteroom.so/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.smq9sn5jck-cloud/causallayer-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://causallayer-mcp-demo.zykm9qkk7j.workers.dev/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "town.val/mcp",
+      "outcome": "discovery_failed",
+      "url": "https://api.val.town/v3/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "chat.trilo/mcp",
+      "outcome": "discovery_failed",
+      "url": "https://api.trilo.chat/mcp"
+    },
+    {
+      "name": "com.bonissystems/booking-request",
+      "outcome": "probed",
+      "probed_tool": "request_booking",
+      "tool_count": 3,
+      "url": "https://bonissystems.com/api/knox/agents/booking-request/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.imejis/imejis",
+      "outcome": "discovery_failed",
+      "url": "https://api.imejis.io/api/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "ai.brainattic/knowledge-base",
+      "outcome": "discovery_failed",
+      "url": "https://app.brainattic.ai/api/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "dev.afriref/reference-data",
+      "outcome": "discovery_failed",
+      "url": "https://afriref.dev/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "network.agentdemand/agent-demand",
+      "outcome": "discovery_failed",
+      "url": "https://agentdemand.network/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/threatfox",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/threatfox/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.feedbk-ai/create-survey",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.feedbk.ai/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/opencages",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/opencages/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "live.alpic.mcp-server-template-7860f7d3/mcp-server-template-python",
+      "outcome": "discovery_failed",
+      "url": "https://mcp-server-template-7860f7d3.alpic.live"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 403",
+      "name": "live.alpic.mcp-server-template-d2d1b3b5/mcp-server-template-xmcp",
+      "outcome": "discovery_failed",
+      "url": "https://mcp-server-template-d2d1b3b5.alpic.live"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 405",
+      "name": "network.tenzro/tenzro",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.tenzro.network/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "com.vetosql/veto",
+      "outcome": "discovery_failed",
+      "url": "https://vetosql.com/mcp"
+    },
+    {
+      "name": "io.github.maxbeech/lodgedeck",
+      "outcome": "probed",
+      "probed_tool": "list_jurisdictions",
+      "tool_count": 4,
+      "url": "https://lodgedeck.vercel.app/api/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "com.horizonmedia/brand-authority",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.prod.bap.horizonmedia.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "dev.goodeye/goodeye",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.goodeye.dev/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "ai.taskforcehq/taskforce",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.taskforcehq.ai/mcp"
+    },
+    {
+      "name": "io.github.codework-lgtm/issuefoundry-agent-market",
+      "outcome": "probed",
+      "probed_tool": "search_agent_services",
+      "tool_count": 2,
+      "url": "https://issuefoundry-index.jadennuckels.chatgpt.site/api/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/econdata",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/econdata/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "com.bluepillow/hotels",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.b2a.bluepillow.com/"
+    },
+    {
+      "name": "io.github.Br0ski777/domain-intelligence",
+      "outcome": "probed",
+      "probed_tool": "domain_lookup_intelligence",
+      "tool_count": 2,
+      "url": "https://domain-intelligence.api.klymax402.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "co.valid/mcp",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.valid.co/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.wyattpalm2-eng/x402-seller",
+      "outcome": "discovery_failed",
+      "url": "https://x402-seller-m8nx.onrender.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.tcador/787daily",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.787daily.com/mcp"
+    },
+    {
+      "name": "dev.busymate/busymate-devtools",
+      "outcome": "probed",
+      "probed_tool": "list_breakpoint_events",
+      "tool_count": 39,
+      "url": "https://mcp.busymate.dev"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "dev.oleander/oleander",
+      "outcome": "discovery_failed",
+      "url": "https://oleander.dev/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 500",
+      "name": "io.github.varvararatta/prozorro_tender_monitor_mcp",
+      "outcome": "discovery_failed",
+      "url": "https://prozorro_tender_monitor_mcp.mcpize.run/mcp"
+    },
+    {
+      "name": "io.github.Br0ski777/whale-alert",
+      "outcome": "probed",
+      "probed_tool": "crypto_track_whale_transactions",
+      "tool_count": 1,
+      "url": "https://whale-alert.api.klymax402.com/mcp"
+    },
+    {
+      "name": "io.liqaa/meetings",
+      "outcome": "probed",
+      "probed_tool": "create_instant_room",
+      "tool_count": 4,
+      "url": "https://liqaa.io/api/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "dev.goodbarber/goodbarber-public-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.goodbarber.dev/mcp/sse"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "ai.yempik/company-brain",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.yempik.ai/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 405",
+      "name": "io.github.giskard09/oasis",
+      "outcome": "discovery_failed",
+      "url": "https://oasis.rgiskard.xyz/sse"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "tech.zenfin/zenfinance",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.zenfin.tech/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.varvararatta/web_content_extract_mcp",
+      "outcome": "discovery_failed",
+      "url": "https://web-content-extract-mcp.mcpize.run/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/maven-central",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/maven-central/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "com.usecarscout/mcp",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.usecarscout.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/disease",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/disease/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.clipia-ai/clipia-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.clipia.ai/mcp"
+    },
+    {
+      "name": "com.reliasim/public",
+      "outcome": "probed",
+      "probed_tool": "find_bottleneck",
+      "tool_count": 8,
+      "url": "https://reliasim.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "sh.convention/mcp",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.convention.sh/mcp"
+    },
+    {
+      "name": "com.pricetik/mcp-server",
+      "outcome": "probed",
+      "probed_tool": "pricetik_search",
+      "tool_count": 27,
+      "url": "https://mcp.pricetik.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.HariharRengan/lock-in-study-planner",
+      "outcome": "discovery_failed",
+      "url": "https://lockinplanner.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 403",
+      "name": "uk.co.trisys/mcp",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.trisys.co.uk/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "io: Connection refused",
+      "name": "io.github.Lfaykus/flatway-estimate",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.flatway.fr/sse"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.holiday-forever/holiday-forever-2",
+      "outcome": "discovery_failed",
+      "url": "https://holiday-forever-2.vercel.app/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "io.github.aditya201551/context-book-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://context-book-mcp-production.up.railway.app"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.meelad-diggit/kordic-crm",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.kordic.io/mcp"
+    },
+    {
+      "name": "io.github.atomadictech/aaaa-nexus",
+      "outcome": "probed",
+      "probed_tool": "rng_quantum",
+      "tool_count": 44,
+      "url": "https://aaaa-nexus.atomadictech.workers.dev/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/tvmaze",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/tvmaze/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.Vaquill-AI/vaquill-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.vaquill.ai/s/_"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/osrm",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/osrm/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.andreysparish/toolweave",
+      "outcome": "discovery_failed",
+      "url": "https://toolweave.dev/mcp"
+    },
+    {
+      "name": "com.runriva.quizbase/mcp",
+      "outcome": "probed",
+      "probed_tool": "quizbase_random",
+      "tool_count": 12,
+      "url": "https://quizbase.runriva.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.davidangularme/hokmah",
+      "outcome": "discovery_failed",
+      "url": "https://hokmah.dev/mcp"
+    },
+    {
+      "name": "com.datakoot/base-intel-mcp",
+      "outcome": "probed",
+      "probed_tool": "address_report",
+      "tool_count": 5,
+      "url": "https://base.datakoot.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/nist-beacon",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/nist-beacon/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "ai.good-sport/good-sport",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.good-sport.ai/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "io: invalid peer certificate: certificate not valid for name \"gettransformseo.com\"; certificate is only valid for DnsName(\"*.trial.cloud.strategy.com\") or DnsName(\"trial.cloud.strategy.com\")",
+      "name": "com.gettransformseo/mcp",
+      "outcome": "discovery_failed",
+      "url": "https://gettransformseo.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 530",
+      "name": "ai.tokenarcade/tokenarcade",
+      "outcome": "discovery_failed",
+      "url": "https://tokenarcade.ai/mcp/"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "xyz.preflyte/preflyte",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.preflyte.xyz/mcp"
+    },
+    {
+      "name": "de.wopool/catalog",
+      "outcome": "probed",
+      "probed_tool": "search_offers",
+      "tool_count": 2,
+      "url": "https://wopool.de/api/mcp"
+    },
+    {
+      "name": "io.github.corply-dev/corply",
+      "outcome": "probed",
+      "probed_tool": "get_company_briefing",
+      "tool_count": 59,
+      "url": "https://corply.dev/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.okrstud/mcp",
+      "outcome": "discovery_failed",
+      "url": "https://api.okrstud.io/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "com.ingest0r.api/cook-county-property-data",
+      "outcome": "discovery_failed",
+      "url": "https://api.ingest0r.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.osodevops/keito",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.keito.ai"
+    },
+    {
+      "name": "com.olyport/bls",
+      "outcome": "probed",
+      "probed_tool": "get_unemployment_rate",
+      "tool_count": 4,
+      "url": "https://mcp.olyport.com/bls/mcp"
+    },
+    {
+      "name": "io.github.Br0ski777/research-report",
+      "outcome": "probed",
+      "probed_tool": "research_generate_report",
+      "tool_count": 1,
+      "url": "https://research-report.api.klymax402.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "io.usewire/christmas-carol",
+      "outcome": "discovery_failed",
+      "url": "https://wire-public.mcp.usewire.io/container/gUeioF26GkeQPHxj/mcp"
+    },
+    {
+      "name": "io.github.elestirelbilinc-sketch/vap-e",
+      "outcome": "probed",
+      "probed_tool": "generate_image",
+      "tool_count": 16,
+      "url": "https://api.vapagent.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.wowcool/agentsafe",
+      "outcome": "discovery_failed",
+      "url": "https://agentsafe.locationledger.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "com.allgoodinsp/mcp-server",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.allgoodinsp.com"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.dizzyvinci/shopify-catalog-monitor",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.apify.com?tools=dizzyvinci/shopify-catalog-monitor"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.MichielDeRuiter/sandboxapi-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.sandboxapi.dev/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.vilogy/mcp-fleet",
+      "outcome": "discovery_failed",
+      "url": "https://motiv-mcp-fleet.mcp.xpay.sh/mcp"
+    },
+    {
+      "name": "io.github.Br0ski777/cron-parser",
+      "outcome": "probed",
+      "probed_tool": "schedule_parse_cron",
+      "tool_count": 1,
+      "url": "https://cron-parser.api.klymax402.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.ArtBlocks/mcp",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.artblocks.io/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "io.github.scoutexchange/dewey",
+      "outcome": "discovery_failed",
+      "url": "https://dewey-lro-test.lro.goscoutgo.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/cta",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/cta/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.Wavix/mcp",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.wavix.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "com.skulayer/skulayer",
+      "outcome": "discovery_failed",
+      "url": "https://skulayer.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.romcdonald9976/chikoh",
+      "outcome": "discovery_failed",
+      "url": "https://chikoh.com/mcp"
+    },
+    {
+      "name": "io.scanbimlabs/navisworks-mcp",
+      "outcome": "probed",
+      "probed_tool": "nwd_upload",
+      "tool_count": 5,
+      "url": "https://navisworks-mcp.itmartin24.workers.dev/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.Rama-Digital/coret",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.coret.id/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/australia-tenders",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/australia-tenders/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.Capmus-Team/capmus-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.capmus.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "io.github.trevorflipper/near-solana-blockchain-api",
+      "outcome": "discovery_failed",
+      "url": "https://ironflip.duckdns.org"
+    },
+    {
+      "name": "io.usefulapi/chargebee",
+      "outcome": "probed",
+      "probed_tool": "chargebee_list_customers",
+      "tool_count": 13,
+      "url": "https://chargebee.usefulapi.io/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/iconify",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/iconify/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "garden.stanislav.svelte-llm/svelte-llm-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://svelte-llm.stanislav.garden/mcp/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "ai.zine/mcp",
+      "outcome": "discovery_failed",
+      "url": "https://www.zine.ai/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.kaitoi/studio",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.studio.kaitoi.io"
+    },
+    {
+      "name": "app.blip-board/blipboard",
+      "outcome": "probed",
+      "probed_tool": "create-board-tool",
+      "tool_count": 5,
+      "url": "https://blip-board.app/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/conceptnet",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/conceptnet/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 405",
+      "name": "org.toolapi/hub",
+      "outcome": "discovery_failed",
+      "url": "https://toolapi.org/sse"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "ai.smithery/minionszyw-bazi",
+      "outcome": "discovery_failed",
+      "url": "https://server.smithery.ai/@minionszyw/bazi/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.jdhart81/agent-arbitration",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.viridisconservation.com/arbitration/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/wordnik",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/wordnik/mcp"
+    },
+    {
+      "name": "io.github.lazymac2x/llm-output-quality-monitor",
+      "outcome": "probed",
+      "probed_tool": "quality_validator",
+      "tool_count": 5,
+      "url": "https://api.lazy-mac.com/llm-output-quality-monitor/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.Adgentek/adsmcp",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.adgentek.ai/mcp"
+    },
+    {
+      "name": "io.github.anousss007/blatui",
+      "outcome": "probed",
+      "probed_tool": "list_components",
+      "tool_count": 5,
+      "url": "https://blatui.remix-it.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "io.github.srotzin/hive-mcp-agent-storage",
+      "outcome": "discovery_failed",
+      "url": "https://hive-mcp-agent-storage.onrender.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "com.windowsforum/mcp-server",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.windowsforum.com/"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "app.podstow/podstow",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.podstow.app/"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "com.seranking/mcp",
+      "outcome": "discovery_failed",
+      "url": "https://api.seranking.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/fintech-intel",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/fintech-intel/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.jdhart81/agent-covenant",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.viridisconservation.com/covenant/mcp"
+    },
+    {
+      "name": "io.tooloracle/quantum",
+      "outcome": "probed",
+      "probed_tool": "quantum_join",
+      "tool_count": 20,
+      "url": "https://tooloracle.io/quantum/mcp/"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 404",
+      "name": "io.github.alimbenhelal-pro/alm-xpp-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://www.almxpp.com/mcp"
+    },
+    {
+      "name": "ai.trydock/dock",
+      "outcome": "probed",
+      "probed_tool": "list_workspaces",
+      "tool_count": 64,
+      "url": "https://trydock.ai/api/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "com.stagenth/data-kit",
+      "outcome": "discovery_failed",
+      "url": "https://stagenth.com/mcp/data-kit/"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "fr.larabi/bab-aljazair",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.bab-aljazair.larabi.fr/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.LuptonM/casenode-legal-graph",
+      "outcome": "discovery_failed",
+      "url": "https://api.casenode.ai/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/catfacts",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/catfacts/mcp"
+    },
+    {
+      "name": "nz.co.prelude/instruments",
+      "outcome": "probed",
+      "probed_tool": "search-instruments-tool",
+      "tool_count": 4,
+      "url": "https://prelude.co.nz/mcp/prelude"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/send-that-email",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/send-that-email/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.labfolio/labfolio",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.labfolio.org"
+    },
+    {
+      "name": "io.github.Ainode-tech/cache-proxy",
+      "outcome": "probed",
+      "probed_tool": "health",
+      "tool_count": 2,
+      "url": "https://cache.api.ainode.tech/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.mcp-dir/eqi-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://api.mcp.ai/p_eqi"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "app.sorsa/sorsa",
+      "outcome": "discovery_failed",
+      "url": "https://sorsa.app/mcp"
+    },
+    {
+      "name": "io.github.Br0ski777/pdf-generator",
+      "outcome": "probed",
+      "probed_tool": "document_generate_pdf",
+      "tool_count": 1,
+      "url": "https://pdf-generator.api.klymax402.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.Vaquill-AI/canlii-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://canlii-mcp.vaquill.ai/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "timeout: global",
+      "name": "io.github.Timluogit/clawriver",
+      "outcome": "discovery_failed",
+      "url": "https://clawriver.onrender.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.nip.5-9-107-124/token-risk",
+      "outcome": "discovery_failed",
+      "url": "https://5-9-107-124.nip.io/mcp"
+    },
+    {
+      "name": "io.github.Br0ski777/user-agent-parser",
+      "outcome": "probed",
+      "probed_tool": "utility_parse_user_agent",
+      "tool_count": 1,
+      "url": "https://user-agent-parser.api.klymax402.com/mcp"
+    },
+    {
+      "name": "io.github.Br0ski777/slug-generator",
+      "outcome": "probed",
+      "probed_tool": "text_generate_slug",
+      "tool_count": 1,
+      "url": "https://slug-generator.api.klymax402.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.greenmtnsun/wikimint",
+      "outcome": "discovery_failed",
+      "url": "https://wikimint.grayocean-4062ad43.eastus.azurecontainerapps.io/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/ecosystems",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/ecosystems/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "ai.edusignal/districts",
+      "outcome": "discovery_failed",
+      "url": "https://edusignal.ai/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/ipaddress",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/ipaddress/mcp"
+    },
+    {
+      "name": "ai.plith/plith",
+      "outcome": "probed",
+      "probed_tool": "dedupq_check",
+      "tool_count": 15,
+      "url": "https://plith.ai/api/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "org.proxykey/proxykey",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.proxykey.org/mcp"
+    },
+    {
+      "name": "com.dropwatchhq/govcon-contractor-signals",
+      "outcome": "probed",
+      "probed_tool": "contractor_signals",
+      "tool_count": 3,
+      "url": "https://ma.dropwatchhq.com/mcp"
+    },
+    {
+      "name": "com.marginofinsight/research",
+      "outcome": "probed",
+      "probed_tool": "get_company_primer",
+      "tool_count": 6,
+      "url": "https://app.marginofinsight.com/api/mcp"
+    },
+    {
+      "name": "com.actablesite/ai-crawler-robots-monitor",
+      "outcome": "probed",
+      "probed_tool": "audit_public_website",
+      "tool_count": 5,
+      "url": "https://actablesite.com/mcp/"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.varvararatta/htmlpdf_transform_mcp",
+      "outcome": "discovery_failed",
+      "url": "https://htmlpdf-transform-mcp.mcpize.run/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "com.invoicexml/invoicexml",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.invoicexml.com"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "com.shortgenius/shortgenius",
+      "outcome": "discovery_failed",
+      "url": "https://app.shortgenius.com/api/mcp"
+    },
+    {
+      "name": "com.googleapis.compute/mcp",
+      "outcome": "probed",
+      "probed_tool": "create_instance",
+      "tool_count": 29,
+      "url": "https://compute.googleapis.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "app.myghosts/myghosts",
+      "outcome": "discovery_failed",
+      "url": "https://myghosts.app/api/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "com.jnexum/jurisprudencia",
+      "outcome": "discovery_failed",
+      "url": "https://jnexum.com/mcp"
+    },
+    {
+      "name": "com.eventescapes/event-escapes",
+      "outcome": "probed",
+      "probed_tool": "search_events",
+      "tool_count": 7,
+      "url": "https://mcp.eventescapes.com"
+    },
+    {
+      "name": "io.github.pyth-network/mcp",
+      "outcome": "probed",
+      "probed_tool": "get_symbols",
+      "tool_count": 5,
+      "url": "https://mcp.pyth.network/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.jdhart81/agent-market-network",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.viridisconservation.com/network/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "com.walnutinvest/walnut",
+      "outcome": "discovery_failed",
+      "url": "https://walnutinvest.com/api/connector/mcp"
+    },
+    {
+      "name": "io.github.dth0108/bies-guardian",
+      "outcome": "probed",
+      "probed_tool": "claim_safety_verdict",
+      "tool_count": 3,
+      "url": "https://bies.io/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/h1b",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/h1b/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 400",
+      "name": "fr.statis-tir/statistir",
+      "outcome": "discovery_failed",
+      "url": "https://www.statis-tir.fr/_mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "com.geospatialsystem/location-profile",
+      "outcome": "discovery_failed",
+      "url": "https://api.geospatialsystem.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "com.fintalio/linkedin-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://fintalio.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/steam",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/steam/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "com.tandem-cc/tandem",
+      "outcome": "discovery_failed",
+      "url": "https://www.tandem-cc.com/mcp/"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.joshuajansen/svgfarm",
+      "outcome": "discovery_failed",
+      "url": "https://svg.farm/mcp"
+    },
+    {
+      "name": "io.github.dizpers/polystrike",
+      "outcome": "probed",
+      "probed_tool": "get_market_metadata",
+      "tool_count": 8,
+      "url": "https://polystrike.xyz/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "app.easykanb/easykanban",
+      "outcome": "discovery_failed",
+      "url": "https://easykanb.app/api/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 405",
+      "name": "com.clauxel.agentmailrooms/agentmailrooms-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://agentmailrooms.clauxel.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.mcp-dir/montebravo-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://api.mcp.ai/p_montebravo"
+    },
+    {
+      "name": "br.com.escoladeradio.www/public",
+      "outcome": "probed",
+      "probed_tool": "school_info",
+      "tool_count": 15,
+      "url": "https://www.escoladeradio.com.br/api/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.edinetdb/edinet-db-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://edinetdb.jp/mcp"
+    },
+    {
+      "name": "com.ridotaxi/taxi-rido-public-knowledge",
+      "outcome": "probed",
+      "probed_tool": "search",
+      "tool_count": 2,
+      "url": "https://ridotaxi.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.gitlares/nuboo",
+      "outcome": "discovery_failed",
+      "url": "https://api.nuboohub.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "ai.speko/mcp",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.speko.ai/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.wzltmp/mcp-automations",
+      "outcome": "discovery_failed",
+      "url": "https://mcp-automations.fly.dev/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/semrush",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/semrush/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "redirect failed",
+      "name": "io.tweekit/mcp",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.tweekit.io/mcp/"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "space.mysoma/kpn",
+      "outcome": "discovery_failed",
+      "url": "https://persona-mcp-server.onrender.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "com.qualequest/governance",
+      "outcome": "discovery_failed",
+      "url": "https://qualequest.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.tylerscomic-lab/regex-safety-audit-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://regex-safety-audit-mcp.mcpize.run/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "timeout: global",
+      "name": "io.github.yasaminfayyaz/milatexai",
+      "outcome": "discovery_failed",
+      "url": "https://milatexai.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.mklfarha/nuzur-mcp-server",
+      "outcome": "discovery_failed",
+      "url": "https://ccmcp.nuzur.com"
+    },
+    {
+      "name": "com.rubrkit/rubrkit",
+      "outcome": "probed",
+      "probed_tool": "rubrkit_search_api_docs",
+      "tool_count": 41,
+      "url": "https://www.rubrkit.com/api/v1/mcp"
+    },
+    {
+      "name": "io.github.chinedum-okoli/studiepoint-ai",
+      "outcome": "probed",
+      "probed_tool": "search_scholarships",
+      "tool_count": 6,
+      "url": "https://studiepoint.ai/api/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "sh.uldl/uldl",
+      "outcome": "discovery_failed",
+      "url": "https://uldl.sh/api/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 403",
+      "name": "io.github.Zarklab-AI/zark-media",
+      "outcome": "discovery_failed",
+      "url": "https://api.zarklab.ai/v1/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.jmbremer/manymeet",
+      "outcome": "discovery_failed",
+      "url": "https://app.getmanymeet.com/mcp/"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "com.htagai/htag-intelligence",
+      "outcome": "discovery_failed",
+      "url": "https://api.htagai.com/mcp/v1/servers/htag/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "redirect failed",
+      "name": "com.jeremytwogood/portfolio",
+      "outcome": "discovery_failed",
+      "url": "https://jeremytwogood.com/api/mcp"
+    },
+    {
+      "name": "io.github.Br0ski777/tech-enrichment",
+      "outcome": "probed",
+      "probed_tool": "website_detect_tech_stack",
+      "tool_count": 1,
+      "url": "https://tech-enrichment.api.klymax402.com/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 402",
+      "name": "io.github.Evozim/tos-slayer",
+      "outcome": "discovery_failed",
+      "url": "https://tos-slayer-mcp.vercel.app/api/mcp"
+    },
+    {
+      "name": "directory.nohumans/registry",
+      "outcome": "probed",
+      "probed_tool": "find_paid_service",
+      "tool_count": 2,
+      "url": "https://api.nohumans.directory/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.write-space/writespace-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://app.writespace.io/mcp"
+    },
+    {
+      "name": "eu.gridgarden/studio",
+      "outcome": "probed",
+      "probed_tool": "studio_pricing_quote",
+      "tool_count": 4,
+      "url": "https://studio.gridgarden.eu/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.Aturio/pasal-id-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.pasal.id/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.mcp-dir/f360-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://api.mcp.ai/p_f360"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.katalon-studio/testops-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://platform.katalon.io/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.albermm/phos-sales-engine",
+      "outcome": "discovery_failed",
+      "url": "https://se.phos.nz/mcp/"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.douglac/banco-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://api.mcp.ai/banco"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/moldova-tenders",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/moldova-tenders/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/aviationstack",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/aviationstack/mcp"
+    },
+    {
+      "name": "io.github.lazymac2x/govdata-korea",
+      "outcome": "probed",
+      "probed_tool": "get_exchange_rates",
+      "tool_count": 6,
+      "url": "https://api.lazy-mac.com/govdata-korea/mcp"
+    },
+    {
+      "name": "de.wogrill/catalog",
+      "outcome": "probed",
+      "probed_tool": "search_offers",
+      "tool_count": 2,
+      "url": "https://wogrill.de/api/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "com.roboflow/roboflow-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.roboflow.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "dev.turva/turva-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.turva.dev/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.qg-aramai/coremodels",
+      "outcome": "discovery_failed",
+      "url": "https://go.coremodels.io/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.mcp-dir/crefisa-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://api.mcp.ai/p_crefisa"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "video.open/open-video",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.open.video/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/nasa-cmr",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/nasa-cmr/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "io.github.samuelbushi/uizze",
+      "outcome": "discovery_failed",
+      "url": "https://uizze.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.devsrodrigo/lockin-mcp",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.getrewired.org/mcp"
+    },
+    {
+      "name": "io.github.kindrat86/carshake",
+      "outcome": "probed",
+      "probed_tool": "create_handover_checklist",
+      "tool_count": 3,
+      "url": "https://carshake.online/api/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/vat",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/vat/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "dev.agenticemail/mcp",
+      "outcome": "discovery_failed",
+      "url": "https://api.agenticemail.dev/mcp"
+    },
+    {
+      "name": "app.savedthat/savedthat",
+      "outcome": "probed",
+      "probed_tool": "get_product_info",
+      "tool_count": 2,
+      "url": "https://savedthat.app/api/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http: invalid uri character",
+      "name": "io.github.braintrustdata/braintrust",
+      "outcome": "discovery_failed",
+      "url": "https://api{region}.braintrust.dev/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "io: failed to lookup address information: nodename nor servname provided, or not known",
+      "name": "io.github.Ansvar-Systems/uk-organic-regen",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.ansvar.eu/uk-organic-regen/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "live.max4/max4live",
+      "outcome": "discovery_failed",
+      "url": "https://mcp.max4.live/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/horizons-nasa",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/horizons-nasa/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/google-books",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/google-books/mcp"
+    },
+    {
+      "name": "io.github.fxjim/agent-commerce-guard",
+      "outcome": "probed",
+      "probed_tool": "review_agent_commerce_actions",
+      "tool_count": 1,
+      "url": "https://agent-commerce-guard.vercel.app/api/mcp"
+    },
+    {
+      "name": "com.proflightsearch/airport-delays",
+      "outcome": "probed",
+      "probed_tool": "get_airport_delay_status",
+      "tool_count": 4,
+      "url": "https://proflightsearch.com/mcp"
+    },
+    {
+      "name": "ai.gtfi/groundtruth",
+      "outcome": "probed",
+      "probed_tool": "read_scan",
+      "tool_count": 3,
+      "url": "https://gtfi.ai/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "com.intencheck/intencheck",
+      "outcome": "discovery_failed",
+      "url": "https://intencheck.com/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/arcgis-sanjoaquin",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/arcgis-sanjoaquin/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/data-orlando",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/data-orlando/mcp"
+    },
+    {
+      "category": "protocol",
+      "detail": "server responded with an SSE stream; this transport handles only the single-JSON-response case of Streamable HTTP",
+      "name": "io.github.pipeworx-io/textstats",
+      "outcome": "discovery_failed",
+      "url": "https://gateway.pipeworx.io/textstats/mcp"
+    },
+    {
+      "category": "transport",
+      "detail": "http status: 401",
+      "name": "com.guleki/geolocate-me",
+      "outcome": "discovery_failed",
+      "url": "https://geolocateme.guleki.com/mcp"
+    },
+    {
+      "name": "io.github.dockster/uxspot-mcp",
+      "outcome": "probed",
+      "probed_tool": "search_glossary",
+      "tool_count": 8,
+      "url": "https://uxspot.io/mcp"
+    }
+  ],
+  "servers_probed": 127,
+  "servers_with_zero_tools": 0,
+  "track": "B — protocol-probe oracle (B-01/B-02/B-03 validation)"
+}

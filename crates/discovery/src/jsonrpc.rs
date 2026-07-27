@@ -4,6 +4,15 @@
 //! Deliberately not a general JSON-RPC library: this crate speaks exactly two request
 //! methods and one notification (see `client.rs`), and a fuller implementation would be
 //! surface area nothing here needs.
+//!
+//! [`encode_request`] and [`encode_notification`] are `pub` (not `pub(crate)`) so the
+//! `probe` crate (Track B) can reuse correct, already-tested JSON-RPC framing instead of
+//! duplicating it. This is safe to share: encoding a message has no execution semantics —
+//! it doesn't send anything, and it places no restriction on `method` that would need
+//! preserving outside this crate. The actual structural guarantee P0-01 makes ("discovery
+//! cannot call a tool") lives entirely in [`crate::transport::Transport`] being
+//! `pub(crate)` and in [`crate::DiscoveryClient::discover`] never taking a method name as
+//! a parameter — neither of which this module touches or weakens.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -41,12 +50,15 @@ pub(crate) struct ResponseEnvelope {
     pub error: Option<ErrorObject>,
 }
 
-pub(crate) fn encode_request(id: u64, method: &str, params: Value) -> Vec<u8> {
+/// Encode a JSON-RPC 2.0 request. `method` is taken as-is — this function places no
+/// restriction on it; see the module doc comment for where that restriction actually lives.
+pub fn encode_request(id: u64, method: &str, params: Value) -> Vec<u8> {
     serde_json::to_vec(&Request { jsonrpc: JSONRPC_VERSION, id, method, params })
         .expect("a JSON-RPC request over Value params always serialises")
 }
 
-pub(crate) fn encode_notification(method: &str, params: Value) -> Vec<u8> {
+/// Encode a JSON-RPC 2.0 notification (no `id`, no response expected).
+pub fn encode_notification(method: &str, params: Value) -> Vec<u8> {
     serde_json::to_vec(&Notification { jsonrpc: JSONRPC_VERSION, method, params })
         .expect("a JSON-RPC notification over Value params always serialises")
 }
