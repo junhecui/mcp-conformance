@@ -281,10 +281,24 @@ Defends against rug pulls (architecture.md §0). *"A verdict without a pin is me
 **Depends on:** F-02
 **Exit:** A registry entry resolves to either an installable artifact or an endpoint, with
 provenance recorded.
+**Status:** Done — `crates/intake::catalogue`. Targets the real, current schema (verified
+via web search rather than assumed): the official MCP Registry's `server.json` format,
+schema `2025-12-11`, `packages[]` (npm/pypi/cargo/nuget/oci/mcpb) and `remotes[]`
+(streamable-http/sse), which the spec explicitly allows to coexist on one entry. `ingest`
+takes already-fetched bytes — fetching from a live registry is a separate, later concern
+this task's contract doesn't include. 9 tests, including one against the official schema
+doc's own minimal example rather than an invented fixture.
 
-- [ ] Resolve registry entries to source, package, image, or HTTP endpoint
-- [ ] Must not execute anything, including package install scripts
-- [ ] Unresolvable entries are recorded, not dropped
+- [x] Resolve registry entries to source, package, image, or HTTP endpoint — every
+      `packages[]`/`remotes[]` entry with its required fields becomes a `ResolvedTarget`;
+      both arrays are processed, not just whichever one is checked first
+- [x] Must not execute anything, including package install scripts — there is no code path
+      in this module that spawns a process or invokes a package manager; it only parses JSON
+- [x] Unresolvable entries are recorded, not dropped — `ingest` returns `IngestOutcome`
+      directly (never wrapped in a `Result`), so there is no `Err` arm a caller could
+      discard; a malformed sub-entry (e.g. a package missing `identifier`) is recorded in
+      `skipped` rather than sinking an otherwise-resolvable entry, and an entry with zero
+      usable targets becomes `Unresolvable` rather than an empty `Resolved`
 
 ### P0-04 Containability classifier
 
