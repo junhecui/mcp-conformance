@@ -8,3 +8,5 @@ census = "run --quiet --package xtask --bin xtask -- census"
 census-stage1 = "run --quiet --package xtask --bin xtask -- census-stage1"
 # P0-06: re-discover a prior Stage 1 run's successful servers twice and confirm pins match.
 census-pin-stability = "run --quiet --package xtask --bin xtask -- census-pin-stability"
+# P0-06 hand-verification: print one server's tools next to their coverage classification.
+dump-tools = "run --quiet --package xtask --bin xtask -- dump-tools"

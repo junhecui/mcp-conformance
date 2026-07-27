@@ -8,16 +8,29 @@ fn main() -> ExitCode {
         Some("census") => census(),
         Some("census-stage1") => census_stage1(),
         Some("census-pin-stability") => census_pin_stability(),
+        Some("dump-tools") => dump_tools(),
         Some(other) => {
-            eprintln!(
-                "unknown task `{other}`\n\nusage: cargo xtask <purity|census|census-stage1 [sample_size]|census-pin-stability <input.json>>"
-            );
+            eprintln!("unknown task `{other}`\n\n{USAGE}");
             ExitCode::FAILURE
         }
         None => {
-            eprintln!(
-                "usage: cargo xtask <purity|census|census-stage1 [sample_size]|census-pin-stability <input.json>>"
-            );
+            eprintln!("{USAGE}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+const USAGE: &str = "usage: cargo xtask <purity|census|census-stage1 [sample_size]|census-pin-stability <input.json>|dump-tools <url>>";
+
+fn dump_tools() -> ExitCode {
+    let Some(url) = std::env::args().nth(2) else {
+        eprintln!("usage: cargo xtask dump-tools <url>");
+        return ExitCode::FAILURE;
+    };
+    match xtask::dump_tools::run(&url) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("dump-tools failed: {e}");
             ExitCode::FAILURE
         }
     }

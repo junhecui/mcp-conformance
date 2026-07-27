@@ -2,5 +2,6 @@
 
 pub mod census;
 pub mod census_stage1;
+pub mod dump_tools;
 pub mod pin_stability;
 pub mod purity;
