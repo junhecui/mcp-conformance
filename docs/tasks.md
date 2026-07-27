@@ -578,6 +578,37 @@ data says the opposite is true, which is itself worth publishing.
 
 ---
 
+### P0-09 `server/discover` fallback for MCP spec `2026-07-28`
+
+**Depends on:** P0-01
+**Exit:** `DiscoveryClient` successfully discovers a server that speaks only the
+`2026-07-28` handshake, with the discovery path (`initialize` vs `server/discover`) recorded
+as provenance on the result — a second, orthogonal provenance axis alongside Stage 2's
+bare-host-vs-containerized flag.
+
+Surfaced by O-01's 2026-07-27 check (see "Ongoing" below), not originally anticipated: MCP
+spec revision `2026-07-28` — shipping the day after that check — removes the `initialize` /
+`notifications/initialized` handshake entirely. It's replaced by
+`_meta["io.modelcontextprotocol/protocolVersion"]` on every request plus an optional
+`server/discover` method. P0-01's `DiscoveryClient` hardcodes `initialize` +
+`notifications/initialized` + `tools/list` as literal method names with no fallback — by
+design, to keep tool-calling structurally unreachable from outside the crate — so a server
+that adopts `2026-07-28` becomes silently undiscoverable: there's no loud `initialize`
+failure to catch, just whatever error the new method name produces. Left unfixed, this
+surfaces as unexplained new failures in a future P0-06/P0-07 census run, or worse, in
+P1-08's first-verdict target server, well after the actual cause (a spec revision, not a
+harness bug) has been forgotten.
+
+- [ ] Attempt `server/discover` when `initialize` gets no response, or an error indicating
+      an unrecognized method, instead of treating that as a bare discovery failure
+- [ ] Record which handshake path succeeded as provenance on the result
+- [ ] `TOOL_SNAPSHOT.spec_revision` (already captured per P0-01) reflects whichever revision
+      was actually negotiated, regardless of which handshake produced it
+- [ ] Re-run against a real `2026-07-28` server once one exists in the wild, not just a
+      hand-built fixture, before trusting this at census scale
+
+---
+
 ## Track B — Class B protocol-probe oracle
 
 Runs after Phase 0, independently of the sandbox. Narrow exception carved out in
