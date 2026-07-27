@@ -239,7 +239,10 @@ pub fn run() -> Result<(), FirstVerdictError> {
     let outcome = handle.wait()?;
     println!("sandbox outcome: exit_status={:?} timed_out={}", outcome.exit_status, outcome.timed_out);
 
-    let gate_signals = integrity::RunSignals { timed_out: outcome.timed_out, containment_uncertain: false };
+    let gate_signals = integrity::RunSignals {
+        timed_out: outcome.timed_out,
+        containment_uncertain: !outcome.orphans_impossible,
+    };
     let gate_outcome = integrity::decide(gate_signals);
     println!("integrity gate: {gate_outcome:?}");
 
@@ -250,9 +253,14 @@ pub fn run() -> Result<(), FirstVerdictError> {
         integrity::GateOutcome::Accept => {
             let store_dir = scratch.path().join("evidence-store");
             let blob_store = store::BlobStore::open(&store_dir)?;
-            let observation =
-                observe::harvest(&outcome.upper, outcome.exit_status, outcome.timed_out, &blob_store)
-                    .map_err(|e| FirstVerdictError::Io(std::io::Error::other(e)))?;
+            let observation = observe::harvest(
+                &outcome.upper,
+                outcome.exit_status,
+                outcome.timed_out,
+                outcome.orphans_impossible,
+                &blob_store,
+            )
+            .map_err(|e| FirstVerdictError::Io(std::io::Error::other(e)))?;
             let capture_bytes = blob_store.get(&observation.upper_layer_digest)?;
             let raw_evidence = observe::evtree::decode(&capture_bytes)
                 .map_err(|e| FirstVerdictError::Decode(e.to_string()))?;

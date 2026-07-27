@@ -49,16 +49,25 @@ pub struct RunObservation {
 
 /// Whether a run left behind descendant processes the supervisor didn't account for.
 ///
-/// Phase 1 has no PID namespace (P2-01) to enumerate a killed process's own children, a gap
-/// `sandbox::supervisor`'s own doc comment already discloses and its own tests demonstrated
-/// directly (a `sh -c` grandchild surviving a `SIGKILL` to its parent shell). This type
-/// exists so that gap is a value this crate's callers must handle, never a silent
-/// `NoneDetected` this phase cannot actually back up.
+/// Originally added in Phase 1 as an honest placeholder: with no PID namespace (P2-01), a
+/// killed process's own children couldn't be enumerated at all —
+/// `sandbox::supervisor`'s own tests demonstrated the gap directly (a `sh -c` grandchild
+/// surviving a `SIGKILL` to its parent shell). P2-01 closed it structurally: the sandboxed
+/// process now runs as PID 1 of its own PID namespace, so its death (natural or via
+/// `SIGKILL`) makes the kernel unconditionally kill every other process left in that
+/// namespace — not merely "checked and found none," but "cannot exist." Both states remain
+/// distinguishable in this enum rather than collapsing the older, weaker claim into the
+/// newer, stronger one after the fact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrphanState {
-    /// This phase has no mechanism to enumerate a run's descendant processes at all, so
-    /// orphan status is unknown — not a claim that none exist.
+    /// No mechanism exists to enumerate a run's descendant processes at all, so orphan
+    /// status is unknown — not a claim that none exist. What every run reported before
+    /// P2-01, and what any future run without a PID namespace would still have to report.
     NotObservableAtThisPhase,
+    /// The run executed inside a PID namespace (`sandbox::SandboxOutcome::orphans_impossible`,
+    /// P2-01) — orphaned descendants are structurally impossible for this run, guaranteed by
+    /// the kernel, not merely unobserved.
+    ImpossibleByPidNamespace,
 }
 
 /// Why harvesting a run's evidence failed.
@@ -101,23 +110,26 @@ impl From<StoreError> for HarvestError {
 }
 
 /// Capture `upper` (the overlay upper layer, read from the host side) and store it,
-/// content-addressed, in `store`. `exit_status`/`timed_out` pass through verbatim from
-/// whatever ran the sandbox (`sandbox::SandboxOutcome`, in practice) — this function adds no
-/// judgment of its own about what they mean.
+/// content-addressed, in `store`. `exit_status`/`timed_out`/`orphans_impossible` pass
+/// through verbatim from whatever ran the sandbox (`sandbox::SandboxOutcome`, in practice —
+/// pass its own `orphans_impossible` field here) — this function adds no judgment of its
+/// own about what they mean, and takes plain parameters rather than depending on the
+/// `sandbox` crate's types, keeping the two components' contracts independent.
 pub fn harvest(
     upper: &Path,
     exit_status: Option<ExitStatus>,
     timed_out: bool,
+    orphans_impossible: bool,
     store: &BlobStore,
 ) -> Result<RunObservation, HarvestError> {
     let capture_bytes = evtree::capture(upper)?;
     let upper_layer_digest = store.put(&capture_bytes)?;
-    Ok(RunObservation {
-        upper_layer_digest,
-        exit_status,
-        timed_out,
-        orphan_state: OrphanState::NotObservableAtThisPhase,
-    })
+    let orphan_state = if orphans_impossible {
+        OrphanState::ImpossibleByPidNamespace
+    } else {
+        OrphanState::NotObservableAtThisPhase
+    };
+    Ok(RunObservation { upper_layer_digest, exit_status, timed_out, orphan_state })
 }
 
 #[cfg(test)]
@@ -135,13 +147,23 @@ mod tests {
         let store_dir = tempfile::tempdir().expect("tempdir");
         let store = BlobStore::open(store_dir.path()).expect("open store");
 
-        let observation = harvest(upper_dir.path(), None, false, &store).expect("harvest");
+        let observation = harvest(upper_dir.path(), None, false, true, &store).expect("harvest");
 
         let expected_bytes = evtree::capture(upper_dir.path()).expect("capture directly");
         let stored_bytes =
             store.get(&observation.upper_layer_digest).expect("read back from the store");
         assert_eq!(stored_bytes, expected_bytes);
         assert!(!observation.timed_out);
+        assert_eq!(observation.orphan_state, OrphanState::ImpossibleByPidNamespace);
+    }
+
+    #[test]
+    fn harvest_reports_not_observable_when_told_orphans_are_not_impossible() {
+        let upper_dir = tempfile::tempdir().expect("tempdir");
+        let store_dir = tempfile::tempdir().expect("tempdir");
+        let store = BlobStore::open(store_dir.path()).expect("open store");
+
+        let observation = harvest(upper_dir.path(), None, false, false, &store).expect("harvest");
         assert_eq!(observation.orphan_state, OrphanState::NotObservableAtThisPhase);
     }
 }

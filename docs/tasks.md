@@ -1303,6 +1303,66 @@ onward) is next.
 
 **Depends on:** P1-03
 **Exit:** Tool is PID 1; namespace teardown kills all descendants; orphans detected.
+**Status:** Done — `crates/sandbox::supervisor`, rewritten from `std::process::Command` to
+direct `fork`/`pipe`/`execvp`. Required, not a style choice: `unshare(CLONE_NEWPID)` does
+**not** move the calling process into the new namespace — only its *future children* join
+it, and the first one becomes PID 1. `Command::pre_exec`'s "one fork, one eventual exec in
+the same process" model cannot express this; the real target must be a **second** fork born
+after the `unshare` call. This module now does exactly that: fork-1 unshares
+`CLONE_NEWUSER|CLONE_NEWPID|CLONE_NEWNS`, sets up uid/gid maps and the overlay mount, forks
+again, and becomes the new namespace's minimal "init" (waits for fork-2, mirrors its exit
+status); fork-2 `chdir`s and `execvp`s directly into the real target, becoming PID 1 of the
+namespace. Own pipe-based error channel (mirroring what `std::process::Command` does
+internally) and a dedicated pid-reporting pipe (fork-1 tells the real supervisor fork-2's PID
+— see the "real bug" note below for why that's load-bearing) replace `Command`'s machinery
+entirely.
+
+**User-namespace remap: real behavior, verified rather than assumed not to work
+everywhere.** Intended: `nobody`/`nogroup` (65534) remap for defense in depth even though the
+supervisor is real root. Empirically verified this project's own dev/CI container (a
+Firecracker microVM, per its own `process_api --firecracker-init`) returns `EPERM` on any
+*non-identity* `/proc/self/uid_map` write, even with `CAP_SETUID` present in the bounding
+set — confirmed with a standalone test program before writing any real code, isolating that
+`unshare(CLONE_NEWUSER)` and an *identity* mapping (`"0 0 1"`) both work fine, only the
+actual remap is blocked by some outer confinement layer. The module attempts the real
+`nobody`/`nogroup` remap first and falls back to identity **on `EPERM` specifically**; any
+other error still fails the spawn loudly. Disclosed here exactly the way F-00 disclosed the
+CI kernel-pin gap: a real environment-specific limitation, not silently downgraded and not
+hidden.
+
+**Two real bugs found running this against a real process tree, not only a synthetic one**,
+both fixed before this was considered done:
+
+1. The timeout watchdog's `SIGKILL` originally targeted `init_pid` (fork-1) — fork-1's own
+   OS-level identity as fork-2's parent, not its PID-namespace membership. Killing fork-1
+   does nothing to fork-2's namespace at all; only the death of PID 1 *inside* the namespace
+   triggers the kernel's automatic teardown. Found by hand: a `/bin/sleep 3600` test process
+   was still alive in `ps` well after its supposed timeout kill. Fixed by adding the
+   pid-reporting pipe above and killing `target_pid` (fork-2) instead.
+2. Fork-1 never explicitly closed its own copy of the `O_CLOEXEC` error-reporting pipe's
+   write end before entering its (potentially very long) `waitpid` loop. Since fork-1 itself
+   never `exec`s, that copy stayed open for the run's entire duration, so the supervisor's
+   `read_to_end` on the other end — waiting for EOF as the "setup succeeded" signal — blocked
+   for that whole duration instead of returning as soon as the real target's `execvp`
+   succeeded. Every `spawn()` call hung until the sandboxed process finished. Fixed by
+   dropping that fd explicitly in fork-1 right after the second fork.
+
+**The exit criterion demonstrated directly, not just claimed**: a new test
+(`a_grandchild_the_target_abandons_is_killed_by_pid_namespace_teardown`) recreates the exact
+scenario P1-03's own tests had to work around (`sh -c "sleep 3600 & exit 0"` — a shell
+backgrounding a process and exiting without waiting for it) and confirms, by scanning `/proc`
+from the host's own unsandboxed perspective, that the abandoned grandchild does not survive.
+Before this task, it did. `SandboxOutcome.orphans_impossible` (always `true` for every run
+this module now produces) and `observe::OrphanState::ImpossibleByPidNamespace` (a new variant
+alongside Phase 1's `NotObservableAtThisPhase`, which still exists for anything that isn't
+namespaced) both let this stronger guarantee flow through to `integrity::RunSignals` — `cargo
+xtask first-verdict` (P1-08) re-run end to end against the same live
+`@modelcontextprotocol/server-everything` server, unaffected: identical `Holds` verdict, now
+riding on a materially stronger containment guarantee underneath. `sandbox` now has 13
+tests total (9 in `base_layer`, unchanged; 4 in `supervisor`, up from 3 — the pre-existing
+timeout/overlay/stdio tests all still pass unchanged against the new implementation, plus
+the new orphan-teardown proof), and `observe` gained a second `harvest` test covering the
+`OrphanState` variant it now selects between.
 
 ### P2-02 Sandbox — cgroups v2
 
