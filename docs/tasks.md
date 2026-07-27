@@ -429,26 +429,41 @@ tools together produce the same combined counts.
 **Depends on:** P0-04, P0-05
 **Exit:** Census completes over 100 servers; pin stability and coverage taxonomy validated
 against hand inspection of a sample.
-**Status:** In progress — the Class B half is done: `cargo xtask census-stage1 100` against
-100 live Class B servers, `results/census/class_b_annotation_coverage.json`. 26 succeeded
-(74 failed — mostly `401`, i.e. auth required, plus 14 genuine SSE-only servers correctly
-out of this transport's declared scope; see that commit for the full breakdown), 289 tools
-discovered. Two real bugs were found and fixed by running this against live servers rather
-than only fakes: `HttpTransport` was missing `text/event-stream` from its `Accept` header
-(a spec violation that got 14 servers spuriously rejected with `406`, not a real
-reachability problem), and `RegistryClient::fetch_all` had no way to stop early once a
-caller had enough matching entries. Both fixed and tested before this data was produced.
-**Remaining:** the Class A half (needs Stage 2 — containerized execution, not yet built);
-re-running against the same 100 to confirm pin stability; hand-verifying the coverage
-taxonomy on ≥20 tools against the actual `tools/list` JSON. None of these are blocked, they
-just weren't done in this pass.
+**Status:** Class B half done, including both verification checklist items below. Class A
+half remains (needs Stage 2 — containerized execution, not yet built; a separate scoping
+step, the same way Stage 1's live third-party contact needed explicit sign-off before it
+started).
+
+`cargo xtask census-stage1 100` against 100 live Class B servers,
+`results/census/class_b_annotation_coverage.json`. 26 succeeded (74 failed — mostly `401`,
+i.e. auth required, plus 14 genuine SSE-only servers correctly out of this transport's
+declared scope; see that commit for the full breakdown), 289 tools discovered. Two real
+bugs were found and fixed by running this against live servers rather than only fakes:
+`HttpTransport` was missing `text/event-stream` from its `Accept` header (a spec violation
+that got 14 servers spuriously rejected with `406`, not a real reachability problem), and
+`RegistryClient::fetch_all` had no way to stop early once a caller had enough matching
+entries. Both fixed and tested before this data was produced.
 
 architecture.md §12 item 1. This is Stage 1/2 work (see the Phase 0 staging note above) —
 it needs real `initialize`/`tools/list` exchanges with live servers, not just registry
 metadata.
 
-- [ ] Hand-verify the taxonomy on ≥20 tools; fix the taxonomy, not the data
-- [ ] Re-run discovery on the same 100 and confirm pins are stable
+- [x] Hand-verify the taxonomy on ≥20 tools; fix the taxonomy, not the data — 47 tools
+      inspected by hand across three servers (`cargo xtask dump-tools`), spanning all three
+      coverage states. 34 were uniformly `Absent` (no `annotations` object at all — matches
+      the raw JSON). 13 from a fourth server exercised the interesting case directly:
+      `search_docs` declares `readOnlyHint`/`idempotentHint`/`openWorldHint` but omits
+      `destructiveHint` → correctly `Explicit`×3 + `Defaulted`×1; `warmup_docs_cache`
+      inverts that (declares `destructiveHint`, omits `readOnlyHint`); `openWorldHint:false`
+      on `get_start_path` correctly classifies as `Explicit`, not confused with absence.
+      Every record checked matched by hand. Nothing needed fixing.
+- [x] Re-run discovery on the same 100 and confirm pins are stable — done against the 26
+      that actually succeeded (`cargo xtask census-pin-stability`,
+      `results/census/pin_stability.json`): each re-discovered twice, back to back. 26/26
+      stable, 0 unstable, 0 failed to re-discover. Caveat noted in that commit: this is
+      immediate back-to-back re-discovery, not separated by real elapsed time, so it
+      confirms the pinning mechanism is deterministic given identical bytes, not that pins
+      survive longer-interval drift or deployment churn.
 
 ### P0-07 Full census — ≥1,000 servers
 
