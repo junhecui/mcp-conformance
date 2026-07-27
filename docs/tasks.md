@@ -1694,10 +1694,11 @@ constraint the crate already documents, in its own tests, rather than accidental
 it. Verified clean across 8 consecutive runs under default (parallel) test execution after
 the fix, each completing in well under a second.
 
-`orchestrator` grew from 8 tests (6 `load_ruleset`/replay-adjacent, plus the pre-existing
-2-test `replay.rs` integration suite) to 14. `cargo build --workspace`, `cargo clippy
---workspace --all-targets -- -D warnings`, `cargo xtask purity`, and `cargo test --workspace`
-all pass clean.
+`orchestrator`'s own lib tests grew from 3 (`load_ruleset`) to 6 (the 3 new `arms` tests
+above); combined with the pre-existing, separate 2-test `replay.rs` integration suite, `cargo
+test -p orchestrator` now reports 8 total, up from 5. `cargo build --workspace`, `cargo
+clippy --workspace --all-targets -- -D warnings`, `cargo xtask purity`, and `cargo test
+--workspace` all pass clean.
 
 ### P2-08 ⚑ Noise floor
 
@@ -1707,6 +1708,46 @@ all pass clean.
 ADR-003. Measured, never assumed. Comparing one call against two without first establishing
 how much two *identical* single-call runs differ is measuring noise plus signal and reporting
 it as signal.
+
+**Status:** Done, split across the two crates the property naturally belongs to. The pure Δ
+computation, `normalise::noise_floor(first, second) -> Vec<NoiseFloorEntry>`, lives in
+`normalise` (still `no_std`, still depending only on `datamodel` — `cargo xtask purity`
+unchanged): symmetric difference over **paths**, not full entry equality. Scoped there
+deliberately — `N`'s stated purpose is seeding candidate normalisation rules
+("architecture.md §4.2: every element of `N` is a candidate normalisation rule"), and ADR-008's
+ruleset is itself path-glob-shaped, not content-shaped, so a path present in both captures
+with different content is out of this function's scope by design (documented in the module
+doc comment as a different question with a different consumer — `idempotentHint`'s own `D2`
+vs `D1` check, P2-09). Defensive against unsorted input the same way `normalise` itself
+already is ("regardless of the order entries arrived in"), rather than silently trusting
+`RawEvidence`'s usual sorted-order guarantee. 6 new tests: empty on identical captures, a path
+missing from one side reported correctly from either direction, both-sides differences sorted
+correctly, and — the one that would have caught a bug in the other five — unsorted input still
+producing the right answer.
+
+**The effectful half — actually producing two independent captures to diff — is
+`orchestrator::measure_noise_floor`,** the exit criterion's "computed per tool, per run" made
+literal: it calls `arms::run_arm_1_prime` twice (against two distinct scratch subdirectories,
+so the two runs never share an overlay — reusing one would silently turn this into `Arm 2R`'s
+restart instead of two independent `Arm 1'` runs) and hands the two real, decoded changesets
+to `normalise::noise_floor`.
+
+**ADR-003's "measured, never assumed" proven both directions, not just the convenient one.**
+Two new tests, reusing P2-07's stub-server infrastructure (refactored into a shared,
+`pub(crate)` `arms::tests_support` module so this module's tests don't duplicate it):
+`a_deterministic_tool_has_an_empty_noise_floor` runs the P2-07 stub twice independently and
+confirms `N` is empty — the clean case. `a_tool_with_genuine_per_run_variation_has_a_non_
+empty_noise_floor` uses a second stub that `touch`es a file named after the wall-clock
+nanosecond it ran at (`scratch-$(date +%s%N).tmp` — the same realistic shape ADR-008's
+`**/*.pid`/`**/*.lock` ephemeral patterns already exist to catch) and confirms `N` comes back
+non-empty, with every entry actually being one of the uniquely-named scratch files — proof
+that an empty result from the first test reflects genuine tool determinism, not a
+`noise_floor` implementation that can never detect anything.
+
+`normalise` grew from 12 to 18 tests; `orchestrator` grew from 8 to 10 (excluding the
+separate `replay.rs` integration suite). `cargo build --workspace`, `cargo clippy --workspace
+--all-targets -- -D warnings`, `cargo xtask purity`, and `cargo test --workspace` all pass
+clean.
 
 ### P2-09 `idempotentHint` multi-arm protocol
 

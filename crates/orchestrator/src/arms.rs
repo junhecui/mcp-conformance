@@ -266,31 +266,38 @@ pub fn run_arm_2r(
     harvest(second, blob_store)
 }
 
+/// Test-only support shared across this crate's other test modules (`crate::noise`'s tests,
+/// notably) — `pub(crate)` rather than nested inside `mod tests` below specifically so a
+/// sibling module's own `#[cfg(test)]` code can reuse the same stub server and sandbox-slot
+/// discipline instead of duplicating it.
 #[cfg(test)]
-mod tests {
-    use super::*;
+pub(crate) mod tests_support {
+    use super::{ArmProgram, ArmRun};
     use sandbox::{EntryKind, EntrySpec};
+    use serde_json::json;
+    use std::path::{Path, PathBuf};
     use std::sync::Mutex;
+    use std::time::Duration;
 
     /// Rust's test harness runs `#[test]` functions concurrently by default, but this
     /// crate's own top-level doc comment states the constraint plainly: "must not run more
     /// than one sandbox per worker slot at a time... concurrent sandboxes share a kernel and
     /// a page cache, and the resulting timing coupling is exactly the noise P2-08's noise
-    /// floor is trying to measure." Found directly, not assumed: running these three tests
+    /// floor is trying to measure." Found directly, not assumed: running arm tests
     /// concurrently (the default) occasionally pushed one sandboxed session's wall-clock
-    /// time past ten seconds under contention — this same test suite, serialized, completes
-    /// in well under a second every time. Each test below takes this lock before spawning
-    /// anything, so this module's own tests obey the constraint the crate itself documents
-    /// rather than accidentally violating it.
+    /// time past ten seconds under contention — the same test suite, serialized, completes
+    /// in well under a second every time. Every test using this module takes this lock
+    /// before spawning anything, so this crate's own tests obey the constraint the crate
+    /// itself documents rather than accidentally violating it.
     static SANDBOX_SLOT: Mutex<()> = Mutex::new(());
 
-    fn take_sandbox_slot() -> std::sync::MutexGuard<'static, ()> {
+    pub(crate) fn take_sandbox_slot() -> std::sync::MutexGuard<'static, ()> {
         SANDBOX_SLOT.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// A minimal MCP-shaped stdio stub, purpose-built for this module's own tests: it
-    /// answers `initialize` and `tools/call` (matching whatever `id` the request actually
-    /// used — the field order `discovery::jsonrpc::encode_request` always produces,
+    /// A minimal MCP-shaped stdio stub, purpose-built for this crate's own tests: it answers
+    /// `initialize` and `tools/call` (matching whatever `id` the request actually used — the
+    /// field order `discovery::jsonrpc::encode_request` always produces,
     /// `{"jsonrpc":...,"id":N,"method":...}`, makes a plain `sed` extraction reliable here),
     /// ignores `notifications/initialized`, and tracks an *in-process-only* call counter:
     /// only the first `tools/call` a given process instance ever receives appends a line to
@@ -319,7 +326,7 @@ while IFS= read -r line; do
 done
 ";
 
-    fn build_stub_base_layer(root: &Path) {
+    pub(crate) fn build_stub_base_layer(root: &Path) {
         let entries = vec![EntrySpec {
             path: PathBuf::from("stub_server.sh"),
             kind: EntryKind::File(STUB_SERVER_SCRIPT.to_vec()),
@@ -328,7 +335,7 @@ done
         sandbox::build(root, &entries).expect("build stub base layer");
     }
 
-    fn stub_program(base_layer: &Path) -> ArmProgram {
+    pub(crate) fn stub_program(base_layer: &Path) -> ArmProgram {
         ArmProgram {
             base_layer: base_layer.to_path_buf(),
             program: PathBuf::from("/bin/sh"),
@@ -339,7 +346,7 @@ done
         }
     }
 
-    fn effect_lines(run: &ArmRun) -> usize {
+    pub(crate) fn effect_lines(run: &ArmRun) -> usize {
         assert!(
             run.evidence.entries.iter().any(|e| e.path == b"effect.txt"),
             "the decoded changeset must list effect.txt as a real captured entry, not just a \
@@ -348,6 +355,12 @@ done
         let content = std::fs::read_to_string(run.upper.join("effect.txt")).unwrap_or_default();
         content.lines().count()
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::tests_support::{build_stub_base_layer, effect_lines, stub_program, take_sandbox_slot};
 
     /// `Arm 1'`: two entirely separate invocations of this arm shape must each land in their
     /// own, non-overlapping upper directory and each independently show the single-call

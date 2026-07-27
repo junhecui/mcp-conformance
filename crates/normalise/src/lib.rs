@@ -18,10 +18,13 @@
 extern crate alloc;
 
 mod glob;
+mod noise;
 
 use alloc::vec::Vec;
 
 use datamodel::{CanonicalChangeset, ClassifiedPath, PathTaxonomy, RawEvidence, Ruleset};
+
+pub use noise::{noise_floor, NoiseFloorEntry};
 
 /// Apply a ruleset to raw evidence, yielding the canonical changeset that every
 /// verification protocol is evaluated against.

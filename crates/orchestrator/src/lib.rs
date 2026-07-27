@@ -29,6 +29,13 @@ mod arms;
 #[cfg(target_os = "linux")]
 pub use arms::{run_arm_1_prime, run_arm_2, run_arm_2r, ArmError, ArmProgram, ArmRun};
 
+/// P2-08: `N = D1 Δ D1'`, computed per tool, per run, by actually running two independent
+/// `Arm 1'`-shaped executions. Same gating rationale as `arms`.
+#[cfg(target_os = "linux")]
+mod noise;
+#[cfg(target_os = "linux")]
+pub use noise::measure_noise_floor;
+
 #[derive(Deserialize)]
 struct RulesetFile {
     version: String,
