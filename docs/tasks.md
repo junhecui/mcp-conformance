@@ -59,6 +59,19 @@ prevents rework later.
 **Depends on:** —
 **Exit:** A reproducible Linux environment (fixed kernel version, fixed overlayfs mount
 options) that development and CI can both target, documented as such.
+**Status:** Done — [ADR-010](adr/010-pinned-linux-environment.md). Target: a pinned Ubuntu
+24.04 LTS ("Noble Numbat") cloud image, referenced by an exact dated build serial (e.g.
+`releases/noble/release-20260705/` via Canonical's permanent archive, never the `release/`
+symlink that repoints over time) rather than a dedicated bare-metal/cloud box — the
+trade-off table in the ADR turned on the box option not actually solving F-00's own
+"contributor local access" checklist item (it gives remote access to one shared machine, not
+local access to a reproducible one) and reintroducing the "one sandbox at a time" concurrency
+constraint architecture.md §7 already imposes at worker-pool scale, now at the individual
+contributor's desk too. GA kernel series pinned at **6.8** (`linux-image-generic`, not the
+HWE track, which deliberately jumps series over the LTS lifecycle — exactly the drift being
+prevented). Verification checksum is not asserted in the doc itself — recording it is the
+first action for whoever actually provisions the image, not a value invented from an
+unverified search result.
 
 Referenced as blocking in [ADR-007](adr/007-implementation-language.md) ("sandbox is
 unbuildable on the macOS host by construction... this is now blocking") and in
@@ -75,12 +88,31 @@ per the reasoning in the P0-06/P0-07 notes below. F-00 is specifically about the
 fixed-kernel-version precision that *observation-grade* overlayfs work (Phase 1+) needs,
 which containerized execution without observation does not.
 
-- [ ] Choose the target: a pinned VM image (recommended — a container shares the host
+**CI gap, disclosed rather than papered over.** GitHub's hosted `ubuntu-24.04` runner label
+pins the Ubuntu release, not the point-in-time kernel build inside it — GitHub updates
+images under a stable label over time, and hosted runners don't expose nested
+virtualisation/KVM, so CI cannot simply boot the pinned VM image itself today. The ADR
+records a self-hosted-runner-on-the-pinned-image escalation path but deliberately does not
+build it yet (no Phase 1+ sandbox code exists to need it). What ships now: F-03's existing
+kernel-prerequisite probe step in `.github/workflows/ci.yml` prints `uname -r` so drift
+against the ADR-010 pin is visible in every CI run's log rather than silent — it does not
+fail the build on a mismatch, since the hosted runner was never claimed to satisfy the pin
+exactly and there is no owned fallback yet to fail over to.
+
+- [x] Choose the target: a pinned VM image (recommended — a container shares the host
       kernel, which defeats "pinned" if the host itself isn't fixed) vs. a dedicated
-      bare-metal/cloud Linux box
-- [ ] Pin the kernel version and record it
-- [ ] Pin overlayfs mount options
-- [ ] Document how a contributor gets local access matching CI's environment
+      bare-metal/cloud Linux box — VM image chosen, full trade-off table in ADR-010
+- [x] Pin the kernel version and record it — Ubuntu 24.04 LTS GA kernel series 6.8
+      (`linux-image-generic`), image referenced by dated archive serial
+- [x] Pin overlayfs mount options — `redirect_dir=off`, `metacopy=off` (security-load-bearing:
+      the kernel's own docs warn against `metacopy=on` with untrusted layers, which is
+      exactly design.md §3's hostile-tool trust model), `index=off` (no layer reuse/export
+      exists to protect, per architecture.md §4.1's "arms are never reused"), `userxattr`
+      conditional on P1-03's not-yet-made privileged-vs-rootless mount choice
+- [x] Document how a contributor gets local access matching CI's environment — Lima (or
+      Vagrant+libvirt/qemu/UTM) booting the pinned, checksum-verified image locally on any
+      host OS/architecture; arm64 natively for Apple Silicon contributors since none of the
+      namespace/overlayfs/cgroups behaviour in scope is architecture-sensitive
 
 ### F-01 ⚑ Choose implementation language and workspace layout — ADR-007
 
@@ -241,6 +273,19 @@ exercised in both directions (accepted when it should be, rejected when it shoul
 **Depends on:** F-05
 **Exit:** ADR-009 merged defining how a directory tree (the overlay upper layer) serialises
 into the byte blob F-05's content-addressed store actually stores.
+**Status:** Done — [ADR-009](adr/009-evidence-tree-serialisation.md). Bespoke, sorted,
+**single-blob** format (`evtree1`): one capture is one `Vec<u8>` handed straight to
+`BlobStore::put`, matching architecture.md §6's one-`EVIDENCE`-row-one-`blob_ref` shape
+exactly, rather than a git-tree-style multi-blob Merkle DAG (rejected — no repeated-history
+use case here to amortise the extra indirection against; see the ADR's "On B specifically"
+note) or an external tar/PAX format (rejected — classic `ustar` mtime resolution is 1 second,
+lossy against the nanosecond-precision losslessness requirement). Entries are POSIX file
+types generically (regular/directory/symlink/fifo/char-device/block-device/socket) plus a
+full captured xattr set, sorted by raw path bytes with fixed-width big-endian fields — no
+overlay-specific "whiteout" tag exists in the format itself, since a whiteout is fully
+representable as a generic char-device entry with `dev_major=0`/`dev_minor=0`, and hardcoding
+the special case would be interpretation, which architecture.md §3.1 forbids this layer from
+doing (interpretation stays in `normalise`, per ADR-005).
 
 Referenced in [ADR-007](adr/007-implementation-language.md) ("the primary evidence artifact
 is a directory tree, not a byte string, and F-05's content addressing needs a tree format
@@ -249,15 +294,23 @@ deferred to ADR-009") since F-05 landed, but never actually added to this backlo
 now — found alongside the F-00 gap while scoping the census work below. Blocks P1-04
 (Observation collector), the first component with an actual directory tree to harvest.
 
-- [ ] Decide the serialisation format (git-tree-like, tar-like, or bespoke) and its
+- [x] Decide the serialisation format (git-tree-like, tar-like, or bespoke) and its
       reproducibility properties — ordering, mtimes, whiteouts; design.md §9's overlayfs
-      semantics apply directly
-- [ ] The format must stay lossless per `RawEvidence`'s existing contract: *"capture is
+      semantics apply directly — bespoke chosen; full options table and whiteout/opaque
+      handling in the ADR
+- [x] The format must stay lossless per `RawEvidence`'s existing contract: *"capture is
       lossless... discarding [mtimes/inode data] at capture time is normalisation, and
-      ADR-005 requires normalisation to be a pure function of stored evidence"*
-- [ ] Two independent captures of the same directory tree must serialise to byte-identical
+      ADR-005 requires normalisation to be a pure function of stored evidence"* — mode,
+      uid/gid, nanosecond mtime, inode, dev major/minor, full xattr set, and complete file
+      content are all retained verbatim; nothing is filtered or rounded at capture time
+- [x] Two independent captures of the same directory tree must serialise to byte-identical
       output — this is what makes F-05's content addressing meaningful for tree evidence,
-      not just single blobs, the same property P1-02 proves for the base layer itself
+      not just single blobs, the same property P1-02 proves for the base layer itself —
+      follows directly from the format's forced sort order and the absence of any
+      capture-time-clock/PID/hostname field; the ADR states precisely how this is a
+      narrower, cheaper claim than P1-02's own (harder) construction-reproducibility
+      property, and how P1-02 reuses this format's digest-comparison test rather than
+      inventing its own
 
 ---
 

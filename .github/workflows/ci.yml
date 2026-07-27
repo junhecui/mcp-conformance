@@ -41,9 +41,19 @@ jobs:
       # Namespace and overlayfs probes run under `sudo` deliberately: they check that
       # the kernel *subsystems* are present, independent of the unprivileged-userns
       # policy question, which is P1-03's design concern, not this check's.
+      #
+      # F-00 / ADR-010: this runner's `ubuntu-24.04` label pins the Ubuntu release, not
+      # the point-in-time kernel build — GitHub updates images under a stable label over
+      # time. That gap is accepted, not engineered around, but it must not be silent:
+      # printing `uname -r` here makes drift against ADR-010's pinned 6.8.x series
+      # visible in every run's log, without failing the build on GitHub's own image
+      # churn (there is no owned fallback to fail over to yet).
       - name: Verify sandbox kernel prerequisites
         run: |
           set -euo pipefail
+
+          echo "-- kernel version (informational; see ADR-010 for the pinned target) --"
+          uname -r
 
           echo "-- cgroups v2 unified hierarchy --"
           test -f /sys/fs/cgroup/cgroup.controllers
