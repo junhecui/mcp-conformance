@@ -1266,9 +1266,34 @@ P2-01's to close, not silently this task's success.
 **Depends on:** P1-08, F-05
 **Exit:** An integration test regenerates the full verdict table from stored evidence plus a
 ruleset version, executing no tool.
+**Status:** Done — `crates/orchestrator/tests/replay.rs`, 2 tests. Each builds a directory
+by hand with plain `std::fs` (no `sandbox::spawn`, no MCP server, no subprocess anywhere in
+the test) standing in for "a run happened, at some point in the past"; harvests and stores
+it exactly as a real run would (`observe::evtree::capture` → `store::BlobStore::put`); then
+**drops the source directory entirely** before doing anything else, so every step after that
+point provably has nothing to read from but the stored digest and a ruleset — the literal
+"executing no tool" claim, enforced by the source evidence no longer existing, not merely
+asserted.
+
+The replay step itself (`BlobStore::get` → `observe::evtree::decode` →
+`orchestrator::load_ruleset` against the real `rulesets/v1.json` → `normalise::normalise` →
+`verdict::read_only_hint`) is run twice, independently, from the same stored digest, and
+both runs are asserted equal — proving this is a genuine pure function of `(evidence,
+ruleset_version)`, not something that merely happened to reproduce once. One test's
+changeset mixes a real user-facing write with an ephemeral one and confirms the replayed
+verdict is still `Violated` (proving the taxonomy split itself survives the store round
+trip, not just an easy all-empty case); the other confirms a purely-ephemeral changeset
+still replays to `Holds`.
 
 architecture.md §6 invariant 2: *"it is worth an integration test that literally does it."*
 This is the property that makes ruleset iteration safe.
+
+**Phase 1 is now closed.** Every component architecture.md §10 assigns this phase — sandbox
+(mount + overlay + timeout), observe (upper layer), integrity (teardown + timeout only),
+normalise v1, verdict (`readOnlyHint`) — is implemented, tested, and (P1-08) proven against
+a live, real, third-party MCP server end to end, with the replay property this task closes
+out proving the whole pipeline is safe to re-derive from storage alone. Phase 2 (P2-01
+onward) is next.
 
 ---
 
