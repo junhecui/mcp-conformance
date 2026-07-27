@@ -1178,9 +1178,36 @@ and the full workspace build/clippy/purity/test suite all still green.
 
 **Depends on:** P1-06
 **Exit:** `canonical(D1)` non-empty over `user_state` contradicts a `true` declaration.
+**Status:** Done — `crates/verdict`. `Assessment` gained an `oracle: Oracle` field alongside
+its existing `outcome`/`reason`, and its fields are now private — the only ways to build one
+are `Assessment::holds`/`::violated`/`::unverifiable`, so "outcome is `Unverifiable` with no
+reason" isn't a value this type can hold, matching the doc comment's own long-standing claim
+("this type exists so the constraint is not the only thing standing between us and a
+shrug") with actual enforcement rather than a struct literal anyone could still misuse.
 
-- [ ] Pure: cannot take a model, network client, or clock as a dependency (F-04 enforces)
-- [ ] Emits `holds` / `violated` / `unverifiable` with `reason_code` and `oracle`
+`read_only_hint(declared, d1) -> Assessment` is the literal exit criterion: `declared &&
+!d1.user_state_is_empty()` is the only path to `Violated`; everything else — including every
+`false`-declared case regardless of changeset, since declaring non-read-only promises
+nothing a changeset could contradict — is `Holds`. Always tagged
+`Oracle::KernelChangeset` (this is the Class A engine; B-01's `protocol_probe` oracle is a
+separate, already-shipped decision function). Deliberately never returns `Unverifiable`
+itself — by the time evidence reaches this function P1-05's gate has already passed it, and
+this single-arm protocol (unlike `idempotentHint`'s multi-arm one, P2-09) has no internal
+branch that produces anything else; composing the gate's own `Unverifiable` outcome with
+this function's `Holds`/`Violated` is P1-08's job, documented explicitly in this function's
+own doc comment so the omission reads as scoped, not forgotten.
+
+5 tests: both `Violated`-triggering and `Holds`-preserving cases for a `true` declaration
+(including that a `server_internal`-only changeset does *not* violate — ADR-008's whole
+point, exercised here); every `false`-declaration case holding regardless of changeset
+content; and the accessor methods round-tripping exactly what each constructor built.
+
+- [x] Pure: cannot take a model, network client, or clock as a dependency (F-04 enforces) —
+      unchanged `#![no_std]`, `cargo purity` still reports `{datamodel}` only
+- [x] Emits `holds` / `violated` / `unverifiable` with `reason_code` and `oracle` — the
+      `Assessment` type carries all of this; `unverifiable`'s reason is non-optional at the
+      call site (a `ReasonCode` parameter, not `Option<ReasonCode>`), even though
+      `read_only_hint` itself never calls that constructor for the reason above
 
 ### P1-08 ⚑ End-to-end: first real verdict
 
