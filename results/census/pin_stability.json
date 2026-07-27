@@ -1,0 +1,192 @@
+{
+  "checked": 26,
+  "failed_to_rediscover": 0,
+  "generated_at_unix": 1785128906,
+  "input_file": "results/census/class_b_annotation_coverage.json",
+  "servers": [
+    {
+      "name": "ac.tandem/docs-mcp",
+      "result": "stable",
+      "server_pin": "9a2b2c7eda3e245e2d938310874a8023da2eed52f6b36fdf4dfeb6c49757cf45",
+      "tool_count": 13,
+      "url": "https://tandem.ac/mcp"
+    },
+    {
+      "name": "ag.hood/name-service",
+      "result": "stable",
+      "server_pin": "3c71a7b535acc9865150eee0b1237c0d6aebd1ca2192de7e89f3ff6dc0ae35f5",
+      "tool_count": 5,
+      "url": "https://www.hood.ag/api/mcp"
+    },
+    {
+      "name": "ai.agenticfabricationnetwork/ufp",
+      "result": "stable",
+      "server_pin": "d875956597469f96337c73feaa95b6d953a5fb33e3c7a805db42054c5db13c25",
+      "tool_count": 8,
+      "url": "https://agenticfabricationnetwork.ai/mcp"
+    },
+    {
+      "name": "ai.agenticshelf/graffeo",
+      "result": "stable",
+      "server_pin": "5ed8a4637cde1b83b1809f346ae8f8776534cc827de13a5c757aafcaecc2c65a",
+      "tool_count": 7,
+      "url": "https://api.agenticshelf.ai/m/graffeo/mcp"
+    },
+    {
+      "name": "ai.agenticshelf/mcp",
+      "result": "stable",
+      "server_pin": "5ed8a4637cde1b83b1809f346ae8f8776534cc827de13a5c757aafcaecc2c65a",
+      "tool_count": 7,
+      "url": "https://api.agenticshelf.ai/mcp"
+    },
+    {
+      "name": "ai.agenticshelf/puroair",
+      "result": "stable",
+      "server_pin": "5ed8a4637cde1b83b1809f346ae8f8776534cc827de13a5c757aafcaecc2c65a",
+      "tool_count": 7,
+      "url": "https://api.agenticshelf.ai/m/puroair/mcp"
+    },
+    {
+      "name": "ai.agentrapay/agentra",
+      "result": "stable",
+      "server_pin": "86817be58dec28c89b62b5be89a7098abf35b8f7ccaad994164e99b6feeb8861",
+      "tool_count": 6,
+      "url": "https://api.agentrapay.ai/mcp"
+    },
+    {
+      "name": "ai.ai-akari/agent-trust-receipt",
+      "result": "stable",
+      "server_pin": "8aa19e92bee5fee5f6b5c15b81fda7b4aa0d44d2c72ffe5f02073688e6339e66",
+      "tool_count": 1,
+      "url": "https://ai-akari.ai/mcp-trust"
+    },
+    {
+      "name": "ai.ai-akari/one-minute-akari",
+      "result": "stable",
+      "server_pin": "27822676c76bb178018380a7f35054d38ddde3b44b7b75d62f20e0418aaa9566",
+      "tool_count": 3,
+      "url": "https://ai-akari.ai/mcp"
+    },
+    {
+      "name": "ai.ai-portal/ai-portal",
+      "result": "stable",
+      "server_pin": "6467f33cff85bd095591ec486a8853226103ecc64210f73afd1304f3d79301c7",
+      "tool_count": 4,
+      "url": "https://www.ai-portal.ai/mcp"
+    },
+    {
+      "name": "ai.alphacreek/alphacreek-mcp",
+      "result": "stable",
+      "server_pin": "d6927b07d3a87504a422f652a1593df7f4be6253bc477c6be2a44d400f21dad9",
+      "tool_count": 4,
+      "url": "https://mcp.alphacreek.ai/mcp"
+    },
+    {
+      "name": "ai.arclan/registry",
+      "result": "stable",
+      "server_pin": "89fe2d4c196706e37dc77a92a1b488b2eed1a8508d07d6c5181cfdd9e137a292",
+      "tool_count": 4,
+      "url": "https://arclan.ai/mcp"
+    },
+    {
+      "name": "ai.artidrop/artidrop",
+      "result": "stable",
+      "server_pin": "192570ce4205d9f836cd9c2a64f3c523a8024204bc060c154ba2bda25aac715b",
+      "tool_count": 4,
+      "url": "https://artidrop.ai/mcp"
+    },
+    {
+      "name": "ai.auteng/docs",
+      "result": "stable",
+      "server_pin": "b482dfbd0dcba8680dcaa439617fa520e18132e7dbbd31f710aa40591c23c30a",
+      "tool_count": 7,
+      "url": "https://auteng.ai/mcp/docs"
+    },
+    {
+      "name": "ai.aviado/health",
+      "result": "stable",
+      "server_pin": "4b0d96a14b4341dc81774887277d860799a75e68baebc993b2e79d094d7d6574",
+      "tool_count": 9,
+      "url": "https://aviado.ai/api/mcp"
+    },
+    {
+      "name": "ai.benroberts/b4-index",
+      "result": "stable",
+      "server_pin": "d5130aff6ad754f416f747fc43fef28dbb9cef8929276058c42ef225980bec80",
+      "tool_count": 5,
+      "url": "https://b4-index.vercel.app/mcp"
+    },
+    {
+      "name": "ai.blast-radius/blast-radius",
+      "result": "stable",
+      "server_pin": "d0d681bccbed7a933e7960c98d09a6bdc8c4c6bf73f30909f16e5927d648271e",
+      "tool_count": 7,
+      "url": "https://blast-radius.ai/mcp"
+    },
+    {
+      "name": "ai.boolsai/directory",
+      "result": "stable",
+      "server_pin": "a38c7fa6e756e6ce92dc6938144787c2bb4c52cb6c5bc076394b1183a305aae3",
+      "tool_count": 19,
+      "url": "https://directory.boolsai.ai/mcp"
+    },
+    {
+      "name": "ai.boolsai/grep",
+      "result": "stable",
+      "server_pin": "354a49b69929e3c61f237e7fac2f2e6af7b804433e4e591a56a6c65cb195fa42",
+      "tool_count": 4,
+      "url": "https://grep.boolsai.ai/mcp"
+    },
+    {
+      "name": "ai.boolsai/scan",
+      "result": "stable",
+      "server_pin": "ec5f9475e60f08d6c464b70637fefdbd2913beb40186073463d220382eb348d9",
+      "tool_count": 2,
+      "url": "https://boolsai.ai/mcp"
+    },
+    {
+      "name": "ai.boolsai/signals",
+      "result": "stable",
+      "server_pin": "4ec567459aaea6a0b83cf7c212faaab5c2f0ead59912c02c5a622ba2a4ce522c",
+      "tool_count": 12,
+      "url": "https://signals.boolsai.ai/mcp"
+    },
+    {
+      "name": "ai.bringyour/bringyour",
+      "result": "stable",
+      "server_pin": "0c2efcf1bd96372f3399ed7ac0b5c6092a8ddae6f4c66984d4963c07fcc30096",
+      "tool_count": 7,
+      "url": "https://bringyour.ai/mcp"
+    },
+    {
+      "name": "ai.cabrini/market-data",
+      "result": "stable",
+      "server_pin": "89a195234f2283cbc0436b9a3d79a501429ae63f51c43f524bdd6f2be42838fc",
+      "tool_count": 15,
+      "url": "https://cabrini.ai/mcp"
+    },
+    {
+      "name": "ai.canaryusers/canaryusers",
+      "result": "stable",
+      "server_pin": "c67bc491dc460e3acf270157cf14440668d17cccbf1f752c655f466aeb439e5a",
+      "tool_count": 3,
+      "url": "https://www.canaryusers.ai/api/mcp"
+    },
+    {
+      "name": "ai.canivibe/status",
+      "result": "stable",
+      "server_pin": "eaaf3bfeefd361b98f80624ad5e818a2b566ab7017a6ceaa1d9ea58cbe7f5e26",
+      "tool_count": 2,
+      "url": "https://canivibe.ai/mcp"
+    },
+    {
+      "name": "ai.com.mcp/contabo",
+      "result": "stable",
+      "server_pin": "6f9bb93d5422d24dc39009d811945fccdce55a638e7800d48a257f723e5f35a4",
+      "tool_count": 124,
+      "url": "https://contabo.run.mcp.com.ai/mcp"
+    }
+  ],
+  "stable": 26,
+  "unstable": 0
+}
