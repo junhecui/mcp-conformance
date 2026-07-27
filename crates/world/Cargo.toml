@@ -6,7 +6,17 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
-datamodel.workspace = true
+
+# Gated to Linux specifically, same rationale as `observe`'s Cargo.toml: a non-Linux dev
+# host should never even download/compile these. This crate exists only to build
+# `sandbox::base_layer` entries (a fixture *is* a base layer), so it has nothing to offer a
+# target where `sandbox` itself compiles to an empty crate.
+[target.'cfg(target_os = "linux")'.dependencies]
+sandbox.workspace = true
+rusqlite = { version = "0.32", features = ["bundled"] }
+# Used outside tests too: `seeded_database_bytes` needs a real on-disk path for SQLite to
+# write to, not just `:memory:` — its raw page bytes are the fixture content.
+tempfile = "3.27.0"
 
 [lints]
 workspace = true

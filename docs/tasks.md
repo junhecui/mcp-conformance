@@ -1550,6 +1550,42 @@ pure crate's.
 
 **Depends on:** P1-02
 **Exit:** Seeded FS and seeded DB, byte-reproducible across constructions.
+**Status:** Done — `crates/world`, `generic_fixture_entries()` builds `fixtures/generic`'s
+entry set (architecture.md §6's `FIXTURE` schema, `server_id: NULL`): a small seeded
+filesystem (`README.txt`, a `data/` directory) plus a real embedded SQLite database at
+`data/fixtures.db`, seeded with a fixed three-row `items` table. Reuses
+`sandbox::base_layer::EntrySpec`/`build`/`capture`/`digest_of_capture` rather than
+re-deriving base-layer construction or its reproducibility proof a second time — a fixture
+*is* a base layer, so P1-02's own machinery already does the whole job once handed real seed
+content instead of a placeholder tree. Linux-gated at the crate root, same as `sandbox` and
+`observe`, for the same reason: nothing here has anything to build against a target where
+`sandbox` itself compiles to an empty crate.
+
+**The seeded database's own byte-reproducibility was verified empirically, not assumed.**
+SQLite's on-disk format carries enough internal state (page layout, freelist, a
+file-change counter) that "the same `CREATE TABLE`/`INSERT` statements ran twice" does not
+obviously imply "the same bytes on disk" — this was checked directly rather than taken on
+faith. `seeded_database_bytes()` writes to a real temp file (SQLite's raw page bytes are only
+observable from an on-disk file, not `:memory:`), forces `journal_mode = DELETE` so nothing
+is left uncommitted in a `-wal`/`-shm` side file, and reads the file back whole. A dedicated
+test, `two_independent_seeded_databases_are_byte_identical`, isolates exactly this claim from
+the surrounding filesystem tree; a second, `different_seed_sql_would_produce_a_different_
+capture`, proves the main reproducibility test is actually sensitive to the database's
+content rather than vacuously passing because `capture` never reads the file's bytes. Run 5
+times consecutively during development; byte-identical every time on this project's own
+dev-container filesystem.
+
+`world` went from an empty placeholder to 4 tests, all passing: the two above, a queryable-
+content check (`the_seeded_database_is_queryable_and_contains_the_seed_rows` — a fixture that
+failed to seed any rows would still pass the byte-reproducibility tests if it failed the same
+way twice), and the top-level `two_independent_constructions_of_the_generic_fixture_are_byte_
+identical`, the literal exit criterion over the fixture as a whole (FS and DB together).
+`cargo build --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo
+xtask purity`, and `cargo test --workspace` all pass clean.
+
+**Deliberately out of scope, and said so in the module doc comment:** `fixtures/per-server`
+bespoke fixtures and mock-backend network redirection are Phase 3 work (the roadmap table's
+own "3 — Network: ... world (mock redirection)" line), not this task's.
 
 ### P2-06 Argument synthesiser
 
