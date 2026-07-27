@@ -1497,11 +1497,54 @@ Cartesian product now that there are four fields instead of two. `cargo build --
 **Exit:** A request for `{readOnly, idempotent, openWorld}` compiles to the minimal
 deduplicated arm set from architecture.md §4.1.
 
-- [ ] Arm 1 serves as `readOnlyHint` evidence, the `D1` idempotency arm, *and* the strict
+- [x] Arm 1 serves as `readOnlyHint` evidence, the `D1` idempotency arm, *and* the strict
       `openWorldHint` observation
-- [ ] Must **not** reorder or share arms that are required to be independent
-- [ ] Every arm gets a freshly constructed sandbox from a byte-identical base
-- [ ] Arms are never reused across tools
+- [x] Must **not** reorder or share arms that are required to be independent
+- [x] Every arm gets a freshly constructed sandbox from a byte-identical base
+- [x] Arms are never reused across tools
+
+**Status:** Done — `crates/planner`, `plan(tool_id, AnnotationRequest) -> RunPlan`, pure and
+total. `AnnotationRequest` is exactly the three booleans the exit criterion names
+(`read_only_hint`, `idempotent_hint`, `open_world_hint`); `Arm` has the four variants §4.1
+assigns to a per-request compile (`SingleCallStrictNetwork`, `SingleCallIndependentRepeat`,
+`DoubleCallSameProcess`, `CallRestartCall`); each `PlannedArm` carries a `feeds:
+Vec<datamodel::Annotation>` naming which requested annotation(s) its evidence answers, reusing
+`datamodel`'s existing closed vocabulary rather than inventing a parallel one.
+
+**Two of §4.1's six diagram nodes are deliberately out of scope, and the module doc comment
+says so explicitly rather than leaving a silent gap:** `Arm 0` (base-only, provisioning
+noise) is not gated by any requested annotation at all — it belongs to P2-05's world-
+provisioner reproducibility proof, not a per-request arm compiler. `Arm N` (the instrumented
+network follow-up) is data-dependent: architecture.md §4.4's own diagram only reaches it from
+`openWorldHint`'s *ambiguous* branch, reachable only after `Arm 1` has actually run and its
+outcome been observed — a static function over the request alone cannot know ahead of time
+whether that branch will be hit, so scheduling it unconditionally would violate the exit
+criterion's own word "minimal." Both exclusions are named in the crate doc comment with their
+reasons, matching this project's standing convention of disclosing scope boundaries rather
+than quietly not implementing something. `destructiveHint` is not an input to `plan` at all,
+for the same reason §4.5 already gives it no arm of its own.
+
+**Arm 1's triple-duty deduplication is the exit criterion's headline claim, and it's proven
+directly, not just asserted:** `all_three_requested_deduplicates_arm_1_into_one_entry_
+feeding_all_three` requests all three annotations together and checks the resulting plan has
+*exactly one* `SingleCallStrictNetwork` entry, whose `feeds` lists all three — not three
+separate single-call arms. `independent_arms_are_never_merged_across_every_requested_
+combination` sweeps every combination of the other two booleans with `idempotent_hint` fixed
+true and checks `Arm 1'`, `Arm 2`, and `Arm 2R` always appear as three distinct entries,
+never folded into `Arm 1` or each other — the "must not reorder or share arms that are
+required to be independent" criterion, checked exhaustively rather than by example.
+`arms_are_tagged_with_their_own_tool_and_never_reused_across_tools` compiles the same request
+for two different `tool_id`s and asserts the resulting plans compare unequal and every arm
+carries its own tool's id — "arms are never reused across tools" made structurally checkable
+rather than a convention a caller has to remember. "Every arm gets a freshly constructed
+sandbox from a byte-identical base" is upheld by the absence of any field through which two
+`PlannedArm`s could alias a sandbox instance — documented on `plan`'s own doc comment as a
+type-level property, since actually constructing sandboxes is P2-05/P2-07's job, not this
+pure crate's.
+
+`planner` went from an empty placeholder to 7 tests, all passing. `cargo build --workspace`,
+`cargo clippy --workspace --all-targets -- -D warnings`, `cargo xtask purity`, and `cargo test
+--workspace` all pass clean.
 
 ### P2-05 World provisioner — generic fixtures
 
