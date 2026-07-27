@@ -103,10 +103,18 @@ impl DiscoveryClient {
     }
 
     /// Speak MCP Streamable HTTP against `endpoint` (the single-JSON-response case; see
-    /// [`crate::transport::HttpTransport`] for the SSE-streaming exclusion).
+    /// [`crate::transport::HttpTransport`] for the SSE-streaming exclusion). 30s timeout.
     #[must_use]
     pub fn http(endpoint: impl Into<String>) -> Self {
         Self { transport: Box::new(HttpTransport::new(endpoint.into())) }
+    }
+
+    /// Same as [`Self::http`], with a caller-chosen timeout instead of the 30s default —
+    /// for a large sequential sweep (a census over hundreds of servers) where a handful of
+    /// unresponsive hosts at the default timeout would dominate total run time.
+    #[must_use]
+    pub fn http_with_timeout(endpoint: impl Into<String>, timeout: std::time::Duration) -> Self {
+        Self { transport: Box::new(HttpTransport::with_timeout(endpoint.into(), timeout)) }
     }
 
     /// Run the full discovery sequence and capture its evidence.

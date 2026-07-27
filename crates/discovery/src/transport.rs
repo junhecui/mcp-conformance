@@ -182,10 +182,12 @@ pub(crate) struct HttpTransport {
 
 impl HttpTransport {
     pub(crate) fn new(endpoint: String) -> Self {
-        let agent: ureq::Agent = ureq::Agent::config_builder()
-            .timeout_global(Some(Duration::from_secs(30)))
-            .build()
-            .into();
+        Self::with_timeout(endpoint, Duration::from_secs(30))
+    }
+
+    pub(crate) fn with_timeout(endpoint: String, timeout: Duration) -> Self {
+        let agent: ureq::Agent =
+            ureq::Agent::config_builder().timeout_global(Some(timeout)).build().into();
         Self { endpoint, agent, next_id: 0, negotiated_version: None }
     }
 

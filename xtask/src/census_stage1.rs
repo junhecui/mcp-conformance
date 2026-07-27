@@ -48,7 +48,11 @@ enum Attempt {
 }
 
 fn attempt(url: &str) -> Attempt {
-    let mut client = DiscoveryClient::http(url.to_string());
+    // Shorter than the 30s default: at sample sizes in the hundreds or thousands, a
+    // handful of genuinely unresponsive hosts at 30s each would dominate total run time.
+    // Servers that are actually going to answer do so in low seconds at most, per the 100
+    // -server sample this was tuned against.
+    let mut client = DiscoveryClient::http_with_timeout(url.to_string(), std::time::Duration::from_secs(12));
     match client.discover() {
         Ok(discovery) => match coverage::tool_coverage(&discovery.tools_list_raw) {
             Ok(tools) => Attempt::Success { tool_count: tools.len(), tools },
