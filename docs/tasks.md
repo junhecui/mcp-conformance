@@ -1129,10 +1129,50 @@ exists, not merely asserted.
 
 **Depends on:** P1-01, P1-05
 **Exit:** `(raw_evidence, ruleset_version) → canonical_changeset`, pure and deterministic.
+**Status:** Done. This task required fleshing out three `datamodel` placeholders that had
+sat as empty `#[non_exhaustive]` structs since F-02 — `RawEvidence` (now a real
+`Vec<EvidenceEntry>`, one entry per ADR-009 wire-format record, still `no_std`/`alloc`-only),
+`Ruleset` (now `version` + `ephemeral_globs` + `server_internal_globs`, ADR-008's exact
+shape), and `CanonicalChangeset` (now `Vec<ClassifiedPath>` plus a
+`user_state_is_empty()` helper for P1-07 to call directly) — all still inside `datamodel`'s
+`no_std` boundary, so `normalise` and `verdict`'s purity posture is unaffected.
 
-- [ ] Rulesets are versioned data in `rulesets/`, not code
-- [ ] Reads nothing outside its inputs — no clock, no filesystem, no network
-- [ ] Ruleset v1 kept deliberately thin; v2 gets derived from measured noise in P2-10
+`crates/normalise::normalise` classifies every entry's `path` against `ephemeral_globs` then
+`server_internal_globs`, falling through to `user_state` — ADR-008's exact order and
+default — via a hand-rolled `no_std` glob matcher (`crates/normalise/src/glob.rs`) rather
+than a real dependency: ruleset v1's eleven patterns use only `**` (zero-or-more whole path
+segments) and a single `*` per segment, and `cargo purity`'s `PURE_ALLOWLIST` stays exactly
+`{datamodel}` — adding `regex` (`normalise`'s own doc comment already named it as the
+fallback option) would have meant extending the allowlist for eleven fixed patterns that
+don't need it. Output is sorted by raw path bytes regardless of input order, so the
+function's determinism doesn't depend on a caller preserving ADR-009's own capture order.
+
+**The deserialiser ADR-009 assigned to P1-04** (`RawEvidence` "is handed to `normalise`
+already parsed... deserialisation is I/O-adjacent... not itself part of the pure closure")
+was still missing — added here as `observe::evtree::decode`, `capture`'s exact inverse,
+skipping over (not retaining) the xattr and content bytes `EvidenceEntry` deliberately
+doesn't carry yet (see that type's own doc comment on why). Proven against a real capture of
+a mixed tree (directory, regular file, symlink), field by field, not just "decodes without
+erroring."
+
+**A real ruleset file exists and is loaded by real code, not only asserted in tests**:
+`rulesets/v1.json` carries ADR-008's exact eleven patterns; `orchestrator::load_ruleset`
+(brought forward from P5-01's full scope, since P1-06 needed something to actually feed
+`normalise` a real ruleset with) parses it into `datamodel::Ruleset` via `serde_json`
+(already a workspace dependency elsewhere, rather than adding a YAML crate for one
+JSON-shaped file). A test loads the real on-disk file and asserts its parsed patterns match
+ADR-008's list exactly — not a synthetic in-test ruleset standing in for it.
+
+24 new tests across the four touched crates (12 in `normalise`, including the full
+ADR-008 ephemeral/server_internal pattern list each matching its own worked example from the
+ADR; 3 new in `observe` for `decode`; 3 in `orchestrator` for the loader), plus `datamodel`
+and the full workspace build/clippy/purity/test suite all still green.
+
+- [x] Rulesets are versioned data in `rulesets/`, not code — `rulesets/v1.json`
+- [x] Reads nothing outside its inputs — no clock, no filesystem, no network — `normalise`
+      stays `#![no_std]`; the glob matcher operates only on the byte slices it's given
+- [x] Ruleset v1 kept deliberately thin; v2 gets derived from measured noise in P2-10 —
+      eleven patterns total, exactly ADR-008's list, no additions
 
 ### P1-07 Verdict engine + `readOnlyHint`
 

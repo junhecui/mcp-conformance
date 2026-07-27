@@ -149,6 +149,130 @@ fn encode_entry(root: &Path, relative: &Path, out: &mut Vec<u8>) -> io::Result<(
     Ok(())
 }
 
+/// Why decoding an `evtree1` capture failed.
+#[derive(Debug)]
+pub enum DecodeError {
+    /// The bytes are too short, or too short at some specific field, to be a valid capture.
+    Truncated,
+    /// The leading magic bytes don't match `EVTREE1\0`.
+    BadMagic,
+    /// The format version isn't one this decoder understands.
+    UnsupportedVersion(u16),
+    /// A type tag byte wasn't one of the seven this format defines.
+    UnknownTypeTag(u8),
+}
+
+impl std::fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Truncated => write!(f, "capture bytes end before a complete entry"),
+            Self::BadMagic => write!(f, "missing or incorrect EVTREE1 magic bytes"),
+            Self::UnsupportedVersion(v) => write!(f, "unsupported evtree1 format version {v}"),
+            Self::UnknownTypeTag(t) => write!(f, "unknown evtree1 type tag {t}"),
+        }
+    }
+}
+
+impl std::error::Error for DecodeError {}
+
+/// The inverse of [`capture`]: parse `evtree1` bytes back into `datamodel`'s pure,
+/// in-memory [`datamodel::RawEvidence`] — the "I/O-adjacent" deserialisation step ADR-009
+/// assigns outside the pure `normalise`/`verdict` closure. Xattrs and file content are
+/// present in the wire bytes (skipped over here, not stored — see `datamodel::EvidenceEntry`'s
+/// own doc comment for why the in-memory type doesn't carry them yet); everything
+/// `normalise`'s current job (ADR-008 path taxonomy) needs is decoded.
+pub fn decode(bytes: &[u8]) -> Result<datamodel::RawEvidence, DecodeError> {
+    let mut cursor = Cursor { bytes, pos: 0 };
+
+    let magic = cursor.take(8)?;
+    if magic != MAGIC.as_slice() {
+        return Err(DecodeError::BadMagic);
+    }
+    let format_version = u16::from_be_bytes(cursor.take(2)?.try_into().unwrap());
+    if format_version != FORMAT_VERSION {
+        return Err(DecodeError::UnsupportedVersion(format_version));
+    }
+    let entry_count = u64::from_be_bytes(cursor.take(8)?.try_into().unwrap());
+
+    let mut entries = Vec::with_capacity(entry_count as usize);
+    for _ in 0..entry_count {
+        entries.push(decode_entry(&mut cursor)?);
+    }
+    Ok(datamodel::RawEvidence::new(entries))
+}
+
+struct Cursor<'a> {
+    bytes: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> Cursor<'a> {
+    fn take(&mut self, n: usize) -> Result<&'a [u8], DecodeError> {
+        let slice = self.bytes.get(self.pos..self.pos + n).ok_or(DecodeError::Truncated)?;
+        self.pos += n;
+        Ok(slice)
+    }
+
+    fn take_u64_prefixed(&mut self) -> Result<&'a [u8], DecodeError> {
+        let len = u64::from_be_bytes(self.take(8)?.try_into().unwrap());
+        self.take(len as usize)
+    }
+}
+
+fn decode_entry(cursor: &mut Cursor<'_>) -> Result<datamodel::EvidenceEntry, DecodeError> {
+    let path = cursor.take_u64_prefixed()?.to_vec();
+
+    let type_tag = cursor.take(1)?[0];
+    let kind = match type_tag {
+        TYPE_REGULAR => datamodel::EntryKind::Regular,
+        TYPE_DIRECTORY => datamodel::EntryKind::Directory,
+        TYPE_SYMLINK => datamodel::EntryKind::Symlink,
+        TYPE_FIFO => datamodel::EntryKind::Fifo,
+        TYPE_CHAR_DEVICE => datamodel::EntryKind::CharDevice,
+        TYPE_BLOCK_DEVICE => datamodel::EntryKind::BlockDevice,
+        TYPE_SOCKET => datamodel::EntryKind::Socket,
+        other => return Err(DecodeError::UnknownTypeTag(other)),
+    };
+
+    let mode = u32::from_be_bytes(cursor.take(4)?.try_into().unwrap());
+    let uid = u32::from_be_bytes(cursor.take(4)?.try_into().unwrap());
+    let gid = u32::from_be_bytes(cursor.take(4)?.try_into().unwrap());
+    let mtime_sec = i64::from_be_bytes(cursor.take(8)?.try_into().unwrap());
+    let mtime_nsec = u32::from_be_bytes(cursor.take(4)?.try_into().unwrap());
+    let inode = u64::from_be_bytes(cursor.take(8)?.try_into().unwrap());
+    let dev_major = u32::from_be_bytes(cursor.take(4)?.try_into().unwrap());
+    let dev_minor = u32::from_be_bytes(cursor.take(4)?.try_into().unwrap());
+
+    let xattr_count = u32::from_be_bytes(cursor.take(4)?.try_into().unwrap());
+    for _ in 0..xattr_count {
+        cursor.take_u64_prefixed()?; // name
+        cursor.take_u64_prefixed()?; // value
+    }
+
+    match type_tag {
+        TYPE_REGULAR => {
+            cursor.take_u64_prefixed()?; // content — not retained; see this fn's doc comment
+        }
+        TYPE_SYMLINK => {
+            cursor.take_u64_prefixed()?; // target — not retained; see this fn's doc comment
+        }
+        _ => {}
+    }
+
+    Ok(datamodel::EvidenceEntry {
+        path,
+        kind,
+        mode,
+        uid,
+        gid,
+        mtime_sec,
+        mtime_nsec,
+        inode,
+        dev_major,
+        dev_minor,
+    })
+}
+
 /// Glibc's `major(3)`/`minor(3)` bit layout for a 64-bit `dev_t`, hand-decoded rather than
 /// pulled from a library: the low 8 bits of the major number and the low 20 bits of the
 /// minor number sit in the low 32 bits of `dev_t` (interleaved with each other), and the
@@ -274,6 +398,57 @@ mod tests {
         expected.extend_from_slice(&FORMAT_VERSION.to_be_bytes());
         expected.extend_from_slice(&0u64.to_be_bytes());
         assert_eq!(bytes, expected);
+    }
+
+    /// `decode` is `capture`'s exact inverse for everything `datamodel::EvidenceEntry`
+    /// retains — proven by capturing a real, mixed tree and checking every decoded field
+    /// against what was actually on disk, not just that decoding didn't error.
+    #[test]
+    fn decode_recovers_every_retained_field_from_a_real_capture() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir(dir.path().join("sub")).expect("mkdir");
+        std::fs::write(dir.path().join("sub/file.txt"), b"hello").expect("write");
+        std::os::unix::fs::symlink("file.txt", dir.path().join("sub/link")).expect("symlink");
+
+        let bytes = capture(dir.path()).expect("capture");
+        let evidence = decode(&bytes).expect("decode");
+
+        assert_eq!(evidence.entries.len(), 3);
+        let by_path = |p: &str| {
+            evidence
+                .entries
+                .iter()
+                .find(|e| e.path == p.as_bytes())
+                .unwrap_or_else(|| panic!("missing entry: {p}"))
+        };
+
+        let sub = by_path("sub");
+        assert_eq!(sub.kind, datamodel::EntryKind::Directory);
+        let file_meta = std::fs::symlink_metadata(dir.path().join("sub/file.txt")).unwrap();
+        let file = by_path("sub/file.txt");
+        assert_eq!(file.kind, datamodel::EntryKind::Regular);
+        assert_eq!(file.mode, file_meta.mode());
+        assert_eq!(file.uid, file_meta.uid());
+        assert_eq!(file.gid, file_meta.gid());
+        assert_eq!(file.inode, file_meta.ino());
+        assert_eq!(file.mtime_sec, file_meta.mtime());
+        assert_eq!(file.mtime_nsec, file_meta.mtime_nsec() as u32);
+        assert_eq!((file.dev_major, file.dev_minor), (0, 0));
+
+        let link = by_path("sub/link");
+        assert_eq!(link.kind, datamodel::EntryKind::Symlink);
+    }
+
+    #[test]
+    fn decode_rejects_bad_magic() {
+        let err = decode(b"NOTEVTR1\0\0extra").expect_err("must reject");
+        assert!(matches!(err, DecodeError::BadMagic));
+    }
+
+    #[test]
+    fn decode_rejects_truncated_bytes() {
+        let err = decode(&MAGIC[..4]).expect_err("must reject");
+        assert!(matches!(err, DecodeError::Truncated));
     }
 
     #[test]

@@ -1,0 +1,18 @@
+{
+  "version": "v1",
+  "ephemeral": [
+    "/tmp/**",
+    "/var/tmp/**",
+    "/run/**",
+    "**/*.lock",
+    "**/*.pid",
+    "**/*.sock"
+  ],
+  "server_internal": [
+    "**/.cache/**",
+    "**/.config/**",
+    "**/.local/state/**",
+    "**/__pycache__/**",
+    "**/node_modules/.cache/**"
+  ]
+}

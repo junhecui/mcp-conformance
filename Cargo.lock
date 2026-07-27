@@ -390,6 +390,8 @@ dependencies = [
  "observe",
  "planner",
  "sandbox",
+ "serde",
+ "serde_json",
  "store",
  "verdict",
  "world",
