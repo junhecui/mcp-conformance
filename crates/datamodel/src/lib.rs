@@ -89,3 +89,37 @@ pub struct Ruleset {}
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct CanonicalChangeset {}
+
+/// A SHA-256 content digest identifying a blob in the evidence store (F-05).
+///
+/// Pure value type: hashing needs an algorithm implementation, which is [`store`]'s job,
+/// not this crate's — `datamodel` stays free of behaviour so `normalise` and `verdict`
+/// stay `no_std` and dependency-free (ADR-005). This type only carries the 32 bytes and
+/// knows how to print them; `EVIDENCE.digest` (architecture.md §6) is one of these.
+///
+/// [`store`]: ../../store/index.html
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Digest([u8; 32]);
+
+impl Digest {
+    /// Wrap an already-computed digest. Callers are responsible for the hashing itself.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// The raw digest bytes.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl core::fmt::Display for Digest {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        for byte in &self.0 {
+            write!(f, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}

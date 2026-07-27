@@ -162,13 +162,24 @@ gone."* A rule nobody checks is a comment.
 **Depends on:** F-01
 **Exit:** Blob written, addressed by digest, read back byte-identical; re-writing identical
 content is a no-op.
+**Status:** Done — `crates/store::BlobStore`, plus `datamodel::Digest` (a pure 32-byte value
+type; hashing itself lives in `store`, not `datamodel`, so `sha2` never enters the
+`normalise`/`verdict` purity closure). Algorithm: SHA-256, chosen as the unopinionated
+well-audited default since no doc mandates one. 8 unit tests, `cargo purity` still clean.
 
 architecture.md §12 item 4 — stand this up *before* any sandbox work so Phase 1 evidence is
 replayable from day one.
 
-- [ ] Content addressing over raw bytes
-- [ ] Immutability enforced at the API level, not by convention
-- [ ] Local filesystem backend; object-store backend deferred to P5-01
+- [x] Content addressing over raw bytes — `put` hashes the input itself; the caller never
+      chooses the address
+- [x] Immutability enforced at the API level, not by convention — no update/delete method
+      exists at all; writes go through a temp-file-then-rename so a partial write is never
+      observable; a digest whose on-disk content doesn't match what the address claims
+      (`get` or `put`) is a hard `StoreError::Corrupt`, never silently accepted
+- [x] Local filesystem backend; object-store backend deferred to P5-01
+- [x] `re-put of identical content is a no-op` proven, not assumed — the test revokes write
+      permission on the store root after the first `put`, so a second `put` of the same
+      bytes can only pass if it truly skips the write
 
 ### F-06 Metadata DB schema
 
