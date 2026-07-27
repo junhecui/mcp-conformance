@@ -8,5 +8,15 @@ publish.workspace = true
 [dependencies]
 datamodel.workspace = true
 
+# Gated to Linux specifically, same rationale as `sandbox`'s Cargo.toml: a non-Linux dev
+# host should never even download/compile these (`store` pulls in `rusqlite`'s bundled
+# SQLite build, which is exactly the kind of cost F-00 wants to keep off the non-Linux path).
+[target.'cfg(target_os = "linux")'.dependencies]
+store.workspace = true
+libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+tempfile = "3.27.0"
+
 [lints]
 workspace = true

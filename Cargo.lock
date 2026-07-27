@@ -364,6 +364,9 @@ name = "observe"
 version = "0.1.0"
 dependencies = [
  "datamodel",
+ "libc",
+ "store",
+ "tempfile",
 ]
 
 [[package]]

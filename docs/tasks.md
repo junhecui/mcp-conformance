@@ -1046,9 +1046,40 @@ left exactly as documented, for P2-01 to close.
 
 **Depends on:** P1-03
 **Exit:** Upper layer harvested into the evidence store, content-addressed.
+**Status:** Done — `crates/observe`. `evtree::capture` is the **general** ADR-009 `evtree1`
+walker that ADR itself assigned here (distinct from, and a strict superset of,
+`sandbox::base_layer::capture`'s P1-02-scoped subset): all seven POSIX file types via
+`std::os::unix::fs::FileTypeExt`, real `lstat` fields via `MetadataExt`
+(mode/uid/gid/mtime/inode), hand-decoded glibc `major()`/`minor()` bit layout for device
+files (so a whiteout's `dev_major=0`/`dev_minor=0` is represented, per spec), and full xattr
+capture via direct `llistxattr`/`lgetxattr` syscalls (the no-follow variants — `std` and the
+`xattr` crate's default behaviour both follow symlinks, which ADR-009 explicitly forbids
+here). `harvest()` calls it against a run's overlay `upper` directory and stores the result
+through F-05's `store::BlobStore::put`, returning the digest as `RunObservation`'s
+`upper_layer_digest` alongside `exit_status`/`timed_out` passed through verbatim (taken as
+plain parameters, not by depending on the `sandbox` crate's types — keeps the two components'
+contracts independent, the same posture `discovery` and `probe` already have toward each
+other).
 
-- [ ] Harvest and store; **interpret nothing**
-- [ ] Record exit status and orphan-PID state for the gate
+7 tests: an empty directory captures to the bare header; a regular file's content round-trips
+verbatim; two captures of an unmodified tree are byte-identical; entries decode out in
+ascending sorted-path order regardless of the order `read_dir` happened to return them in; a
+real `mknod`-constructed char-device with major=0/minor=0 (the literal whiteout shape,
+without requiring an actual overlay mount to produce one) is captured as `TYPE_CHAR_DEVICE`
+with both fields zero; a `trusted.overlay.opaque` xattr is captured wholesale by name and
+value; and `harvest` end-to-end stores a capture and reads back byte-identical bytes through
+`BlobStore` by the digest it returned.
+
+- [x] Harvest and store; **interpret nothing** — no code path here classifies a char device
+      as a whiteout or an xattr as the opaque marker; that stays `normalise`'s job per
+      ADR-005/ADR-008, exactly as ADR-009 requires of this walker
+- [x] Record exit status and orphan-PID state for the gate — `RunObservation.exit_status`/
+      `.timed_out` mirror `sandbox::SandboxOutcome` verbatim; `orphan_state` is an
+      `OrphanState` enum with exactly one variant, `NotObservableAtThisPhase` — Phase 1 has
+      no PID namespace (P2-01) to actually enumerate a killed process's descendants (demonstrated,
+      not just asserted, by P1-03's own `sh -c` grandchild finding), so this crate reports
+      that honestly as a value callers must handle rather than silently claiming
+      `NoneDetected` on evidence it cannot back up
 
 ### P1-05 Integrity gate v1
 
