@@ -186,14 +186,27 @@ replayable from day one.
 **Depends on:** F-01
 **Exit:** Migrations apply cleanly; all seven entities from architecture.md §6 present with
 their foreign keys.
+**Status:** Done — `crates/store::db`, SQLite via `rusqlite` (`bundled` feature, same
+reproducibility posture as the pinned toolchain and F-05's blob store). One migration,
+`crates/store/migrations/0001_initial_schema.sql`, applied by a ~20-line hand-rolled runner
+(a framework would be pure overhead for one file). `FIXTURE`'s columns were unspecified in
+architecture.md §6 — filled in and mirrored back into that doc in the same change. 7 tests,
+including that FK enforcement actually rejects a dangling reference, that a second
+`open_and_migrate` against the same on-disk DB doesn't re-apply the migration (checked via
+the `schema_migrations` row count, not just "no error"), and that every invariant below is
+exercised in both directions (accepted when it should be, rejected when it shouldn't).
 
-- [ ] `SERVER` `TOOL_SNAPSHOT` `RUN` `INTEGRITY` `EVIDENCE` `VERDICT` `RULESET` `FIXTURE`
-- [ ] `VERDICT` keys on `snapshot_id`, never `(server_id, tool_name)` — invariant 1
-- [ ] `VERDICT.reason_code` non-null whenever `outcome = 'unverifiable'` — invariant 3,
-      enforced as a constraint
-- [ ] `VERDICT.embargo_state` and `VERDICT.disclosed_at` included now (§12 item 6 — cheap
+- [x] `SERVER` `TOOL_SNAPSHOT` `RUN` `INTEGRITY` `EVIDENCE` `VERDICT` `RULESET` `FIXTURE`
+- [x] `VERDICT` keys on `snapshot_id`, never `(server_id, tool_name)` — invariant 1;
+      `verdict` has no `server_id`/`tool_name` columns at all
+- [x] `VERDICT.reason_code` non-null whenever `outcome = 'unverifiable'` — invariant 3,
+      enforced as a `CHECK` constraint
+- [x] `VERDICT.embargo_state` and `VERDICT.disclosed_at` included now (§12 item 6 — cheap
       today, expensive in Phase 5)
-- [ ] `VERDICT` table is derivable and safe to truncate; `EVIDENCE` is not
+- [x] `VERDICT` table is derivable and safe to truncate; `EVIDENCE` is not — `evidence` has
+      `BEFORE UPDATE`/`BEFORE DELETE` triggers that hard-fail, mirroring F-05's blob store
+      (no update/delete method there either) so immutability holds on both sides of the
+      evidence/metadata split
 
 ---
 

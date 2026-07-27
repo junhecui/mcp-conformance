@@ -439,7 +439,20 @@ erDiagram
         json rules
         timestamp published_at
     }
+    FIXTURE {
+        string fixture_id PK
+        string server_id FK "null for a generic fixture"
+        string kind "generic | per_server"
+        string content_digest "evidence-store digest of the seed data"
+        timestamp created_at
+    }
 ```
+
+`FIXTURE`'s columns were left unspecified in the original version of this diagram — only
+its relationship to `RUN` ("seeds") was. F-06 filled the gap: `server_id` is `NULL` for a
+`fixtures/generic` fixture and required for a `fixtures/per-server` one, enforced as a
+`CHECK` alongside the FK, and `content_digest` points into the same evidence store F-05
+built rather than duplicating fixture bytes into the metadata DB.
 
 Three invariants:
 

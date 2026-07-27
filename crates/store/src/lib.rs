@@ -3,10 +3,14 @@
 //! **Must not:** Mutate or delete evidence.
 //!
 //! F-05 lands the evidence half: [`BlobStore`], a content-addressed local-filesystem blob
-//! store. The metadata DB (F-06 — `SERVER`, `TOOL_SNAPSHOT`, `RUN`, ..., `VERDICT`) is a
-//! separate, later piece of this crate's contract.
+//! store. F-06 lands the metadata half: [`db`], the `SERVER`/`TOOL_SNAPSHOT`/`RUN`/...
+//! `VERDICT` schema and its migration runner. The two are deliberately independent modules
+//! — a `VERDICT` row and an `EVIDENCE` blob are both "storage", but they have opposite
+//! mutability contracts, and nothing in this crate blurs that line.
 //!
 //! Contract: [architecture.md §3.1].
+
+pub mod db;
 
 use std::fs;
 use std::io;
