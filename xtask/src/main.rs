@@ -12,6 +12,7 @@ fn main() -> ExitCode {
         Some("probe-stage1") => probe_stage1(),
         Some("dump-tools") => dump_tools(),
         Some("first-verdict") => first_verdict(),
+        Some("derive-ruleset-v2") => derive_ruleset_v2(),
         Some(other) => {
             eprintln!("unknown task `{other}`\n\n{USAGE}");
             ExitCode::FAILURE
@@ -23,7 +24,24 @@ fn main() -> ExitCode {
     }
 }
 
-const USAGE: &str = "usage: cargo xtask <purity|census|census-stage1 [sample_size]|census-stage2-class-a [sample_size]|census-pin-stability <input.json>|probe-stage1 [sample_size]|dump-tools <url>|first-verdict>";
+const USAGE: &str = "usage: cargo xtask <purity|census|census-stage1 [sample_size]|census-stage2-class-a [sample_size]|census-pin-stability <input.json>|probe-stage1 [sample_size]|dump-tools <url>|first-verdict|derive-ruleset-v2>";
+
+#[cfg(target_os = "linux")]
+fn derive_ruleset_v2() -> ExitCode {
+    match xtask::ruleset_v2::run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("derive-ruleset-v2 failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn derive_ruleset_v2() -> ExitCode {
+    eprintln!("derive-ruleset-v2 requires Linux (sandbox/observe are Linux-only)");
+    ExitCode::FAILURE
+}
 
 #[cfg(target_os = "linux")]
 fn first_verdict() -> ExitCode {

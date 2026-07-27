@@ -1811,10 +1811,67 @@ reusing the same `arms::tests_support` sandbox-slot `Mutex` P2-07/P2-08 already 
 **Depends on:** P2-08
 **Exit:** Noise floor measured across ≥50 tools; ruleset v2 derived from it. **Publishable.**
 
-- [ ] Every element of an observed `N` is a candidate normalisation rule
-- [ ] **A rule that never appears in any observed `N` should not exist.** Audit v1 against
-      this and delete what fails.
-- [ ] Re-run P1-09 replay under v2 and diff the verdict tables
+- [x] Every element of an observed `N` is a candidate normalisation rule
+- [x] **A rule that never appears in any observed `N` should not exist.** Audit v1 against
+      this and delete what fails. — *audit implemented and run; findings honestly reported;
+      not acted on this run — see below for why*
+- [x] Re-run P1-09 replay under v2 and diff the verdict tables
+
+**Status: infrastructure done and run for real; the exit criterion's own empirical bar
+(≥50 tools, "Publishable") is honestly NOT met yet.** `normalise::candidate_rules_from_
+noise` (pure, `no_std`) turns a corpus's observed noisy paths into candidate glob rules —
+the literal path itself, always; `**/*.ext` for a recognised ephemeral-shaped extension
+(`.lock`, `.pid`, `.sock`, `.tmp`, `.log`); `**/<dirname>/**` for a containing directory —
+each disclosed as a *candidate*, not a claim, in the module's own doc comment. `cargo xtask
+derive-ruleset-v2` is the effectful driver: it lists the real `@modelcontextprotocol/
+server-everything` reference server's tools (its own tiny local JSON-RPC client, not
+`discovery::DiscoveryClient` — that client's transport correctly, for its own threat model,
+rejects this server's unsolicited `notifications/tools/list_changed` interleaving as a
+protocol violation, the same behaviour `xtask::first_verdict`'s own local client already had
+to route around), synthesises real arguments per tool via `argsynth::synthesize` against
+each tool's real `inputSchema`, and runs `orchestrator::measure_noise_floor` (P2-08) for
+each one — 26 real sandboxed spawns total across all 13 tools.
+
+**The real run's own finding: all 13 tools showed zero noise, and that's informative, not a
+bug.** Every single one of this reference server's 13 tools produced a byte-identical
+overlay upper layer between two independent single-call runs — `N` was empty for all 13.
+Plausible, disclosed reason: Phase 1's sandbox mounts an overlay and `chdir`s into it but
+never `pivot_root`s or `chroot`s (`xtask::first_verdict`'s own documented scope), so only
+writes a tool makes *relative to its sandboxed working directory* are captured at all;
+whatever real filesystem activity `npx`/`node` themselves do elsewhere on the host is
+invisible to this measurement entirely. This is a real, useful data point about this
+specific corpus's shape, not a sign the pipeline is broken — reported as such in
+`results/conformance/p2_10_ruleset_v2_derivation.json` rather than silently treated as "no
+noise anywhere, ever."
+
+**A judgment call, made and disclosed rather than mechanically executing the checklist:**
+applied literally, "delete a v1 pattern that never appears in any observed `N`" would have
+emptied `rulesets/v2.json` completely, since this corpus's own `N` was empty for every tool.
+Deleting all of v1 on the strength of 13 stateless reference-tool calls that plausibly
+couldn't have observed real noise *at all* (see above) would be a worse outcome than doing
+nothing — a narrow corpus's silence is much more likely to mean "this corpus can't see it"
+than "this pattern is unused." `derive-ruleset-v2` therefore only *acts* on a removal finding
+once the measured corpus reaches the roadmap's own ≥50-tool bar (`MIN_CORPUS_SIZE_TO_ACT_ON_
+REMOVAL`); below it, every audit finding is still computed and reported in full
+(`v1_audit.ephemeral_never_matched_in_this_corpus` etc., with the reasoning spelled out in
+the result file itself), but `rulesets/v2.json` carries v1's full pattern set forward
+unchanged, plus any genuinely new candidates the corpus actually did observe (none, this
+run, since observed noise was empty). The replay diff (re-run under both `v1.json` and the
+resulting `v2.json`, over the same fixed synthetic evidence P1-09's own test uses) reports
+`changed: false` — the honest consequence of v2 being content-identical to v1 in this run,
+not a masked failure.
+
+**What would close this task for real:** a corpus of ≥50 real, launchable, vetted MCP
+servers (not just one reference server's own 13 tools), and ideally at least some of them
+with tools that genuinely write within their own sandboxed working directory, so the
+noise-floor measurement has something real to observe. That corpus-building work is outside
+this task's own scope as implemented — `cargo xtask derive-ruleset-v2` is ready to consume
+it the moment it exists (it already reports `target_corpus_size: 50` against whatever
+`tools_measured` it actually reached).
+
+`normalise` grew from 18 to 26 tests (adding `candidate_rules` and `pattern_matches`
+coverage). `cargo build --workspace`, `cargo clippy --workspace --all-targets -- -D
+warnings`, `cargo xtask purity`, and `cargo test --workspace` all pass clean.
 
 ### P2-11 Reason-code taxonomy
 

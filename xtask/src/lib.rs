@@ -9,3 +9,5 @@ pub mod first_verdict;
 pub mod pin_stability;
 pub mod probe_stage1;
 pub mod purity;
+#[cfg(target_os = "linux")]
+pub mod ruleset_v2;

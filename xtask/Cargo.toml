@@ -6,6 +6,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+argsynth.workspace = true
 census.workspace = true
 datamodel.workspace = true
 discovery.workspace = true

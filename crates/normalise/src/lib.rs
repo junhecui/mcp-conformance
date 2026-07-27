@@ -17,6 +17,7 @@
 
 extern crate alloc;
 
+mod candidate_rules;
 mod glob;
 mod noise;
 
@@ -24,6 +25,7 @@ use alloc::vec::Vec;
 
 use datamodel::{CanonicalChangeset, ClassifiedPath, PathTaxonomy, RawEvidence, Ruleset};
 
+pub use candidate_rules::candidate_rules_from_noise;
 pub use noise::{noise_floor, NoiseFloorEntry};
 
 /// Apply a ruleset to raw evidence, yielding the canonical changeset that every
@@ -42,6 +44,16 @@ pub fn normalise(evidence: &RawEvidence, ruleset: &Ruleset) -> CanonicalChangese
         .collect();
     entries.sort_by(|a, b| a.path.cmp(&b.path));
     CanonicalChangeset::new(entries)
+}
+
+/// Whether `pattern` (ADR-008 glob syntax) matches `path`. Exposed for P2-10's ruleset-audit
+/// step ("a rule that never appears in any observed `N` should not exist"), which needs to
+/// know whether one *specific* v1 pattern matched anything in a measured corpus — a question
+/// [`normalise`]'s own aggregate classification can't answer, since it only reports which
+/// bucket a path landed in, not which pattern put it there.
+#[must_use]
+pub fn pattern_matches(pattern: &str, path: &[u8]) -> bool {
+    glob::glob_match(pattern.as_bytes(), path)
 }
 
 /// ADR-008: `ephemeral` checked before `server_internal`; a path matching neither falls
@@ -145,5 +157,12 @@ mod tests {
         let evidence = RawEvidence::new(vec![entry("tmp/scratch.txt")]);
         let changeset = normalise(&evidence, &empty_ruleset);
         assert_eq!(changeset.entries[0].taxonomy, PathTaxonomy::UserState);
+    }
+
+    #[test]
+    fn pattern_matches_exposes_the_same_glob_semantics_classify_uses_internally() {
+        assert!(pattern_matches("/tmp/**", b"tmp/scratch.lock"));
+        assert!(pattern_matches("**/*.pid", b"var/run/tool.pid"));
+        assert!(!pattern_matches("**/*.pid", b"var/run/tool.sock"));
     }
 }

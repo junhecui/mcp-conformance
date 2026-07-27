@@ -1,0 +1,104 @@
+{
+  "candidate_rules_from_corpus": [],
+  "corpus": {
+    "note": "corpus size limited to this one real reference server's own tools (13); reaching the architecture.md roadmap's >=50-tool 'Publishable' bar needs a broader corpus of vetted, launchable MCP servers this run did not have available — reported honestly rather than padded with synthetic tools.",
+    "server": "@modelcontextprotocol/server-everything",
+    "target_corpus_size": 50,
+    "tools_discovered": 13,
+    "tools_measured": 13,
+    "tools_skipped": 0
+  },
+  "per_tool_noise": [
+    {
+      "noisy_path_count": 0,
+      "noisy_paths": [],
+      "tool": "echo"
+    },
+    {
+      "noisy_path_count": 0,
+      "noisy_paths": [],
+      "tool": "get-annotated-message"
+    },
+    {
+      "noisy_path_count": 0,
+      "noisy_paths": [],
+      "tool": "get-env"
+    },
+    {
+      "noisy_path_count": 0,
+      "noisy_paths": [],
+      "tool": "get-resource-links"
+    },
+    {
+      "noisy_path_count": 0,
+      "noisy_paths": [],
+      "tool": "get-resource-reference"
+    },
+    {
+      "noisy_path_count": 0,
+      "noisy_paths": [],
+      "tool": "get-structured-content"
+    },
+    {
+      "noisy_path_count": 0,
+      "noisy_paths": [],
+      "tool": "get-sum"
+    },
+    {
+      "noisy_path_count": 0,
+      "noisy_paths": [],
+      "tool": "get-tiny-image"
+    },
+    {
+      "noisy_path_count": 0,
+      "noisy_paths": [],
+      "tool": "gzip-file-as-resource"
+    },
+    {
+      "noisy_path_count": 0,
+      "noisy_paths": [],
+      "tool": "toggle-simulated-logging"
+    },
+    {
+      "noisy_path_count": 0,
+      "noisy_paths": [],
+      "tool": "toggle-subscriber-updates"
+    },
+    {
+      "noisy_path_count": 0,
+      "noisy_paths": [],
+      "tool": "trigger-long-running-operation"
+    },
+    {
+      "noisy_path_count": 0,
+      "noisy_paths": [],
+      "tool": "simulate-research-query"
+    }
+  ],
+  "replay_diff": {
+    "changed": false,
+    "v1_outcome": "Violated",
+    "v2_outcome": "Violated"
+  },
+  "skipped": [],
+  "task": "P2-10",
+  "v1_audit": {
+    "acted_on_removal_findings": false,
+    "ephemeral_never_matched_in_this_corpus": [
+      "/tmp/**",
+      "/var/tmp/**",
+      "/run/**",
+      "**/*.lock",
+      "**/*.pid",
+      "**/*.sock"
+    ],
+    "note": "corpus is smaller than the >=50-tool bar this audit requires before acting on a removal — every v1 pattern listed above was never matched by this run's 13 real tools, but with a corpus this narrow (and this small — every measured tool showed zero noise at all, plausibly because Phase 1's own containment scope only captures writes to the sandboxed working directory, not wherever npx/node's own real activity actually lands) that is much more likely to mean 'this corpus can't see it' than 'this pattern is unused.' None of these patterns were removed from rulesets/v2.json; v1's full pattern set was carried forward unchanged pending a larger, more diverse corpus.",
+    "server_internal_never_matched_in_this_corpus": [
+      "**/.cache/**",
+      "**/.config/**",
+      "**/.local/state/**",
+      "**/__pycache__/**",
+      "**/node_modules/.cache/**"
+    ]
+  }
+}
