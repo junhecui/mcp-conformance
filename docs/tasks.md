@@ -1592,10 +1592,51 @@ own "3 — Network: ... world (mock redirection)" line), not this task's.
 **Depends on:** P2-05
 **Exit:** Schema-driven generation + fixture binding + cache-busting variants.
 
-- [ ] Structural validity from the input schema
-- [ ] Semantic validity via fixture binding to entities that actually exist
-- [ ] Cache-busting variants for the P2-09 caching branch
-- [ ] If an argument is reused across arms that must be identical, **record that it was**
+- [x] Structural validity from the input schema
+- [x] Semantic validity via fixture binding to entities that actually exist
+- [x] Cache-busting variants for the P2-09 caching branch
+- [x] If an argument is reused across arms that must be identical, **record that it was**
+
+**Status:** Done — `crates/argsynth`, `synthesize(schema, &FixtureBindings) ->
+Result<SynthesisResult, SynthesisError>`. A deliberate JSON Schema *subset*, not a validator:
+`object`/`array`/`string`/`number`/`integer`/`boolean`/`null`, plus `enum`/`const`,
+`required`, `minLength`, `minimum`/`maximum`, `minItems` — anything past that (`oneOf`,
+`$ref`, a positional-tuple `items` array, a schema with no `type`/`enum`/`const` at all)
+returns a loud `SynthesisError::UnsupportedSchema { at }` naming the dotted path where the
+unrecognised shape was hit, rather than guessing at a shape it was never told to handle.
+
+**Deterministic by construction, the same discipline P1-02/P2-05 already apply to the base
+layer and its fixtures, applied here to arguments:** no randomness anywhere in this crate —
+enum/const pick the first declared value, strings/numbers/booleans use fixed rules over
+`minLength`/`minimum`/`maximum`. `synthesis_is_deterministic_across_repeated_calls` proves two
+independent calls over the same schema agree, which is what lets `D1` and `D1'`
+(architecture.md §4.2's noise-floor pair) receive identical arguments with no special case.
+
+**Fixture binding is explicit, not heuristic.** `FixtureBindings` is keyed by property name
+only — this crate never guesses that a property called `path` or `id` refers to a fixture
+entity from naming conventions; the caller, who actually knows both the tool's schema and
+what the fixture seeded, states each binding directly. `a_bound_property_uses_the_real_
+fixture_entity_and_is_recorded_as_bound` (Linux-only, since it pulls in `world`) binds a
+`path` property to `world::SEEDED_DATABASE_PATH` — a real path P2-05's generic fixture
+genuinely seeds, not a coincidentally matching literal — and confirms the result both uses
+that exact value and records `"path"` in `fixture_bound_properties`, while an unbound sibling
+property is still synthesised structurally.
+
+**`reuse_across_arms` and `cache_busting_variant` are both primitives, not protocols** — this
+task's own scope is argument *generation*, not the multi-arm idempotency protocol that
+consumes it (P2-09). `reuse_across_arms(arguments, arm_ids) -> ReusedArguments` is the
+positive form of this crate's own "must not": handing the identical `ReusedArguments.
+arguments` value to every arm named in `reused_for` makes cross-arm reuse an explicit,
+inspectable fact rather than an accident of two `synthesize` calls happening to agree.
+`cache_busting_variant` perturbs every string leaf (suffix) and numeric leaf (+1) recursively,
+leaving `bool`/`null` untouched (flipping a boolean changes its meaning outright, and `null`
+has no meaningful perturbation direction); it is deterministic — the same input always busts
+to the same output — documented plainly as a primitive P2-09 decides whether and when to use,
+not a protocol this crate implements itself.
+
+`argsynth` went from an empty placeholder to 9 tests, all passing. `cargo build --workspace`,
+`cargo clippy --workspace --all-targets -- -D warnings`, `cargo xtask purity`, and `cargo test
+--workspace` all pass clean.
 
 ### P2-07 Arms 1′, 2, and 2R
 
