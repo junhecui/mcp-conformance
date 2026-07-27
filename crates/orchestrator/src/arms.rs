@@ -190,6 +190,12 @@ fn one_session(
         program: program.program.clone(),
         args: program.args.clone(),
         timeout: program.timeout,
+        // P3-01's network isolation is opt-in and not yet wired into arm execution — every
+        // arm here still needs `npx` able to resolve/verify its own package, which P3-01's
+        // own doc comment found genuinely hangs under network isolation. A future arm
+        // wanting P3-01's containment property needs a pre-resolved (not npx-wrapped)
+        // program to run under it at all.
+        network_isolated: false,
     };
     let (handle, stdin, stdout) = sandbox::spawn(&spec)?;
     let mut client = RawClient { stdin, reader: BufReader::new(stdout), next_id: 0 };

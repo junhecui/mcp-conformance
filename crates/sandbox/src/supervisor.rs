@@ -1,14 +1,40 @@
-//! P1-03 + P2-01: sandbox supervisor — mount, user, and PID namespaces, overlayfs, hard
-//! timeout, PID-1 containment.
+//! P1-03 + P2-01 + P3-01: sandbox supervisor — mount, user, PID, and (optional) network
+//! namespaces, overlayfs, hard timeout, PID-1 containment.
 //!
 //! Phase 1 landed "crudest containment that works" (design.md §10): a private mount
 //! namespace plus an overlay mount, a hard wall-clock timeout, and a clean teardown, with
 //! PID/user namespaces explicitly deferred. This module now also does what P2-01 asks:
 //! the sandboxed process becomes PID 1 of its own PID namespace, so when it dies —
 //! naturally or via this module's own `SIGKILL` — the kernel automatically kills every
-//! descendant it ever spawned and tears the whole namespace down. Cgroups (P2-02), network
-//! isolation (P3-01), and seccomp (P4-01) remain later phases; this module does not pretend
-//! to do them yet.
+//! descendant it ever spawned and tears the whole namespace down. Cgroups (P2-02) live in
+//! their own module (`cgroup`), applied by whoever composes a run, not this one.
+//!
+//! # Network isolation (P3-01) is opt-in, not universal
+//!
+//! [`SandboxSpec::network_isolated`] unshares `CLONE_NEWNET` when `true`: a fresh network
+//! namespace with no interfaces configured at all (not even loopback — see that field's own
+//! doc comment for why), so there is no route to anywhere, including back out to the host.
+//! Verified directly, not assumed: a raw `connect()` to an external address from inside such
+//! a namespace fails in low single-digit milliseconds with `ENETUNREACH`, and `getaddrinfo`
+//! fails just as fast with "temporary failure in name resolution" — genuine "no route out,"
+//! not a slow-path timeout dressed up as one.
+//!
+//! **Deliberately opt-in, not applied to every `spawn()` call**, because of a second,
+//! equally real finding: `npx -y <package> ...` — the exact invocation P1-08's and P2-10's
+//! own real-corpus measurements already depend on — does not fail fast under this isolation.
+//! Verified directly: with network entirely unreachable, `npx` hangs past a 15-second
+//! timeout before this module's own hard-timeout watchdog would even fire on a real run,
+//! almost certainly because its own registry freshness check (performed even against an
+//! already-cached package, unless run with `--offline`) retries with backoff rather than
+//! surfacing the same fast, unambiguous failure a raw socket call gets. Every existing
+//! caller of `spawn()` sets `network_isolated: false`, preserving exactly the behaviour
+//! those already-shipped measurements depend on; only a caller that actually wants P3-01's
+//! containment property opts in, and accepts that an `npx`-resolved target needs pre-cached,
+//! directly-invoked resolution (not `npx` itself) to run under it at all — a real
+//! architectural constraint for whoever wires this into the measurement pipeline next
+//! (P3-02 onward), not fixed by this module.
+//!
+//! Seccomp (P4-01) remains a later phase; this module does not pretend to do it yet.
 //!
 //! **Must not:** emit any verdict. Enforced by contract, and structurally by this crate's
 //! own dependency graph: `sandbox` has no edge to `normalise` or `verdict` (see
@@ -117,6 +143,14 @@ pub struct SandboxSpec {
     /// unconditionally, and not configurable off (ADR-004 applies to P1-05's gate reading
     /// this outcome, and this module is what makes the outcome exist to read).
     pub timeout: Duration,
+    /// P3-01: whether the sandboxed process runs in its own network namespace with no
+    /// interfaces configured at all — not even loopback, since nothing this module's own
+    /// tests or any real corpus tool measured so far has needed it, and hand-rolling the
+    /// `ioctl` to bring an interface up (the mainline `libc` crate does not expose
+    /// `ifreq`/`SIOCSIFFLAGS` for generic Linux) is not worth doing speculatively. See this
+    /// module's own doc comment for why this defaults to `false` at every existing call
+    /// site rather than being applied universally.
+    pub network_isolated: bool,
 }
 
 /// Why constructing or launching the sandbox failed. Distinct from anything the *sandboxed
@@ -157,6 +191,7 @@ pub struct SandboxHandle {
     init_pid: Pid,
     upper: PathBuf,
     timed_out: Arc<AtomicBool>,
+    network_isolated: bool,
 }
 
 /// What the supervisor observed once a run finished. Carries no interpretation — deciding
@@ -184,6 +219,11 @@ pub struct SandboxOutcome {
     /// `observe::OrphanState` made Phase 1's weaker, honest "not observable" claim a value
     /// rather than an assumption.
     pub orphans_impossible: bool,
+    /// Echoes `SandboxSpec::network_isolated` — kept on the outcome, not just the spec, so a
+    /// caller composing evidence has a structural record of whether "no route out" actually
+    /// applied to this run, the same "record the guarantee as a value" discipline
+    /// `orphans_impossible` already established for PID-namespace containment.
+    pub network_isolated: bool,
 }
 
 /// Construct the mount, user, and PID namespaces plus the overlay, launch `spec.program`
@@ -288,13 +328,24 @@ pub fn spawn(
                 }
             });
 
-            let handle = SandboxHandle { init_pid, upper: spec.overlay.upper.clone(), timed_out };
+            let handle = SandboxHandle {
+                init_pid,
+                upper: spec.overlay.upper.clone(),
+                timed_out,
+                network_isolated: spec.network_isolated,
+            };
             Ok((handle, stdin, stdout))
         }
         ForkResult::Child => {
             drop(stdin_write);
             drop(stdout_read);
-            let target = TargetSetup { mount_options, mountpoint, program, argv };
+            let target = TargetSetup {
+                mount_options,
+                mountpoint,
+                program,
+                argv,
+                network_isolated: spec.network_isolated,
+            };
             run_sandboxed_init(stdin_read, stdout_write, err_write, pid_write, target)
         }
     }
@@ -331,6 +382,7 @@ struct TargetSetup {
     mountpoint: PathBuf,
     program: CString,
     argv: Vec<CString>,
+    network_isolated: bool,
 }
 
 /// Everything the outer forked process ("fork-1" in the module doc comment) does: redirect
@@ -346,7 +398,7 @@ fn run_sandboxed_init(
     pid_write: OwnedFd,
     target: TargetSetup,
 ) -> ! {
-    let TargetSetup { mount_options, mountpoint, program, argv } = target;
+    let TargetSetup { mount_options, mountpoint, program, argv, network_isolated } = target;
     if let Err(e) = nix::unistd::dup2_stdin(&stdin_read) {
         die(&err_write, "dup2 stdin", e);
     }
@@ -356,8 +408,15 @@ fn run_sandboxed_init(
     drop(stdin_read);
     drop(stdout_write);
 
-    if let Err(e) = unshare(CloneFlags::CLONE_NEWUSER | CloneFlags::CLONE_NEWPID | CloneFlags::CLONE_NEWNS) {
-        die(&err_write, "unshare(user+pid+mount)", e);
+    let mut clone_flags = CloneFlags::CLONE_NEWUSER | CloneFlags::CLONE_NEWPID | CloneFlags::CLONE_NEWNS;
+    if network_isolated {
+        // P3-01: a fresh network namespace with no interfaces configured — see the module
+        // doc comment for why this is opt-in per spawn rather than unconditional, and why
+        // loopback is deliberately left down too.
+        clone_flags |= CloneFlags::CLONE_NEWNET;
+    }
+    if let Err(e) = unshare(clone_flags) {
+        die(&err_write, "unshare(user+pid+mount[+net])", e);
     }
 
     if let Err(e) = std::fs::write("/proc/self/setgroups", b"deny") {
@@ -496,6 +555,7 @@ impl SandboxHandle {
             exit_status: Some(exit_status),
             timed_out,
             orphans_impossible: true,
+            network_isolated: self.network_isolated,
         })
     }
 }
@@ -548,6 +608,7 @@ mod tests {
                     .to_string(),
             ],
             timeout: Duration::from_secs(10),
+            network_isolated: false,
         };
 
         let (handle, stdin, _stdout) = spawn(&spec).expect("spawn");
@@ -601,6 +662,7 @@ mod tests {
             program: PathBuf::from("/bin/sleep"),
             args: vec!["3600".to_string()],
             timeout: Duration::from_secs(2),
+            network_isolated: false,
         };
 
         let start = std::time::Instant::now();
@@ -645,6 +707,7 @@ mod tests {
                 "read line && echo \"sandbox saw: $line\"".to_string(),
             ],
             timeout: Duration::from_secs(10),
+            network_isolated: false,
         };
 
         let (handle, mut stdin, mut stdout) = spawn(&spec).expect("spawn");
@@ -699,6 +762,7 @@ mod tests {
             program: PathBuf::from("/bin/sh"),
             args: vec!["-c".to_string(), "sleep 3600 & exit 0".to_string()],
             timeout: Duration::from_secs(10),
+            network_isolated: false,
         };
 
         let (handle, stdin, _stdout) = spawn(&spec).expect("spawn");
@@ -721,6 +785,78 @@ mod tests {
             !a_sleep_3600_process_is_running(),
             "the grandchild the shell abandoned must have been killed by PID-namespace \
              teardown, not left running as a real host process"
+        );
+    }
+
+    /// P3-01's literal exit criterion: with `network_isolated: true`, a real egress attempt
+    /// from inside the sandbox fails, and fails *fast* — not a slow-path timeout dressed up
+    /// as "no route." Runs a real Python process (not a synthetic assertion about what a
+    /// namespace "should" do) attempting both a raw TCP `connect()` and a DNS lookup against
+    /// real external destinations, and asserts on the exact, immediate kernel-level failures
+    /// this module's own doc comment already found empirically: `ENETUNREACH` for the
+    /// connect, "temporary failure in name resolution" for the lookup — both in comfortably
+    /// under a second, proving this is genuine "no route exists" containment rather than a
+    /// connection that merely never got a reply.
+    #[test]
+    fn network_isolated_run_has_no_route_out_and_fails_fast() {
+        let lower_dir = tempfile::tempdir().expect("tempdir");
+        build_trivial_lower(lower_dir.path());
+        let scratch = tempfile::tempdir().expect("tempdir");
+
+        let script = "\
+import socket
+try:
+    socket.create_connection(('8.8.8.8', 53), timeout=5)
+    print('CONNECT: unexpectedly succeeded')
+except OSError as e:
+    print('CONNECT:', e)
+try:
+    socket.getaddrinfo('example.com', 443)
+    print('DNS: unexpectedly succeeded')
+except OSError as e:
+    print('DNS:', e)
+";
+
+        let spec = SandboxSpec {
+            overlay: OverlaySpec {
+                lower: lower_dir.path().to_path_buf(),
+                upper: scratch.path().join("upper"),
+                work: scratch.path().join("work"),
+                mountpoint: scratch.path().join("merged"),
+            },
+            program: PathBuf::from("/usr/local/bin/python3"),
+            args: vec!["-c".to_string(), script.to_string()],
+            timeout: Duration::from_secs(10),
+            network_isolated: true,
+        };
+
+        let start = std::time::Instant::now();
+        let (handle, stdin, mut stdout) = spawn(&spec).expect("spawn");
+        drop(stdin);
+        let mut output = String::new();
+        stdout.read_to_string(&mut output).expect("read sandboxed stdout");
+        let outcome = handle.wait().expect("wait");
+        let elapsed = start.elapsed();
+
+        assert!(!outcome.timed_out, "a network-isolated egress attempt must fail fast, not hang to the timeout");
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "the whole run (spawn, two failed egress attempts, teardown) took {elapsed:?}; \
+             a genuine 'no route' failure is a low-millisecond kernel decision, not a slow path"
+        );
+        assert!(outcome.exit_status.expect("has a status").success(), "python's own script must exit cleanly: {output}");
+        assert!(outcome.network_isolated, "the outcome must record that isolation was actually applied");
+
+        let connect_line = output.lines().find(|l| l.starts_with("CONNECT:")).unwrap_or_default();
+        assert!(
+            connect_line.to_ascii_lowercase().contains("network is unreachable"),
+            "a raw connect() to an external address must fail with ENETUNREACH, not: {connect_line:?} (full output: {output})"
+        );
+        let dns_line = output.lines().find(|l| l.starts_with("DNS:")).unwrap_or_default();
+        assert!(
+            dns_line.to_ascii_lowercase().contains("name resolution")
+                || dns_line.to_ascii_lowercase().contains("name or service not known"),
+            "DNS resolution must fail immediately with no route to any resolver, not: {dns_line:?} (full output: {output})"
         );
     }
 }

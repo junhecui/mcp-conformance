@@ -188,6 +188,9 @@ pub fn run() -> Result<(), FirstVerdictError> {
             "stdio".to_string(),
         ],
         timeout: RUN_TIMEOUT,
+        // Launched via npx, which P3-01 found genuinely hangs under network isolation
+        // (its own registry freshness check doesn't fail fast when unreachable).
+        network_isolated: false,
     };
 
     println!("spawning sandboxed server: npx -y @modelcontextprotocol/server-everything stdio");
