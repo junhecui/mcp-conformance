@@ -67,25 +67,48 @@ fn attempt(url: &str) -> Attempt {
     }
 }
 
-/// Run the Stage 1 census: sample up to `sample_size` Class B servers from the live
-/// registry and attempt discovery against each.
+/// Deterministically hash `name` into a `u64` — `DefaultHasher`'s keys are fixed (unlike
+/// `HashMap`'s `RandomState`, which is randomised per-process to resist HashDoS), so this
+/// is stable across runs and processes, not just within one.
+fn stable_hash(name: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    name.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Run the Stage 1 census: sample `sample_size` Class B servers from the live registry and
+/// attempt discovery against each.
+///
+/// The registry returns entries in what looks like roughly alphabetical order by name
+/// (every sample drawn from "the first N" clustered under `a*` prefixes) — taking the first
+/// N candidates would bias the sample toward whatever namespace happens to sort first, not
+/// give a representative cross-section. Instead this scans every Class B candidate in the
+/// registry, then selects `sample_size` of them by a deterministic hash of their name. Hash
+/// -order is not alphabetical, unbiased with respect to namespace, and — unlike a
+/// randomised selection — reproducible: the same registry snapshot always yields the same
+/// sample, which matters for comparing across runs.
 pub fn run(sample_size: usize) -> Result<(), Box<dyn std::error::Error>> {
-    eprintln!("census-stage1: fetching the registry to find Class B candidates...");
+    eprintln!("census-stage1: fetching the registry to find all Class B candidates...");
 
     let registry = RegistryClient::new();
-    let mut candidates = Vec::new();
+    let mut all_class_b = Vec::new();
     registry.fetch_all(100, std::time::Duration::from_millis(200), |page| {
         for raw in &page.entries_raw {
-            if candidates.len() >= sample_size {
-                break;
-            }
             let outcome = catalogue::ingest(raw);
             if let Some(candidate) = class_b_candidate(&outcome) {
-                candidates.push(candidate);
+                all_class_b.push(candidate);
             }
         }
-        candidates.len() < sample_size // stop once the sample is full
+        true // scan the whole registry — early-stopping here is exactly the bias to avoid
     })?;
+
+    eprintln!(
+        "census-stage1: {} Class B candidates found; selecting {sample_size} by stable hash...",
+        all_class_b.len()
+    );
+    all_class_b.sort_by_key(|c| stable_hash(&c.name));
+    let candidates: Vec<Candidate> = all_class_b.into_iter().take(sample_size).collect();
 
     eprintln!("census-stage1: attempting discovery against {} Class B servers...", candidates.len());
 
