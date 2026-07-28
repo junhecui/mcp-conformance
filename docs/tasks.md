@@ -2098,6 +2098,51 @@ times consecutively with zero failures.
 
 **Depends on:** P3-02, P2-05
 **Exit:** A tool needing an external API is transparently served by an in-sandbox mock.
+**Status:** Done — `world::mock_backend::GenericMockBackend`, matching architecture.md §8's
+own placement of "mock backends" inside `world/`. Bound the same way
+`observe::connection_log::ConnectionLog` (P3-02) is — an OS-assigned port on every local
+interface (`0.0.0.0`), for the identical `iptables REDIRECT`-rewrites-to-the-arriving-
+interface's-own-address reason P3-02's own write-up already found — a background thread
+answers every accepted connection with a real, well-formed HTTP/1.1 response (status line,
+`Content-Type`, a correct `Content-Length`, then a body), after draining the request far
+enough to see the blank line ending its headers. `sandbox::NetworkBridge::set_up`'s
+`proxy_port` points at this backend instead of at `ConnectionLog`, so the exact same
+containment/interception plumbing P3-02 built serves either purpose depending only on which
+listener a caller binds it to.
+
+**Reuses P2-05's own generic fixture content rather than inventing a second "generic"
+shape.** The response body is the identical three-row `items` seed
+(`generic_fixture_entries`'s own `SEED_SQL`) serialised as JSON — a tool exercising "some
+generic external API" and a tool exercising "the generic seeded database" now see the same
+underlying generic content either way, which is also what makes the response a genuinely
+meaningful stand-in rather than an arbitrary placeholder payload.
+
+**No grace-drain period needed, unlike `ConnectionLog::stop` (P3-02).** `ConnectionLog`
+needed a bounded grace period because a connection could be fully handshaken but not yet
+`accept()`-ed by the time `stop()` was called. `GenericMockBackend::serve_one` answers a
+connection to completion, synchronously, inside the same accept-loop iteration that accepted
+it — by the time the loop ever checks the stop flag again, every connection already accepted
+has already been fully served, so there is no "accepted but not yet handled" window for
+`stop()` to race.
+
+**Proven with a real sandboxed process, not a bare-socket test in isolation.**
+`world::mock_backend`'s own tests (a real `TcpStream` sending a real HTTP/1.1 GET and parsing
+back a real status line, headers, and body; three independent connections each served in
+full) prove the mock-serving half alone, the same "plumbing half first" discipline P3-02's
+`sandbox::netns` tests used.
+`orchestrator::mock::tests::a_sandboxed_http_request_to_an_external_api_is_transparently_served_by_the_generic_mock`
+proves the full pipeline through production code on both sides: a network-isolated,
+stdin-gated Python process (`urllib.request.urlopen`, not a raw socket — the actual shape a
+tool's own HTTP client library would use) issues a real HTTP GET to an address it believes is
+an arbitrary external host, gets back a `200` and reads a body, and that body is asserted to
+be *exactly* the generic mock's own canned JSON — "transparently served" proven as "the
+tool's own HTTP client never saw anything wrong," not merely "some bytes came back."
+
+`world` grew from 4 to 7 tests (plus a new `mock_backend` module), `orchestrator` grew from
+12 to 13 tests (plus a new `mock` module). `cargo build --workspace --all-targets`, `cargo
+clippy --workspace --all-targets -- -D warnings`, `cargo xtask purity`, and `cargo test
+--workspace` all pass clean. The orchestrator integration test was run 10 times consecutively
+with zero failures, each completing in ~0.1s.
 
 ### P3-04 Destination classification
 

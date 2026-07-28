@@ -51,6 +51,13 @@ mod network;
 #[cfg(target_os = "linux")]
 pub use network::{run_network_isolated_and_bridged, NetworkSessionError};
 
+/// P3-03: combine `sandbox`'s network-isolation-plus-bridge halves with `world`'s generic
+/// mock backend, driven against a real sandboxed process. Same gating rationale as `arms`.
+#[cfg(target_os = "linux")]
+mod mock;
+#[cfg(target_os = "linux")]
+pub use mock::{run_network_isolated_and_mocked, MockSessionError};
+
 #[derive(Deserialize)]
 struct RulesetFile {
     version: String,

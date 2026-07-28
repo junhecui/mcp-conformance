@@ -9,9 +9,8 @@
 //! Phase 2 lands exactly the `fixtures/generic` half of architecture.md §8's fixture split:
 //! a seeded filesystem and a seeded database, both byte-reproducible across independent
 //! constructions, with `server_id: NULL` per architecture.md §6's `FIXTURE` schema (a generic
-//! fixture belongs to no particular server). `fixtures/per-server` bespoke fixtures and
-//! mock-backend network redirection are Phase 3 scope (the roadmap table's own "3 — Network:
-//! ... world (mock redirection)" line) and are not implemented here.
+//! fixture belongs to no particular server). `fixtures/per-server` bespoke fixtures remain
+//! out of scope; mock-backend network redirection is [`mock_backend`], landed in P3-03.
 //!
 //! Reuses `sandbox::base_layer` rather than re-deriving base-layer construction and its
 //! reproducibility proof a second time: a fixture *is* a base layer — a set of `EntrySpec`s —
@@ -25,6 +24,8 @@
 //! itself compiles to an empty crate.
 
 #![cfg(target_os = "linux")]
+
+pub mod mock_backend;
 
 use sandbox::{EntryKind, EntrySpec};
 use std::path::PathBuf;
