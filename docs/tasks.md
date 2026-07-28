@@ -2484,6 +2484,51 @@ failures, after having reliably reproduced the pre-fix `printk_ratelimit` drop e
 
 **Depends on:** P4-02, P2-03
 **Exit:** `adversarial_flag` present on the published record, not just in the DB.
+**Status:** Done — but the real gap this task closed was the opposite of what the exit
+criterion's own phrasing assumes. Checked directly before writing anything: F-06's schema
+already had an `INTEGRITY` table with `adversarial_flag` (`crates/store/migrations/
+0001_initial_schema.sql`), but **nothing in this codebase had ever written a row to it** —
+`store::db` had typed insert helpers for `server`/`tool_snapshot`/`verdict` only. The literal
+work here was making the flag actually reach the database at all, then proving it survives
+the round trip into whatever this project currently calls "publication."
+
+**`store::db` gains `RunRecord`/`insert_run` and `IntegrityRecord`/`insert_integrity`/
+`IntegrityRow`/`get_integrity`**, matching `insert_verdict`'s own established shape exactly
+(typed fields, `as_db_str`-style discipline, `#[must_use]`-free plain `Result` returns).
+`insert_run` is a minimal prerequisite, not scope creep toward the rest of Phase 5's
+persistence wiring: `INTEGRITY.run_id` is a `NOT NULL REFERENCES run (run_id)` foreign key,
+so an `INTEGRITY` row cannot exist without one. `get_integrity` is the read half — deliberately
+present so a test (or a caller) can prove a value came *back out* of the table, not just that
+`insert_integrity` didn't error.
+
+**`xtask::first_verdict` — the one place already carrying `adversarial_flag` into a published
+JSON, since P2-03 wired that field in with a hardcoded `false` ahead of P4-01/02 landing —
+now writes a real `server`/`tool_snapshot`/`run`/`integrity` chain and reads
+`adversarial_flag` *back out of the database* before handing it to `write_result`**, rather
+than passing the in-memory `gate_outcome` value straight through unchanged. An explicit
+`assert_eq!` checks the DB-read value against the in-memory one before proceeding — not
+because they were expected to differ, but because the entire point of this task is that the
+published value's *provenance* is the database, not a decoupled copy that merely agrees with
+it today. Re-run for real against the live reference server: `echo` trips no denials, the DB
+round-trip returns `false`, and `results/conformance/p1_08_first_verdict.json` is
+byte-identical to its pre-P4-03 content — the published *value* was already correct; what
+changed is that it now demonstrably came from somewhere durable.
+
+**The flagged (`true`) case is proven separately**, since `first_verdict`'s own target tool
+(`echo`) never attempts an escape and so only ever exercises the unflagged path:
+`orchestrator::seccomp::tests::a_flagged_run_persists_and_reads_back_true_through_the_
+integrity_table` runs the same real `ptrace`-attempting hostile-shaped process P4-02's own
+test uses, writes its `adversarial_flag: true` and harvested syscall number to a real
+`INTEGRITY` row, and reads both back exactly as stored — proving the loop closes in both
+directions, not just the direction the one live demo run happens to produce.
+
+`store` grew from 22 to 27 tests (five new: `insert_run`'s own round trip, the flagged and
+clean `adversarial_flag` round trips, a missing-row `get_integrity` returning `None` rather
+than a default-valued row, and `insert_integrity` still enforcing the foreign key on an
+unknown `run_id`). `orchestrator` grew from 19 to 20 tests. `cargo build --workspace
+--all-targets`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo xtask
+purity`, and `cargo test --workspace` all pass clean. The new orchestrator test was run 10
+times consecutively with zero failures.
 
 ### P4-04 Worker re-imaging
 

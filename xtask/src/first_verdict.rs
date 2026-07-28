@@ -30,16 +30,28 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use discovery::jsonrpc;
 use sandbox::{OverlaySpec, SandboxSpec};
 use serde_json::{json, Value};
+use store::db;
 
 const TARGET_TOOL: &str = "echo";
 const RUN_TIMEOUT: Duration = Duration::from_secs(60);
 const RULESET_PATH: &str = "rulesets/v1.json";
 const RESULT_PATH: &str = "results/conformance/p1_08_first_verdict.json";
+
+/// Not a full ISO-8601 formatter (no `chrono` dependency for a handful of call sites across
+/// `xtask`) — a sortable, human-legible-enough stand-in; every `_at` column in F-06's schema
+/// is free-form `TEXT` for exactly this reason. Same shape as `probe_stage1`'s own
+/// `now_iso`, kept as its own tiny copy rather than shared — each `xtask` driver here is a
+/// deliberately disposable one-off, the same reasoning that already keeps `RawClient`
+/// unshared across `first_verdict`/`ruleset_v2`/`fixture_generality`.
+fn now_iso() -> String {
+    let secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    format!("unix:{secs}")
+}
 
 /// Why this run failed.
 #[derive(Debug)]
@@ -60,6 +72,8 @@ pub enum FirstVerdictError {
     Decode(String),
     /// Starting the seccomp audit harvester (P4-02) failed.
     SeccompAudit(observe::seccomp_audit::SeccompAuditError),
+    /// Writing or reading back the metadata DB (P4-03) failed.
+    Db(rusqlite::Error),
 }
 
 impl std::fmt::Display for FirstVerdictError {
@@ -73,6 +87,7 @@ impl std::fmt::Display for FirstVerdictError {
             Self::Store(e) => write!(f, "evidence store error: {e}"),
             Self::Decode(msg) => write!(f, "evidence decode error: {msg}"),
             Self::SeccompAudit(e) => write!(f, "seccomp audit error: {e}"),
+            Self::Db(e) => write!(f, "metadata DB error: {e}"),
         }
     }
 }
@@ -107,6 +122,11 @@ impl From<store::StoreError> for FirstVerdictError {
 impl From<observe::seccomp_audit::SeccompAuditError> for FirstVerdictError {
     fn from(e: observe::seccomp_audit::SeccompAuditError) -> Self {
         Self::SeccompAudit(e)
+    }
+}
+impl From<rusqlite::Error> for FirstVerdictError {
+    fn from(e: rusqlite::Error) -> Self {
+        Self::Db(e)
     }
 }
 
@@ -275,8 +295,76 @@ pub fn run() -> Result<(), FirstVerdictError> {
     };
     let gate_outcome = integrity::decide(gate_signals);
     println!("integrity gate: {gate_outcome:?}");
-    let adversarial_flag =
+    let in_memory_adversarial_flag =
         matches!(&gate_outcome, integrity::GateOutcome::Accept { adversarial_flag: true });
+
+    // P4-03: make `adversarial_flag` durable (nothing wrote to the `integrity` table before
+    // this task) and read it back for publication, rather than carrying the in-memory
+    // `gate_outcome` value straight into `write_result` unchanged — proving the published
+    // record's flag is the one the DB actually stored, not a second, decoupled copy that
+    // happens to agree with it today but could silently drift from it later.
+    let conn = db::open_and_migrate(
+        scratch.path().join("metadata.sqlite3").to_str().expect("utf8 scratch path"),
+    )?;
+    db::insert_server(
+        &conn,
+        &db::ServerRecord {
+            server_id: "server-everything",
+            source_uri: "npx -y @modelcontextprotocol/server-everything stdio",
+            containability_class: datamodel::ContainabilityClass::A,
+            spec_revision: &negotiated_version,
+        },
+    )?;
+    db::insert_tool_snapshot(
+        &conn,
+        &db::ToolSnapshotRecord {
+            snapshot_id: "snapshot-p1-08",
+            server_id: "server-everything",
+            tool_name: TARGET_TOOL,
+            // This demo doesn't compute a real P0-02 metadata pin (that's `intake`/
+            // discovery's job elsewhere in the pipeline, not this one-off script's) — a
+            // disclosed placeholder, not something meant to look like a real pin.
+            metadata_pin: "not-computed-in-this-demo",
+            annotations_raw: &target.get("annotations").cloned().unwrap_or(Value::Null).to_string(),
+            readonly_explicit: true,
+            destructive_explicit: false,
+            idempotent_explicit: false,
+            openworld_explicit: false,
+            observed_at: &now_iso(),
+        },
+    )?;
+    db::insert_run(
+        &conn,
+        &db::RunRecord {
+            run_id: "run-p1-08",
+            snapshot_id: "snapshot-p1-08",
+            arm: "1",
+            fixture_id: None,
+            arguments: &json!({ "message": "hello from mcp-conformance P1-08" }).to_string(),
+            harness_version: env!("CARGO_PKG_VERSION"),
+            started_at: &now_iso(),
+        },
+    )?;
+    db::insert_integrity(
+        &conn,
+        &db::IntegrityRecord {
+            run_id: "run-p1-08",
+            clean_teardown: !gate_signals.containment_uncertain,
+            caps_respected: !gate_signals.resource_cap_hit,
+            timed_out: outcome.timed_out,
+            denied_syscalls: &serde_json::to_string(
+                &seccomp_denials.iter().map(|d| d.syscall_nr).collect::<Vec<_>>(),
+            )?,
+            adversarial_flag: in_memory_adversarial_flag,
+        },
+    )?;
+    let adversarial_flag = db::get_integrity(&conn, "run-p1-08")?
+        .ok_or_else(|| FirstVerdictError::Db(rusqlite::Error::QueryReturnedNoRows))?
+        .adversarial_flag;
+    assert_eq!(
+        adversarial_flag, in_memory_adversarial_flag,
+        "the DB-stored flag must match what the gate just decided"
+    );
 
     let assessment = match gate_outcome {
         integrity::GateOutcome::Unverifiable(reason) => {

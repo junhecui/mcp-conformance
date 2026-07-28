@@ -173,4 +173,91 @@ libc.syscall(101, 0, 0, 0, 0, 0, 0)  # SYS_ptrace
         assert!(denials.is_empty(), "a clean run must harvest no denials, got: {denials:?}");
         assert_eq!(gate_outcome, GateOutcome::Accept { adversarial_flag: false });
     }
+
+    /// P4-03's own exit criterion, proven for the flagged case specifically (`first_verdict`'s
+    /// own real run only ever exercises the *unflagged* path, since `echo` never attempts an
+    /// escape): a real hostile-shaped process's `adversarial_flag = true` is written to a
+    /// real `INTEGRITY` row and read back exactly as `true`, plus the exact syscall number
+    /// harvested — proving the published value traces through the database, not a
+    /// stand-alone in-memory copy that only happens to agree with it.
+    #[test]
+    fn a_flagged_run_persists_and_reads_back_true_through_the_integrity_table() {
+        const SYS_PTRACE: i64 = 101; // x86_64 SYS_ptrace
+        let script = "\
+import ctypes
+libc = ctypes.CDLL(None, use_errno=True)
+libc.syscall(101, 0, 0, 0, 0, 0, 0)  # SYS_ptrace
+";
+        let (outcome, denials, gate_outcome) = run(script);
+        let adversarial_flag =
+            matches!(gate_outcome, GateOutcome::Accept { adversarial_flag: true });
+        assert!(adversarial_flag, "the in-memory gate outcome must already be flagged");
+
+        let conn = store::db::open_and_migrate(":memory:").expect("open_and_migrate");
+        store::db::insert_server(
+            &conn,
+            &store::db::ServerRecord {
+                server_id: "srv-hostile",
+                source_uri: "test://hostile",
+                containability_class: datamodel::ContainabilityClass::A,
+                spec_revision: "2025-11-25",
+            },
+        )
+        .expect("insert_server");
+        store::db::insert_tool_snapshot(
+            &conn,
+            &store::db::ToolSnapshotRecord {
+                snapshot_id: "snap-hostile",
+                server_id: "srv-hostile",
+                tool_name: "hostile-tool",
+                metadata_pin: "test-pin",
+                annotations_raw: "null",
+                readonly_explicit: false,
+                destructive_explicit: false,
+                idempotent_explicit: false,
+                openworld_explicit: false,
+                observed_at: "unix:0",
+            },
+        )
+        .expect("insert_tool_snapshot");
+        store::db::insert_run(
+            &conn,
+            &store::db::RunRecord {
+                run_id: "run-hostile",
+                snapshot_id: "snap-hostile",
+                arm: "1",
+                fixture_id: None,
+                arguments: "{}",
+                harness_version: env!("CARGO_PKG_VERSION"),
+                started_at: "unix:0",
+            },
+        )
+        .expect("insert_run");
+        store::db::insert_integrity(
+            &conn,
+            &store::db::IntegrityRecord {
+                run_id: "run-hostile",
+                clean_teardown: true,
+                caps_respected: true,
+                timed_out: outcome.timed_out,
+                denied_syscalls: &serde_json::to_string(
+                    &denials.iter().map(|d| d.syscall_nr).collect::<Vec<_>>(),
+                )
+                .expect("serialise denied syscalls"),
+                adversarial_flag,
+            },
+        )
+        .expect("insert_integrity");
+
+        let row = store::db::get_integrity(&conn, "run-hostile")
+            .expect("get_integrity")
+            .expect("row was just inserted");
+        assert!(row.adversarial_flag, "the published record must read back flagged");
+        let stored_syscalls: Vec<i64> =
+            serde_json::from_str(&row.denied_syscalls).expect("parse stored denied_syscalls");
+        assert!(
+            stored_syscalls.contains(&SYS_PTRACE),
+            "the stored denied_syscalls must include ptrace ({SYS_PTRACE}): {stored_syscalls:?}"
+        );
+    }
 }

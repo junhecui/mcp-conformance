@@ -13,7 +13,7 @@
 //! about 20 lines (ADR-007's general preference for hand-rolled over abstracted, applied at
 //! a scale where it's actually cheap).
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 /// Migrations in application order. Each name is also the row recorded in
 /// `schema_migrations` once applied, so re-ordering this array without renaming a file
@@ -277,6 +277,133 @@ pub fn list_verdicts(conn: &Connection) -> rusqlite::Result<Vec<VerdictRow>> {
         Ok(VerdictRow { annotation, oracle, outcome })
     })?
     .collect()
+}
+
+/// A `RUN` row (architecture.md §6) — one sandboxed execution. Exists as a typed helper
+/// specifically because [`IntegrityRecord::run_id`] (P4-03) is a `NOT NULL REFERENCES
+/// run (run_id)` foreign key: an `INTEGRITY` row cannot be written at all without a real
+/// `RUN` row to point at, so this is the minimal prerequisite P4-03 needs, not scope creep
+/// toward the rest of Phase 5's own persistence wiring.
+pub struct RunRecord<'a> {
+    /// Primary key.
+    pub run_id: &'a str,
+    /// FK to `TOOL_SNAPSHOT`.
+    pub snapshot_id: &'a str,
+    /// Which arm produced this run (`"1'"`, `"2"`, `"2R"`, ...).
+    pub arm: &'a str,
+    /// FK to `FIXTURE`, when one seeded this run. `None` for a run needing no fixture.
+    pub fixture_id: Option<&'a str>,
+    /// The arguments this run was invoked with, as a JSON text — must be valid JSON per the
+    /// schema's own `json_valid` `CHECK`.
+    pub arguments: &'a str,
+    /// This harness's own version string.
+    pub harness_version: &'a str,
+    /// When this run started, as an ISO-8601-ish string.
+    pub started_at: &'a str,
+}
+
+/// Insert one `RUN` row.
+///
+/// # Errors
+///
+/// Propagates any `rusqlite` error, including a foreign-key violation if `snapshot_id` or
+/// `fixture_id` does not reference an existing row, or a `CHECK` violation if `arguments` is
+/// not valid JSON.
+pub fn insert_run(conn: &Connection, record: &RunRecord<'_>) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO run (run_id, snapshot_id, arm, fixture_id, arguments, harness_version, started_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        rusqlite::params![
+            record.run_id,
+            record.snapshot_id,
+            record.arm,
+            record.fixture_id,
+            record.arguments,
+            record.harness_version,
+            record.started_at,
+        ],
+    )?;
+    Ok(())
+}
+
+/// An `INTEGRITY` row (architecture.md §6) — P4-03's own literal subject.
+/// `adversarial_flag` is `sandbox`'s seccomp filter (P4-01) plus `observe::seccomp_audit`
+/// (P4-02) made durable: whether an escape-class syscall was denied during this run, exactly
+/// the value `integrity::GateOutcome::Accept::adversarial_flag` already computes in memory —
+/// this is what makes that value survive past the process that computed it, so a
+/// "published record" reading it back later reads the same thing the gate actually decided,
+/// not a second, decoupled copy.
+pub struct IntegrityRecord<'a> {
+    /// Primary key and FK to `RUN`.
+    pub run_id: &'a str,
+    /// `G1`: whether the sandbox reported a clean teardown.
+    pub clean_teardown: bool,
+    /// `G2`/caps: whether the resource caps this run was subject to were respected (i.e.
+    /// *not* hit — a cap hit is what `G2` gates on).
+    pub caps_respected: bool,
+    /// `G3`: whether the hard timeout fired.
+    pub timed_out: bool,
+    /// Every syscall number `observe::seccomp_audit` harvested for this run, as a JSON
+    /// array — `"[]"` for a clean run, never omitted (the schema's own `NOT NULL` already
+    /// enforces this, but the type here makes "no denials" a real empty list, not an absent
+    /// column).
+    pub denied_syscalls: &'a str,
+    /// `G4`: whether an escape-class syscall was denied — `architecture.md §5.1`'s
+    /// "accepted evidence, flagged" case when `true`.
+    pub adversarial_flag: bool,
+}
+
+/// Insert one `INTEGRITY` row.
+///
+/// # Errors
+///
+/// Propagates any `rusqlite` error, including a foreign-key violation if `run_id` does not
+/// reference an existing `RUN` row, or a `CHECK` violation if `denied_syscalls` is not valid
+/// JSON.
+pub fn insert_integrity(conn: &Connection, record: &IntegrityRecord<'_>) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO integrity
+         (run_id, clean_teardown, caps_respected, timed_out, denied_syscalls, adversarial_flag)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![
+            record.run_id,
+            record.clean_teardown,
+            record.caps_respected,
+            record.timed_out,
+            record.denied_syscalls,
+            record.adversarial_flag,
+        ],
+    )?;
+    Ok(())
+}
+
+/// One `INTEGRITY` row read back out — the read half of [`insert_integrity`], used to prove
+/// a published record's `adversarial_flag` traces back to what this table actually stored,
+/// not an independent in-memory copy that could have silently drifted from it.
+pub struct IntegrityRow {
+    /// `G4`'s own flag, exactly as stored.
+    pub adversarial_flag: bool,
+    /// The denied-syscalls JSON array, exactly as stored (raw text — this crate has no
+    /// reason to know what a syscall number means, only to store and return it faithfully).
+    pub denied_syscalls: String,
+}
+
+/// Read back the `INTEGRITY` row for `run_id`, if one exists.
+///
+/// # Errors
+///
+/// Propagates any `rusqlite` error.
+pub fn get_integrity(conn: &Connection, run_id: &str) -> rusqlite::Result<Option<IntegrityRow>> {
+    conn.query_row(
+        "SELECT adversarial_flag, denied_syscalls FROM integrity WHERE run_id = ?1",
+        [run_id],
+        |row| {
+            let adversarial_flag: bool = row.get(0)?;
+            let denied_syscalls: String = row.get(1)?;
+            Ok(IntegrityRow { adversarial_flag, denied_syscalls })
+        },
+    )
+    .optional()
 }
 
 #[cfg(test)]
@@ -641,5 +768,132 @@ mod tests {
         )
         .expect_err("unverifiable without a reason_code must still violate the CHECK");
         assert!(format!("{err}").to_lowercase().contains("check"));
+    }
+
+    /// [`insert_run`]'s own round trip, through the typed helper rather than `seed_run`'s
+    /// raw SQL — proves the helper itself writes a row the schema actually accepts.
+    #[test]
+    fn insert_run_writes_a_row_the_schema_accepts() {
+        let conn = open_and_migrate(":memory:").expect("open_and_migrate");
+        conn.execute_batch(
+            "INSERT INTO server (server_id, source_uri, containability_class, spec_revision)
+             VALUES ('srv-1', 'stdio://tool', 'A', '2026-06-18');
+             INSERT INTO tool_snapshot
+             (snapshot_id, server_id, tool_name, metadata_pin, annotations_raw,
+              readonly_explicit, destructive_explicit, idempotent_explicit,
+              openworld_explicit, observed_at)
+             VALUES ('snap-1', 'srv-1', 'read_file', 'pin-abc', '{}', 1, 0, 1, 0, 'now');",
+        )
+        .expect("seed server/tool_snapshot");
+
+        insert_run(
+            &conn,
+            &RunRecord {
+                run_id: "run-typed",
+                snapshot_id: "snap-1",
+                arm: "1'",
+                fixture_id: None,
+                arguments: r#"{"path":"/tmp/x"}"#,
+                harness_version: "0.1.0",
+                started_at: "2026-07-28T00:00:00Z",
+            },
+        )
+        .expect("insert_run");
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM run WHERE run_id = 'run-typed'", [], |r| r.get(0))
+            .expect("count run row");
+        assert_eq!(count, 1);
+    }
+
+    /// P4-03's own exit criterion, taken literally: `adversarial_flag` genuinely reaches the
+    /// database (not just the schema definition — nothing wrote to `integrity` before this
+    /// task), and reading it back via [`get_integrity`] returns exactly what
+    /// [`insert_integrity`] wrote, not a value that quietly drifted in either direction.
+    #[test]
+    fn adversarial_flag_round_trips_through_the_integrity_table() {
+        let conn = open_and_migrate(":memory:").expect("open_and_migrate");
+        seed_run(&conn);
+
+        insert_integrity(
+            &conn,
+            &IntegrityRecord {
+                run_id: "run-1",
+                clean_teardown: true,
+                caps_respected: true,
+                timed_out: false,
+                denied_syscalls: "[101, 165]",
+                adversarial_flag: true,
+            },
+        )
+        .expect("insert_integrity");
+
+        let row = get_integrity(&conn, "run-1")
+            .expect("get_integrity")
+            .expect("a row was just inserted for run-1");
+        assert!(row.adversarial_flag, "the flagged run must read back as flagged");
+        assert_eq!(row.denied_syscalls, "[101, 165]");
+
+        // And directly against the raw column, matching `typed_insert_helpers_round_trip_
+        // the_oracle_correctly`'s own discipline: the whole point is the value written to
+        // disk, not just what the typed reader happens to report.
+        let raw_flag: i64 = conn
+            .query_row("SELECT adversarial_flag FROM integrity WHERE run_id = 'run-1'", [], |r| r.get(0))
+            .expect("read raw adversarial_flag column");
+        assert_eq!(raw_flag, 1);
+    }
+
+    /// A clean run (no escape-class denial) must read back unflagged, with an empty denied-
+    /// syscalls list — the common case, not just the flagged one.
+    #[test]
+    fn a_clean_runs_adversarial_flag_reads_back_false() {
+        let conn = open_and_migrate(":memory:").expect("open_and_migrate");
+        seed_run(&conn);
+
+        insert_integrity(
+            &conn,
+            &IntegrityRecord {
+                run_id: "run-1",
+                clean_teardown: true,
+                caps_respected: true,
+                timed_out: false,
+                denied_syscalls: "[]",
+                adversarial_flag: false,
+            },
+        )
+        .expect("insert_integrity");
+
+        let row = get_integrity(&conn, "run-1").expect("get_integrity").expect("row present");
+        assert!(!row.adversarial_flag);
+        assert_eq!(row.denied_syscalls, "[]");
+    }
+
+    /// [`get_integrity`] on a `run_id` with no `INTEGRITY` row must return `None`, never a
+    /// default-valued row that could be mistaken for a genuinely clean, recorded run.
+    #[test]
+    fn get_integrity_for_a_run_with_no_row_is_none() {
+        let conn = open_and_migrate(":memory:").expect("open_and_migrate");
+        seed_run(&conn);
+        assert!(get_integrity(&conn, "run-1").expect("get_integrity").is_none());
+    }
+
+    /// [`insert_integrity`] must reject a `run_id` with no matching `RUN` row — the same
+    /// foreign-key enforcement every other typed helper in this module already respects.
+    #[test]
+    fn insert_integrity_rejects_an_unknown_run_id() {
+        let conn = open_and_migrate(":memory:").expect("open_and_migrate");
+        let err = insert_integrity(
+            &conn,
+            &IntegrityRecord {
+                run_id: "no-such-run",
+                clean_teardown: true,
+                caps_respected: true,
+                timed_out: false,
+                denied_syscalls: "[]",
+                adversarial_flag: false,
+            },
+        )
+        .expect_err("a run_id with no RUN row must violate the foreign key");
+        assert!(format!("{err}").to_lowercase().contains("foreign key"));
     }
 }
