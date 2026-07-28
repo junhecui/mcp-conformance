@@ -205,6 +205,13 @@ pub enum ReasonCode {
     /// changed, since this oracle only sees what the server chose to expose. Produced by
     /// `probe`.
     ProbeSurfaceIncomplete,
+    /// architecture.md §4.4's `openWorldHint` decision tree: the strict arm (no route out,
+    /// P3-01) saw no egress attempt *and* the tool itself failed — genuinely ambiguous
+    /// whether the failure was caused by the missing network or something unrelated,
+    /// undecidable without a rerun under the instrumented arm (P3-02 through P3-04) to see
+    /// whether the tool reaches further once egress is actually possible. Produced by
+    /// `verdict::open_world_hint`.
+    EgressAmbiguousRerunInstrumented,
 }
 
 impl ReasonCode {
@@ -222,6 +229,7 @@ impl ReasonCode {
             Self::NoProbeSurface => "no_probe_surface",
             Self::InvocationFailed => "invocation_failed",
             Self::ProbeSurfaceIncomplete => "probe_surface_incomplete",
+            Self::EgressAmbiguousRerunInstrumented => "egress_ambiguous_rerun_instrumented",
         }
     }
 
@@ -239,6 +247,7 @@ impl ReasonCode {
             "no_probe_surface" => Some(Self::NoProbeSurface),
             "invocation_failed" => Some(Self::InvocationFailed),
             "probe_surface_incomplete" => Some(Self::ProbeSurfaceIncomplete),
+            "egress_ambiguous_rerun_instrumented" => Some(Self::EgressAmbiguousRerunInstrumented),
             _ => None,
         }
     }

@@ -64,7 +64,15 @@ pub use mock::{run_network_isolated_and_mocked, MockSessionError};
 #[cfg(target_os = "linux")]
 mod destination;
 #[cfg(target_os = "linux")]
-pub use destination::classify_observed_destinations;
+pub use destination::{classify_observed_destinations, egress_attempted};
+
+/// P3-05: `openWorldHint`'s decision protocol (`verdict::open_world_hint`), driven end to
+/// end against real sandboxed runs — the strict arm (P3-01) and, for `egress_attempted`,
+/// the instrumented arm (`network`/`destination`) together. Same gating rationale as `arms`.
+#[cfg(target_os = "linux")]
+mod open_world;
+#[cfg(target_os = "linux")]
+pub use open_world::assess_open_world_hint;
 
 #[derive(Deserialize)]
 struct RulesetFile {

@@ -2206,9 +2206,64 @@ failures.
 **Depends on:** P3-04
 **Exit:** The decision tree in architecture.md §4.4 implemented.
 
-- [ ] Egress attempted → `openWorld = true`, contradicts a `false` declaration
-- [ ] No egress + tool succeeded → consistent with closed world
-- [ ] No egress + tool failed → ambiguous, rerun instrumented
+- [x] Egress attempted → `openWorld = true`, contradicts a `false` declaration
+- [x] No egress + tool succeeded → consistent with closed world
+- [x] No egress + tool failed → ambiguous, rerun instrumented
+
+**Status:** Done — `verdict::open_world_hint(declared, egress_attempted, tool_succeeded) ->
+Assessment`, matching `read_only_hint`/`idempotent_hint`'s own established shape (pure
+function over already-computed booleans/deltas, never raw evidence). `datamodel::ReasonCode`
+gains `EgressAmbiguousRerunInstrumented` for the third branch — `Unverifiable` is a
+first-class outcome here, never silently folded into `Holds` or `Violated`, the same
+discipline `CachingSuppressedInProcess` already established for `idempotentHint`'s own
+ambiguous branch.
+
+**Disclosed honestly, in the function's own doc comment: `egress_attempted` is not evaluated
+from the strict arm alone, the way architecture.md §4.4's diagram draws it.** The diagram's
+"S1: Egress attempted?" is a question the strict arm (P3-01, no route out) answers *before*
+ever running the instrumented arm — which needs a way to observe a `connect()` attempt
+independent of whether it succeeded, i.e. a syscall/seccomp audit log (architecture.md's own
+Phase 4, P4-02, not yet built). Without it, the only real, non-heuristic observation this
+codebase has of "did the tool try to leave" is P3-04's own destination classification, which
+requires the instrumented arm (P3-02's veth and proxy) to produce anything to classify at
+all. `orchestrator::destination::egress_attempted` (`true` iff any classified destination is
+`External`) is therefore always evaluated from an instrumented-arm run — a disclosed
+simplification of the diagram's staged two-arm optimisation (cheap strict-arm-only fast path,
+falling back to the instrumented arm only when ambiguous), not a different protocol. A future
+P4-02 is what would let a cheaper strict-arm-only path answer S1 directly.
+
+**A `true` (open-world) declaration is never contradicted, by design, not by omission.**
+`declared = true` is a capability claim ("this tool may reach outside"), not a promise that
+any one invocation actually will — the exact same asymmetry `read_only_hint`'s own doc
+comment already gives for why a `false` declaration there is never contradicted.
+`a_true_declaration_holds_regardless_of_egress_or_success` checks all four
+`egress_attempted`/`tool_succeeded` combinations explicitly rather than trusting the `if
+!declared` guard's shape to imply it.
+
+**`orchestrator::open_world::assess_open_world_hint`** wires the pure decision to a real run:
+`network::run_network_isolated_and_bridged` (P3-02) for the instrumented arm,
+`destination::classify_observed_destinations`/`egress_attempted` (P3-04) over its output, and
+`tool_succeeded` from the run's own exit status (`!timed_out && exit_status.success()`).
+Deliberately does **not** run P3-03's mock backend — documented as a "must not" in the module
+doc comment: a mocked response would make an external attempt *look* like it succeeded from
+the sandboxed side, but `tool_succeeded` here is about the sandboxed process's own exit, not
+what a mock chose to answer with; conflating the two would make this protocol's evidence
+depend on an unrelated capability.
+
+**Proven against three real sandboxed processes, one per branch, not synthetic booleans at
+the top level.**
+`a_tool_that_declares_closed_world_but_reaches_out_is_violated` (attempts a real external
+connection, exits `0` regardless) → `Violated`.
+`a_tool_that_declares_closed_world_and_never_reaches_out_holds` (touches no network, exits
+`0`) → `Holds`.
+`a_tool_that_never_reaches_out_but_fails_anyway_is_unverifiable` (touches no network, exits
+`1` for an unrelated reason) → `Unverifiable(EgressAmbiguousRerunInstrumented)`.
+
+`verdict` grew from 12 to 16 tests, `orchestrator` grew from 14 to 17 tests (plus a new
+`open_world` module). `cargo build --workspace --all-targets`, `cargo clippy --workspace
+--all-targets -- -D warnings`, `cargo xtask purity`, and `cargo test --workspace` all pass
+clean. The three orchestrator integration tests were run 8 times consecutively (24 individual
+test executions) with zero failures.
 
 ### P3-06 Fixture-generality metric
 

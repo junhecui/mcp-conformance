@@ -139,6 +139,59 @@ fn is_subset(delta: &[Vec<u8>], noise_floor: &[Vec<u8>]) -> bool {
     delta.iter().all(|path| noise_floor.iter().any(|n| n == path))
 }
 
+/// Decide `openWorldHint` from architecture.md §4.4's decision tree.
+///
+/// # `egress_attempted`'s actual provenance, and why S1 is not evaluated from the strict arm
+/// alone
+///
+/// architecture.md §4.4 draws "Egress attempted?" as a question the *strict* arm (P3-01, no
+/// route out) answers on its own, before ever running the instrumented arm. That would need
+/// a way to observe a `connect()` attempt independent of whether it succeeded — which is
+/// exactly what a seccomp/syscall audit log would give (architecture.md's own Phase 4,
+/// P4-02, not yet built). Without it, this codebase's only real, non-heuristic observation
+/// of "did the tool try to leave the sandbox" is P3-04's own destination classification —
+/// which requires the instrumented arm (P3-02's veth and proxy) to produce anything to
+/// classify at all. `egress_attempted` is therefore, honestly, "at least one connection
+/// classified `External`" (`orchestrator::destination::egress_attempted`, over P3-04's
+/// output) — evaluated from an instrumented-arm run, not inferred from the strict arm's bare
+/// pass/fail. A future P4-02 could let a cheaper strict-arm-only fast path answer S1 directly
+/// without the second run this simplification always pays for; that is a performance
+/// optimisation over this same decision, not a different one.
+///
+/// # Why a `true` declaration is never contradicted
+///
+/// `declared = true` ("this tool may reach outside the sandbox") is a claim about
+/// *capability*, not a promise that any one particular invocation will actually use it — the
+/// same reasoning [`read_only_hint`]'s own doc comment gives for why a `false` declaration
+/// there is never contradicted. No combination of `egress_attempted`/`tool_succeeded`
+/// falsifies a `true` declaration, so this function returns `Holds` unconditionally for it.
+///
+/// # The three branches a `false` (closed-world) declaration actually decides between
+///
+/// - `egress_attempted = true` → `Violated`: the tool left the sandbox despite declaring it
+///   never would (architecture.md §4.4's "openWorld = true, contradicts false declaration").
+/// - `egress_attempted = false, tool_succeeded = true` → `Holds`: no attempt to leave, and
+///   the tool finished its work anyway — consistent with a genuinely closed world.
+/// - `egress_attempted = false, tool_succeeded = false` → `Unverifiable` with
+///   [`ReasonCode::EgressAmbiguousRerunInstrumented`]: the tool failed without ever trying to
+///   leave — undecidable whether the missing network *caused* that failure, or something
+///   unrelated did, without the instrumented rerun the reason code names.
+#[must_use]
+pub fn open_world_hint(declared: bool, egress_attempted: bool, tool_succeeded: bool) -> Assessment {
+    if !declared {
+        if egress_attempted {
+            return Assessment::violated(Oracle::KernelChangeset);
+        }
+        if !tool_succeeded {
+            return Assessment::unverifiable(
+                Oracle::KernelChangeset,
+                ReasonCode::EgressAmbiguousRerunInstrumented,
+            );
+        }
+    }
+    Assessment::holds(Oracle::KernelChangeset)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,5 +318,59 @@ mod tests {
         let n = [path("whatever.tmp")];
         assert_eq!(idempotent_hint(&[], &[], &n), Assessment::holds(Oracle::KernelChangeset));
         assert_eq!(idempotent_hint(&[], &[], &[]), Assessment::holds(Oracle::KernelChangeset));
+    }
+
+    /// architecture.md §4.4's literal exit criterion, first branch: egress attempted despite
+    /// a closed-world declaration contradicts it, regardless of whether the tool itself
+    /// happened to succeed or fail — the contradiction is already established the moment
+    /// egress is observed.
+    #[test]
+    fn egress_attempted_against_a_false_declaration_is_violated_regardless_of_success() {
+        assert_eq!(
+            open_world_hint(false, true, true),
+            Assessment::violated(Oracle::KernelChangeset)
+        );
+        assert_eq!(
+            open_world_hint(false, true, false),
+            Assessment::violated(Oracle::KernelChangeset)
+        );
+    }
+
+    /// Second branch: no egress attempted, and the tool finished its work anyway —
+    /// consistent with a genuinely closed world.
+    #[test]
+    fn no_egress_and_the_tool_succeeded_holds_for_a_false_declaration() {
+        assert_eq!(open_world_hint(false, false, true), Assessment::holds(Oracle::KernelChangeset));
+    }
+
+    /// Third branch: no egress attempted, but the tool also failed — genuinely ambiguous
+    /// whether the missing network caused the failure, so this is `unverifiable` with the
+    /// specific reason code naming the rerun that would resolve it, never a silent `holds` or
+    /// `violated`.
+    #[test]
+    fn no_egress_and_the_tool_failed_is_unverifiable_with_the_rerun_reason() {
+        assert_eq!(
+            open_world_hint(false, false, false),
+            Assessment::unverifiable(
+                Oracle::KernelChangeset,
+                ReasonCode::EgressAmbiguousRerunInstrumented
+            )
+        );
+    }
+
+    /// A `true` (open-world) declaration is a capability claim, not a per-invocation promise
+    /// — the same asymmetry `read_only_hint`'s own `false`-declaration case already
+    /// establishes. No combination of observations contradicts it.
+    #[test]
+    fn a_true_declaration_holds_regardless_of_egress_or_success() {
+        for egress_attempted in [false, true] {
+            for tool_succeeded in [false, true] {
+                assert_eq!(
+                    open_world_hint(true, egress_attempted, tool_succeeded),
+                    Assessment::holds(Oracle::KernelChangeset),
+                    "declared=true must always hold (egress_attempted={egress_attempted}, tool_succeeded={tool_succeeded})"
+                );
+            }
+        }
     }
 }

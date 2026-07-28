@@ -8,7 +8,7 @@
 //! **Must not:** decide what a classification means for a verdict — that is P3-05's
 //! `openWorldHint` job, over the classifications this module produces.
 
-use datamodel::{ClassifiedDestination, ObservedDestination};
+use datamodel::{ClassifiedDestination, DestinationClass, ObservedDestination};
 use observe::connection_log::ConnectionLogEntry;
 
 /// Classify every entry `observe::connection_log::ConnectionLog` recorded, in the order
@@ -18,6 +18,18 @@ pub fn classify_observed_destinations(entries: &[ConnectionLogEntry]) -> Vec<Cla
     let destinations: Vec<ObservedDestination> =
         entries.iter().map(|entry| ObservedDestination::from(*entry)).collect();
     normalise::classify_destinations(&destinations, sandbox::BRIDGE_NETWORK)
+}
+
+/// P3-05's `egress_attempted`: whether *any* classified destination was [`DestinationClass::External`].
+///
+/// This is the one place that answers `verdict::open_world_hint`'s "was egress attempted"
+/// question — see that function's own doc comment for why it is evaluated from the
+/// instrumented arm's classified destinations rather than inferred from the strict arm
+/// alone (P4-02's seccomp/syscall audit log, which would let a future version answer this
+/// more cheaply, does not exist yet).
+#[must_use]
+pub fn egress_attempted(classified: &[ClassifiedDestination]) -> bool {
+    classified.iter().any(|c| c.class == DestinationClass::External)
 }
 
 #[cfg(test)]
