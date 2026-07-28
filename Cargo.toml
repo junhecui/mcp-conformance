@@ -13,8 +13,15 @@ publish = false
 #
 # `datamodel` is the shared vocabulary: pure data types, no behaviour, `no_std`.
 # Dependencies point inward toward it, never outward from the pure crates.
+#
+# `evtree` is not in architecture.md §8's original crate list — added the same way
+# `datamodel` and `xtask` were (F-02): a real gap found while implementing a task (P1-02)
+# that needed it before the crate ADR-009 assigned it to (P1-04, `observe`) existed. It is
+# the `evtree1` wire-format codec ADR-009 specifies; `world`'s base-layer builder is its
+# first consumer, `observe` its next.
 [workspace.dependencies]
 datamodel = { path = "crates/datamodel" }
+evtree = { path = "crates/evtree" }
 intake = { path = "crates/intake" }
 discovery = { path = "crates/discovery" }
 census = { path = "crates/census" }

@@ -980,13 +980,112 @@ that is not the verdict itself.
 **Depends on:** F-02
 **Exit:** Two independent constructions of the same base produce byte-identical layers.
 Prove it in a test.
+**Status:** Done — two new crates. **`crates/evtree`** implements the `evtree1` wire format
+from [ADR-009](adr/009-evidence-tree-serialisation.md), which F-07 had merged as a decided
+spec but never as code (`datamodel::RawEvidence` was still an empty placeholder). Built now
+rather than inline, on the reasoning that P1-04 (`observe`) needs the identical
+encoder/decoder later and this avoids duplicating a bespoke format twice. Pure,
+dependency-free (`Cargo.toml`'s `[dependencies]` block is empty), no I/O/clock/network — not
+yet on `cargo purity`'s allowlist, correctly, since nothing in `normalise`/`verdict` depends
+on it yet. Implements every clause of the spec, checked field-for-field in an independent
+review pass: entries sorted by raw path bytes (no locale-aware comparison is even reachable —
+`Vec<u8>::cmp` has no such variant), fixed-width big-endian integers, generic POSIX entry
+types with whiteouts as a plain char-device entry (`dev_major=0`/`dev_minor=0`) rather than a
+dedicated tag, single-blob output, full xattr capture. `evtree::decode` is bounds-checked
+throughout against malformed/truncated input — every length-prefixed read is checked against
+remaining buffer size before slicing, pre-allocations are capped, no panic is reachable via
+truncation — proven by a test that fuzzes every truncation offset of a valid encoding. 16
+tests.
+
+**`crates/world/src/base_layer.rs`** is the actual deliverable. `BaseLayerSpec`: a
+declarative, `BTreeMap`-backed tree spec (`SpecNode::{Directory,Regular,Symlink,CharDevice}`,
+the last covering both whiteouts via `SpecNode::whiteout()` and opaque directories via
+`SpecNode::opaque_dir()`/`opaque_dir_userxattr()`, using the
+`trusted.overlay.opaque`/`user.overlay.opaque` xattr convention). `to_entries()` converts a
+spec to `evtree::Entry`s purely — fixed `uid=0`/`gid=0`/`mtime=0`/`inode=0` unless overridden,
+no ambient state read — proven reproducible by encoding two independently-built,
+differently-ordered specs and asserting byte-identical output. `materialize()` writes a spec
+to real disk (whiteout/opaque char-device entries are intentionally skipped, since real
+device nodes need `CAP_MKNOD`/root, which this builder deliberately doesn't require) and pins
+mtime to `SystemTime::UNIX_EPOCH` via `std::fs::File::set_times` (stable since Rust 1.75,
+inside this project's pinned 1.85.1 toolchain) — files pin inline via their open write
+handle, directories are pinned in a required second pass after all children exist, since the
+kernel bumps a directory's own mtime on every child creation and pinning inline would just
+get overwritten by the next sibling. `capture()` walks a real directory back into
+`evtree::Entry`s via `fs::symlink_metadata`, never dereferencing symlinks — structurally
+immune to symlink-cycle recursion or escaping the walk root through a symlink, per security
+review. The reproducibility proof
+(`two_independent_real_constructions_produce_byte_identical_layers`) materializes the same
+spec twice into two separate temp dirs, captures both, and diffs. Disclosed rather than
+glossed: inode numbers are kernel-assigned and no userspace call can make two
+independently-created files agree on one, so a `#[cfg(test)] pub(crate)` helper
+(`strip_construction_noise` — deliberately not `pub`, see below) zeroes `inode` before the
+final comparison; the test
+separately asserts, on the raw unstripped captures, that mtimes for every non-symlink entry
+already agree between the two builds and already equal the pinned epoch value, proving the
+mtime pin actually works rather than hiding behind normalisation. Symlinks are the one
+genuinely-unpinned exception — `std::fs::File::set_times` has no `AT_SYMLINK_NOFOLLOW` mode
+and `File::open` on a symlink follows it — documented explicitly, and
+`strip_construction_noise` strips mtime only for `Payload::Symlink` entries accordingly. 20
+tests.
+
+Two independent review passes (code-correctness and security) found and fixed three real
+issues before this was considered done:
+
+1. *(Security)* `materialize()` had no path validation — a spec entry with a leading `/` or a
+   buried `..` component could write outside the destination directory via unnormalized
+   `Path::join` semantics. Latent today (spec construction is programmatic), but certain to
+   become live once P2-05's per-server fixture binding builds on this exact builder with
+   less-trusted input. Fixed: `BaseLayerSpec::add()` now rejects empty paths, absolute paths,
+   and any path containing a `..` component (checked per path segment, not by substring, so
+   `a/../../etc/passwd` is caught as well as a bare leading `..`); `materialize()` also
+   asserts `target.starts_with(dest)` immediately before every write, as defense in depth. 4
+   new tests cover absolute paths, a leading `..`, a buried `..`, and legitimate nested paths.
+2. *(Correctness)* The module doc originally claimed mtime couldn't be pinned because "`std`
+   has no stable API for it" — independently verified false on this project's pinned 1.85.1
+   toolchain. Fixed as described above, which is what let `strip_construction_noise` narrow
+   from "inode and mtime" down to "inode always, mtime only for symlinks" — materially
+   stronger than what originally shipped, and closer to the literal "byte-identical layers"
+   exit criterion.
+3. *(API hygiene)* `strip_construction_noise` was originally `pub fn`, reachable from any
+   future crate depending on `world`, despite its own doc comment warning it "must never be
+   reused as a stand-in for the real normaliser" — ADR-005 draws a hard boundary between raw
+   evidence capture and the separate, pure `normalise` crate that this would have blurred.
+   Fixed: now `#[cfg(test)] pub(crate) fn`, matching this codebase's established pattern of
+   enforcing this class of boundary structurally (`cargo purity`'s allowlist,
+   `discovery`'s `pub(crate) Transport`) rather than by comment alone.
+
+**Not used:** the Linux dev VM provisioned for F-00 was deliberately not touched — nothing
+here calls a Linux-only syscall; `capture()`/`materialize()` use only `std::fs` and
+`std::os::unix::fs`, which macOS implements identically for the paths exercised (regular
+files, dirs, symlinks). Whiteout/opaque-directory representation is proven at the format
+level (synthetic `evtree::Entry` construction and round-trip), not via real
+`mknod`/`setxattr` — real device-node creation needs `CAP_MKNOD`/root and is out of scope for
+this builder, deferred to whichever task actually needs it (flagged in-code as future P1-04
+scope, since `observe` will need to capture real device nodes/xattrs from an actual overlay
+upper layer, unlike this synthetic base-layer builder).
+
+**Verification:** `cargo build --workspace` clean; `cargo test --workspace` → 149 passed, 0
+failed (up from 113 before this task; 36 new — 16 `evtree` + 20 `world`); `cargo clippy
+--workspace --all-targets -- -D warnings` clean; `cargo purity` clean (`normalise`/`verdict`
+dependency closures unaffected — neither `evtree` nor `world` is in them).
 
 architecture.md §12 item 5 — everything downstream depends on this. A nondeterministic base
 silently poisons every diff, and the failure is invisible in the output.
 
-- [ ] Deterministic construction: no timestamps, no random ordering, no ambient state
-- [ ] Byte-reproducibility test across two constructions
-- [ ] Whiteout and opaque-directory semantics understood and documented (design.md §9)
+- [x] Deterministic construction: no timestamps, no random ordering, no ambient state —
+      `to_entries()` fixes `uid`/`gid`/`mtime`/`inode` unless overridden; `materialize()`
+      pins mtime to `UNIX_EPOCH` on disk rather than merely at the spec level
+- [x] Byte-reproducibility test across two constructions —
+      `two_independent_real_constructions_produce_byte_identical_layers`: two real,
+      independently-materialized, differently-ordered on-disk trees capture and encode to
+      identical bytes (inode stripped as kernel-assigned noise; mtime asserted equal, not
+      stripped)
+- [x] Whiteout and opaque-directory semantics understood and documented (design.md §9) —
+      whiteouts as char-device `0/0` entries, opaque directories via the
+      `trusted.overlay.opaque`/`user.overlay.opaque` xattr convention, both representable in
+      `evtree1` and exercised by `SpecNode::whiteout()`/`opaque_dir()`; real kernel-level
+      `mknod`/`setxattr` construction deferred, format-level round-trip proven instead
 
 ### P1-03 Sandbox supervisor — mount namespace, overlayfs, timeout
 

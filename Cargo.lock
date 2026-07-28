@@ -158,6 +158,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "evtree"
+version = "0.1.0"
+
+[[package]]
 name = "fallible-iterator"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -805,6 +809,9 @@ name = "world"
 version = "0.1.0"
 dependencies = [
  "datamodel",
+ "evtree",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]
