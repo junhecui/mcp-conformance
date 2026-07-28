@@ -2148,6 +2148,58 @@ with zero failures, each completing in ~0.1s.
 
 **Depends on:** P3-02
 **Exit:** Each destination classified in-sandbox versus external.
+**Status:** Done — `normalise::destination::classify_destination`/`classify_destinations`,
+`datamodel` gaining the vocabulary for it (`ObservedDestination`, `Ipv4Network`,
+`DestinationClass`, `ClassifiedDestination` — the network-evidence analogues of the existing
+path-classification types `EvidenceEntry`/`PathTaxonomy`/`ClassifiedPath`).
+
+**Placed in `normalise`, not `verdict` or `observe`, and said so in the module doc
+comment.** `observe`'s contract is "must not interpret anything," and deciding what an
+address *means* already is interpretation. `verdict`'s contract is `(canonical_evidence,
+protocol_version) -> verdict` — it evaluates already-classified evidence (`CanonicalChangeset`,
+never raw paths), it does not itself turn raw evidence into canonical form. Classifying
+destinations is exactly the same kind of pure `(raw_evidence, context) -> taxonomy` step
+`normalise` already performs for filesystem paths (`classify`, ADR-008), over a different
+evidence surface — so it lives beside `classify`, not in either neighbouring crate.
+
+**The bridge subnet is a parameter, never hardcoded in `normalise`.** `10.200.0.0/30` is
+`sandbox::netns`'s own choice of addresses, not a fact about networking in general — baking
+it into this `no_std`, dependency-free crate would silently couple two crates that otherwise
+know nothing about each other. `sandbox::netns` instead publishes its own subnet as a value,
+`sandbox::BRIDGE_NETWORK: datamodel::Ipv4Network`, and `orchestrator::destination` (the one
+place permitted to depend on `sandbox`, `observe`, and `normalise` at once) supplies it to the
+classifier. Only loopback (`127.0.0.0/8`) is hardcoded inside `normalise` itself — a fixed,
+universal IPv4 fact, not a project-specific choice, unlike the bridge subnet.
+
+**`observe::connection_log::ConnectionLogEntry` gains `impl From<..> for
+datamodel::ObservedDestination`** — the same re-encoding-without-interpreting role
+`evtree::decode` already plays for overlay evidence (raw `evtree1` bytes into
+`datamodel::EvidenceEntry`), now for connection-log entries into `datamodel`'s pure
+vocabulary. Checked directly that the conversion preserves the address and port exactly
+(`conversion_to_observed_destination_preserves_address_and_port_exactly`) — a silently
+swapped octet or endian mismatch here would make every classification downstream wrong in a
+way no type error would ever catch.
+
+**Proven against a real sandboxed process's real connection attempts, not synthetic
+addresses.**
+`orchestrator::destination::tests::a_real_external_attempt_and_a_real_bridge_directed_attempt_are_classified_correctly`
+runs a network-isolated, stdin-gated Python process that attempts one connection to an
+arbitrary external-looking host and one connection *directly to the bridge's own host-side
+gateway address* (`10.200.0.1`, the address the sandboxed side's own default route already
+points every other packet at) — both attempts land in the connection log (iptables'
+`REDIRECT -i host_ifname` rule has no destination filter, so it catches a bridge-directed
+packet exactly the same way as a genuinely external one — confirmed directly, not assumed,
+by this test passing on its first run), and classification correctly tells them apart using
+only `sandbox::BRIDGE_NETWORK`'s own published value: the external address classifies as
+`External`, the gateway address classifies as `InSandbox`.
+
+`datamodel` gained four new types, `normalise` grew from 26 to 32 tests (plus a new
+`destination` module), `observe` grew from 14 to 15 tests, `orchestrator` grew from 13 to 14
+tests (plus a new `destination` module). `cargo build --workspace --all-targets`, `cargo
+clippy --workspace --all-targets -- -D warnings`, `cargo xtask purity` (confirming
+`normalise`/`verdict` still depend on only `datamodel`), and `cargo test --workspace` all
+pass clean. The orchestrator integration test was run 10 times consecutively with zero
+failures.
 
 ### P3-05 `openWorldHint` protocol
 

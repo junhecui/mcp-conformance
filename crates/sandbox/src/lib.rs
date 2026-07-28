@@ -23,5 +23,5 @@ mod supervisor;
 
 pub use base_layer::{build, capture, digest_of_capture, BuildError, EntryKind, EntrySpec, InodeHandling};
 pub use cgroup::{Cgroup, CgroupError, ResourceLimits, ResourceUsage};
-pub use netns::{NetnsError, NetworkBridge};
+pub use netns::{NetnsError, NetworkBridge, BRIDGE_NETWORK};
 pub use supervisor::{spawn, OverlaySpec, SandboxHandle, SandboxOutcome, SandboxSpec, SpawnError};

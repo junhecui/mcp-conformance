@@ -58,6 +58,14 @@ mod mock;
 #[cfg(target_os = "linux")]
 pub use mock::{run_network_isolated_and_mocked, MockSessionError};
 
+/// P3-04: classify `network`'s own observed destinations as in-sandbox versus external,
+/// combining `observe`, `normalise`, and `sandbox::BRIDGE_NETWORK`. Same gating rationale as
+/// `arms`.
+#[cfg(target_os = "linux")]
+mod destination;
+#[cfg(target_os = "linux")]
+pub use destination::classify_observed_destinations;
+
 #[derive(Deserialize)]
 struct RulesetFile {
     version: String,

@@ -411,6 +411,76 @@ impl CanonicalChangeset {
     }
 }
 
+/// One connection destination exactly as `observe::connection_log` captured it via
+/// `SO_ORIGINAL_DST` — decoded, but otherwise unfiltered, the network-evidence analogue of
+/// [`EvidenceEntry`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ObservedDestination {
+    /// The real destination IPv4 address, in network byte order (as `SO_ORIGINAL_DST`
+    /// reports it), not a text form — this crate stays free of any string-formatting or
+    /// parsing dependency for it.
+    pub address: [u8; 4],
+    /// The real destination port.
+    pub port: u16,
+}
+
+impl ObservedDestination {
+    /// Wrap an already-decoded destination.
+    #[must_use]
+    pub const fn new(address: [u8; 4], port: u16) -> Self {
+        Self { address, port }
+    }
+}
+
+/// An IPv4 subnet, expressed as a base address plus prefix length — e.g. `sandbox::netns`'s
+/// veth bridge, `10.200.0.0/30`. Kept as a plain value here (not hardcoded in this crate)
+/// specifically so `datamodel` never needs to know `sandbox`'s own choice of bridge
+/// addresses; a caller (`normalise`'s destination classifier, in practice) supplies it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Ipv4Network {
+    /// The subnet's base address, in network byte order.
+    pub address: [u8; 4],
+    /// The subnet's prefix length, `0..=32`.
+    pub prefix_len: u8,
+}
+
+impl Ipv4Network {
+    /// Wrap an already-known subnet.
+    #[must_use]
+    pub const fn new(address: [u8; 4], prefix_len: u8) -> Self {
+        Self { address, prefix_len }
+    }
+}
+
+/// P3-04: whether an observed connection destination is reachable only via this project's
+/// own containment plumbing (loopback, or the sandbox's own veth bridge subnet) or
+/// represents a genuine attempt to reach outside the sandbox.
+///
+/// This is the classification architecture.md §4.4's decision tree calls "in-sandbox versus
+/// external" — the input `openWorldHint` (P3-05) needs to tell "the tool addressed its own
+/// containment plumbing" apart from "the tool tried to leave," neither of which the raw
+/// destination address alone distinguishes without knowing which addresses `sandbox::netns`
+/// itself uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DestinationClass {
+    /// Loopback (`127.0.0.0/8`) or the sandbox's own bridge subnet — addresses that exist
+    /// only because of this project's own containment plumbing, not because the tool is
+    /// trying to reach the outside world.
+    InSandbox,
+    /// Anything else — a genuine attempt at egress beyond the sandbox.
+    External,
+}
+
+/// One classified connection destination, the network-evidence analogue of
+/// [`ClassifiedPath`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ClassifiedDestination {
+    /// The destination exactly as observed.
+    pub destination: ObservedDestination,
+    /// Its P3-04 classification.
+    pub class: DestinationClass,
+}
+
 /// A SHA-256 content digest identifying a blob in the evidence store (F-05).
 ///
 /// Pure value type: hashing needs an algorithm implementation, which is [`store`]'s job,

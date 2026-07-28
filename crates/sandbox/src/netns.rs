@@ -73,6 +73,15 @@ const SANDBOX_IP: Ipv4Addr = Ipv4Addr::new(10, 200, 0, 2);
 /// A `/30` — exactly the two addresses above, nothing else routable on this link.
 const PREFIX_LEN: u8 = 30;
 
+/// [`HOST_IP`]/[`SANDBOX_IP`]'s own subnet, exposed as a value (P3-04) so a caller
+/// (`normalise::classify_destination`, via `orchestrator`, in practice) can tell "this
+/// connection addressed the bridge itself" apart from "this connection is a genuine attempt
+/// at egress" without needing to know this module's own choice of addresses ahead of time —
+/// the same reasoning `normalise::destination`'s own doc comment gives for taking this as a
+/// parameter rather than a hardcoded constant.
+pub const BRIDGE_NETWORK: datamodel::Ipv4Network =
+    datamodel::Ipv4Network::new([10, 200, 0, 0], PREFIX_LEN);
+
 /// Why setting up (or tearing down) the network bridge failed.
 #[derive(Debug)]
 pub enum NetnsError {

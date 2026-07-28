@@ -40,6 +40,15 @@ pub struct ConnectionLogEntry {
     pub destination: SocketAddrV4,
 }
 
+impl From<ConnectionLogEntry> for datamodel::ObservedDestination {
+    /// Re-encode into `datamodel`'s pure vocabulary — the same job `evtree::decode` already
+    /// does for overlay evidence, translating without interpreting: `normalise::classify_
+    /// destination` (P3-04) is what decides what an address *means*, not this crate.
+    fn from(entry: ConnectionLogEntry) -> Self {
+        Self::new(entry.destination.ip().octets(), entry.destination.port())
+    }
+}
+
 /// Why starting or reading back the connection log failed.
 #[derive(Debug)]
 pub struct ConnectionLogError(io::Error);
@@ -191,6 +200,20 @@ fn original_destination(stream: &std::net::TcpStream) -> io::Result<SocketAddrV4
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The `datamodel::ObservedDestination` conversion must carry the exact address and
+    /// port through, in the same network byte order `SO_ORIGINAL_DST` itself reports — a
+    /// silently swapped octet or endian mismatch here would make every P3-04 classification
+    /// downstream wrong in a way no type error would ever catch.
+    #[test]
+    fn conversion_to_observed_destination_preserves_address_and_port_exactly() {
+        let entry = ConnectionLogEntry {
+            destination: SocketAddrV4::new(Ipv4Addr::new(93, 184, 216, 34), 443),
+        };
+        let observed: datamodel::ObservedDestination = entry.into();
+        assert_eq!(observed.address, [93, 184, 216, 34]);
+        assert_eq!(observed.port, 443);
+    }
 
     /// Without any `iptables REDIRECT` rule in play, `SO_ORIGINAL_DST` on an ordinary,
     /// un-redirected connection must fail — it's a netfilter concept that requires the

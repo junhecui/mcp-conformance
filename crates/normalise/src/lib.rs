@@ -18,6 +18,7 @@
 extern crate alloc;
 
 mod candidate_rules;
+mod destination;
 mod glob;
 mod noise;
 
@@ -26,6 +27,7 @@ use alloc::vec::Vec;
 use datamodel::{CanonicalChangeset, ClassifiedPath, PathTaxonomy, RawEvidence, Ruleset};
 
 pub use candidate_rules::candidate_rules_from_noise;
+pub use destination::{classify_destination, classify_destinations};
 pub use noise::{noise_floor, NoiseFloorEntry};
 
 /// Apply a ruleset to raw evidence, yielding the canonical changeset that every
