@@ -660,27 +660,77 @@ data says the opposite is true, which is itself worth publishing.
 `2026-07-28` handshake, with the discovery path (`initialize` vs `server/discover`) recorded
 as provenance on the result — a second, orthogonal provenance axis alongside Stage 2's
 bare-host-vs-containerized flag.
+**Status:** Done — `crates/discovery/src/client.rs` (plus `lib.rs`, `transport.rs`, and
+new tests in `crates/discovery/tests/`). `DiscoveryClient::discover()` falls back to a
+`server/discover` JSON-RPC call when `initialize` fails with either `DiscoveryError::Io`
+(stdio: no response at all) or `DiscoveryError::ServerError { code: -32601, .. }` (explicit
+"method not found"). On the fallback path it skips `notifications/initialized` (no
+equivalent lifecycle notification exists for the new handshake) and proceeds straight to
+`tools/list`. A new `DiscoveryPath` enum (`Initialize` | `ServerDiscover`) is recorded on
+the `Discovery` result struct — the provenance checklist item — and
+`negotiated_spec_revision` is sourced from whichever response actually succeeded, never
+stale data from a failed attempt. The `initialize_raw` field name was kept as-is rather than
+renamed (it now sometimes holds `server/discover` response bytes instead); its doc comment
+was updated to point readers to `discovery_path` to disambiguate — a known, disclosed minor
+wart, not a bug. P0-01's structural guarantee is preserved: `Transport` stays `pub(crate)`,
+`discover()` remains the only public entry point with no method-name parameter, and
+`"server/discover"` is a compile-time literal alongside the other three method names, never
+caller-influenced. P0-02's pin mechanism needed no changes — confirmed `pin_tools()` only
+ever consumes `tools_list_raw`, never `initialize_raw` or anything discovery-mechanics
+-related.
 
-Surfaced by O-01's 2026-07-27 check (see "Ongoing" below), not originally anticipated: MCP
-spec revision `2026-07-28` — shipping the day after that check — removes the `initialize` /
-`notifications/initialized` handshake entirely. It's replaced by
-`_meta["io.modelcontextprotocol/protocolVersion"]` on every request plus an optional
-`server/discover` method. P0-01's `DiscoveryClient` hardcodes `initialize` +
-`notifications/initialized` + `tools/list` as literal method names with no fallback — by
-design, to keep tool-calling structurally unreachable from outside the crate — so a server
-that adopts `2026-07-28` becomes silently undiscoverable: there's no loud `initialize`
-failure to catch, just whatever error the new method name produces. Left unfixed, this
-surfaces as unexplained new failures in a future P0-06/P0-07 census run, or worse, in
-P1-08's first-verdict target server, well after the actual cause (a spec revision, not a
-harness bug) has been forgotten.
+**A real bug was found and fixed during review**, in the same spirit as this file's
+convention (P0-06, B-01) of calling out bugs surfaced by testing against realistic
+conditions rather than only fakes: the first implementation classified *any*
+`DiscoveryError::Transport` (which covers every HTTP-level connection failure — DNS,
+connection refused, TLS, and critically, hitting the configured request timeout) as a
+fallback trigger. Since `xtask/src/census_stage1.rs` deliberately tunes a 12s HTTP timeout
+to keep unresponsive hosts from dominating sweep time at corpus scale (per P0-07's own
+numbers: 1,000 servers in under an hour), this meant every genuinely unresponsive Class B
+host would eat a second full 12s round-trip to the same unreachable endpoint before
+`discover()` gave up — silently doubling the cost of exactly the failure population that
+dominates census sweeps, for zero benefit, since a connection-level failure can't produce a
+different outcome on retry to the same host. Fixed by narrowing the fallback trigger to
+`Io` and the explicit `-32601` case only, excluding `Transport` entirely. A regression test
+(`discover_does_not_fall_back_after_a_transport_level_timeout` in
+`crates/discovery/tests/http_discovery.rs`) proves a transport-level timeout now surfaces
+promptly with exactly one connection attempt, not two.
 
-- [ ] Attempt `server/discover` when `initialize` gets no response, or an error indicating
+Test suite: `crates/discovery` has 28 tests passing (up from the prior count), covering:
+successful `initialize` (unchanged happy path, now also asserting
+`discovery_path == Initialize`), fallback via `-32601` over stdio (real spawned subprocess)
+and over HTTP (real `TcpListener`-based server, also verifying the negotiated version
+propagates onto the `MCP-Protocol-Version` header of the subsequent `tools/list` request), a
+negative test proving fallback does NOT trigger on an unrelated `ServerError` code
+(`-32000`), and the transport-timeout negative test above. Verified clean:
+`cargo build --workspace`, `cargo test --workspace` (113 passed),
+`cargo clippy --workspace --all-targets -- -D warnings`, and `cargo purity` (discovery was
+never on the purity allowlist and nothing here changes that). Reviewed by two independent
+subagents (a correctness pass and a security pass) before landing — the security pass found
+no issues: fallback is a single bounded retry, not a loop; timeout/watchdog protection is
+inherited unchanged from the existing transport implementations on both paths; `-32601` is
+parsed via typed serde deserialization with malformed responses failing safe
+(`DiscoveryError::Protocol`, never a panic or a false-positive fallback); and no
+untrusted server-controlled string ever influences which method gets sent.
+
+**Caveat, disclosed rather than hidden:** the exact wire shape of the `server/discover`
+request was extrapolated from the O-01 research note (mirroring `initialize`'s
+`protocolVersion`/`capabilities`/`clientInfo` params), since no authoritative example
+request/response pair was available. The new spec's
+`_meta["io.modelcontextprotocol/protocolVersion"]` mechanism is not yet threaded onto
+post-handshake requests like `tools/list` — only the existing HTTP header mechanism is used.
+A real `2026-07-28` server that requires the `_meta` field would currently fail after a
+successful `server/discover`. This is exactly why the last checklist item below is left
+unattempted rather than checked off on faith.
+
+- [x] Attempt `server/discover` when `initialize` gets no response, or an error indicating
       an unrecognized method, instead of treating that as a bare discovery failure
-- [ ] Record which handshake path succeeded as provenance on the result
-- [ ] `TOOL_SNAPSHOT.spec_revision` (already captured per P0-01) reflects whichever revision
+- [x] Record which handshake path succeeded as provenance on the result
+- [x] `TOOL_SNAPSHOT.spec_revision` (already captured per P0-01) reflects whichever revision
       was actually negotiated, regardless of which handshake produced it
 - [ ] Re-run against a real `2026-07-28` server once one exists in the wild, not just a
-      hand-built fixture, before trusting this at census scale
+      hand-built fixture, before trusting this at census scale — blocked on such a server
+      existing; none does yet as of this writing
 
 ---
 
