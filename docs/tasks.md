@@ -2346,6 +2346,75 @@ suite, by design — it needs real network and `npx`, the same reason `ruleset_v
 
 **Depends on:** P2-02
 **Exit:** `mount`, `ptrace`, `bpf`, `kexec` and similar denied.
+**Status:** Done — `sandbox::seccomp::install_escape_class_denylist`, installed in the real
+target's own process image (the second fork's child, immediately before its `execvp` — see
+`supervisor`'s own module doc comment for why this codebase's fork/exec shape has a dedicated
+place for it) so it persists across exec by kernel design. Unconditional for every
+`spawn()` call, unlike `network_isolated`: none of the denied syscalls are ones a legitimate
+MCP tool has a reason to call, so there is no compatibility trade-off requiring an opt-out —
+the same "not configurable off" posture ADR-004 already requires of the integrity gate that
+consumes what a denial implies.
+
+**Denies a representative, disclosed set, not claimed exhaustive**, matching the task's own
+"and similar" framing: `mount`/`umount2`/`pivot_root`/`chroot`/`unshare`/`setns`
+(filesystem/namespace escape — every one of this crate's own containment primitives, made
+available here to a hostile *target* instead), `ptrace`/`process_vm_readv`/
+`process_vm_writev` (process introspection/injection), `bpf` (a further, more permissive BPF
+program — including another seccomp filter), and `kexec_load`/`kexec_file_load`/
+`init_module`/`finit_module`/`delete_module`/`reboot` (persistence/execution beyond this
+process). A denylist, not an allowlist — far less thorough, but the shape the task itself
+asks for, and the one that carries no risk of silently breaking legitimate tool behaviour
+this project hasn't catalogued.
+
+**Three candidate seccomp actions were tested directly, not chosen from documentation
+alone, before picking one.** `SECCOMP_RET_TRAP` delivers `SIGSYS`, which (no ordinary tool
+installs a handler for it) kills the process on the very first escape attempt;
+`SECCOMP_RET_KILL_PROCESS` is more of the same. Both would make P4-05's "every attempt
+appears in evidence" impossible for a hostile server trying several different escape-class
+syscalls across its lifetime — confirmed directly with a standalone scratch program that
+`SECCOMP_RET_TRAP` really does terminate the process (`WIFSIGNALED` with `SIGSYS`) on the
+first denial. `SECCOMP_RET_ERRNO` was chosen instead: the syscall fails with `EPERM` and the
+process **keeps running**, confirmed the same way — able to attempt as many different
+escape-class syscalls as it wants, each independently deniable and (P4-02) independently
+logged.
+
+**`SECCOMP_FILTER_FLAG_LOG` was verified, not assumed, to be observable in this project's
+own container before it became load-bearing for P4-02.** Every denial is installed with
+this flag, which makes the kernel emit a real `AUDIT_SECCOMP` (`type=1326`) record through
+the audit subsystem. Confirmed directly with a standalone scratch program, with no `auditd`
+running at all: with `/proc/sys/kernel/dmesg_restrict` at `0`, the record lands in the
+kernel ring buffer, readable from `/dev/kmsg` — the exact mechanism P4-02 harvests. Also
+confirmed directly, forking into a fresh PID namespace first: the record's `pid=` field
+reports the denying process's PID **in the initial (host) namespace**, not its
+namespace-local self-view (which would be `1`, since the real target is PID 1 of its own
+namespace per P2-01) — exactly the PID this crate's own supervisor already tracks
+internally, so attributing a denial to the right run needs no new bookkeeping.
+
+**The classic-BPF jump-table arithmetic for multiple denied syscalls was verified against a
+real kernel, not derived from the spec alone**, before being written into production code: a
+standalone scratch program built the exact same "one shared `LD` of the syscall number, each
+`JEQ` either falls through to the next candidate or jumps forward far enough to land on the
+one shared `RET SECCOMP_RET_ERRNO`" structure this module uses, confirmed against all 15
+denied syscalls plus a normal one (`getpid`) that must keep working. `libc` exposes
+`SECCOMP_SET_MODE_FILTER`/`SECCOMP_FILTER_FLAG_LOG` and the `sock_filter`/`sock_fprog`
+structs directly (checked before hand-rolling anything) — only `AUDIT_ARCH_X86_64` and the
+`SECCOMP_RET_*` action values (from `<linux/audit.h>`/`<linux/seccomp.h>`) needed to be
+hardcoded with their provenance stated, the same kind of gap already found for
+`SO_ORIGINAL_DST` and `VETH_INFO_PEER`.
+
+**Proven against a real sandboxed process**, not a synthetic namespace check:
+`escape_class_syscalls_are_denied_with_eperm_and_the_process_survives` runs a real Python
+process that attempts `ptrace`, `mount`, and `bpf` directly via `ctypes.CDLL(None).syscall`,
+asserting each fails with exactly `EPERM` *and* that the process survives to report all
+three (not killed by the first) *and* that a syscall not on the denylist (`getpid`) still
+works normally in the same process — proving the filter denies specifically what it targets,
+not everything. Verified clean across 8 consecutive runs; all 18 pre-existing `sandbox`
+tests continue to pass unmodified, confirming the filter doesn't break any tool's ordinary
+(non-escape-class) syscall usage.
+
+`sandbox` grew from 18 to 19 tests (plus a new `seccomp` module). `cargo build --workspace
+--all-targets`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo xtask
+purity`, and `cargo test --workspace` all pass clean.
 
 ### P4-02 Denied-syscall audit log
 

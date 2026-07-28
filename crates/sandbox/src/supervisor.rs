@@ -34,8 +34,17 @@
 //! architectural constraint for whoever wires this into the measurement pipeline next
 //! (P3-02 onward), not fixed by this module.
 //!
-//! Seccomp (P4-01) remains a later phase; this module does not pretend to do it yet.
+//! # Seccomp-bpf (P4-01)
 //!
+//! Every real target gets a seccomp-bpf filter denying a fixed, disclosed set of
+//! escape-class syscalls (`mount`, `ptrace`, `bpf`, `kexec_load`, and similar — see
+//! `seccomp`'s own module doc comment for the full list and the reasoning behind each
+//! category), installed in the second fork's child, immediately before its `execvp` so it
+//! persists across exec by kernel design. Unconditional, unlike `network_isolated`: nothing
+//! in this list is a syscall a legitimate MCP tool has a reason to call, so there is no
+//! compatibility trade-off requiring an opt-out the way network isolation needed one.
+//!
+
 //! **Must not:** emit any verdict. Enforced by contract, and structurally by this crate's
 //! own dependency graph: `sandbox` has no edge to `normalise` or `verdict` (see
 //! `Cargo.toml`), so nothing here could reach either type even by accident.
@@ -510,6 +519,12 @@ fn run_sandboxed_init(
             if let Err(e) = nix::unistd::chdir(mountpoint.as_path()) {
                 die(&err_write, "chdir", e);
             }
+            // P4-01: the last thing before this process becomes the real target's own code
+            // — a seccomp filter installed here persists across `execvp` by kernel design,
+            // so the target can never shed it.
+            if let Err(e) = crate::seccomp::install_escape_class_denylist() {
+                die(&err_write, "install seccomp filter", e);
+            }
             match nix::unistd::execvp(&program, &argv) {
                 Ok(infallible) => match infallible {},
                 Err(e) => die(&err_write, "execvp", e),
@@ -869,6 +884,80 @@ except OSError as e:
             dns_line.to_ascii_lowercase().contains("name resolution")
                 || dns_line.to_ascii_lowercase().contains("name or service not known"),
             "DNS resolution must fail immediately with no route to any resolver, not: {dns_line:?} (full output: {output})"
+        );
+    }
+
+    /// P4-01's literal exit criterion, proven against a real sandboxed process, not a
+    /// synthetic namespace check: `ptrace`, `mount`, and `bpf` — three of the categories the
+    /// escape-class denylist covers — each fail with `EPERM` from *inside* the sandbox, and
+    /// the process survives to report all three results, rather than being killed by the
+    /// first one (`SECCOMP_RET_ERRNO`, not `SECCOMP_RET_TRAP`/`KILL` — see `seccomp`'s own
+    /// module doc comment for why that choice matters for P4-05's "every attempt appears in
+    /// evidence"). A syscall *not* on the denylist (`getpid`) still succeeds normally in the
+    /// same process, proving the filter denies specifically what it targets rather than
+    /// coincidentally breaking everything.
+    #[test]
+    fn escape_class_syscalls_are_denied_with_eperm_and_the_process_survives() {
+        let lower_dir = tempfile::tempdir().expect("tempdir");
+        build_trivial_lower(lower_dir.path());
+        let scratch = tempfile::tempdir().expect("tempdir");
+
+        let script = "\
+import ctypes, os
+libc = ctypes.CDLL(None, use_errno=True)
+
+def try_syscall(nr, name):
+    ret = libc.syscall(nr, 0, 0, 0, 0, 0, 0)
+    err = ctypes.get_errno()
+    print(f'{name}: ret={ret} errno={err}')
+
+try_syscall(101, 'ptrace')       # SYS_ptrace
+try_syscall(165, 'mount')        # SYS_mount
+try_syscall(321, 'bpf')          # SYS_bpf
+print(f'getpid: {os.getpid()}')  # not denied -- must still work
+";
+
+        let spec = SandboxSpec {
+            overlay: OverlaySpec {
+                lower: lower_dir.path().to_path_buf(),
+                upper: scratch.path().join("upper"),
+                work: scratch.path().join("work"),
+                mountpoint: scratch.path().join("merged"),
+            },
+            program: PathBuf::from("/usr/local/bin/python3"),
+            args: vec!["-c".to_string(), script.to_string()],
+            timeout: Duration::from_secs(10),
+            network_isolated: false,
+        };
+
+        let (handle, stdin, mut stdout) = spawn(&spec).expect("spawn");
+        drop(stdin);
+        let mut output = String::new();
+        stdout.read_to_string(&mut output).expect("read sandboxed stdout");
+        let outcome = handle.wait().expect("wait");
+
+        assert!(!outcome.timed_out, "sandboxed output: {output}");
+        assert!(
+            outcome.exit_status.expect("has a status").success(),
+            "the process must survive every denial and exit cleanly, not be killed by the \
+             first one: {output}"
+        );
+
+        for name in ["ptrace", "mount", "bpf"] {
+            let line = output.lines().find(|l| l.starts_with(&format!("{name}:"))).unwrap_or_default();
+            assert!(
+                line.contains("ret=-1") && line.contains(&format!("errno={}", libc::EPERM)),
+                "{name} must be denied with EPERM (ret=-1, errno={}), got: {line:?} (full \
+                 output: {output})",
+                libc::EPERM
+            );
+        }
+
+        let getpid_line = output.lines().find(|l| l.starts_with("getpid:")).unwrap_or_default();
+        assert!(
+            getpid_line.strip_prefix("getpid: ").and_then(|s| s.trim().parse::<u32>().ok()).is_some_and(|pid| pid > 0),
+            "a syscall not on the denylist must still work normally: {getpid_line:?} (full \
+             output: {output})"
         );
     }
 }

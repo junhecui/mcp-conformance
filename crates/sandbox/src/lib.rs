@@ -19,6 +19,7 @@
 mod base_layer;
 mod cgroup;
 mod netns;
+mod seccomp;
 mod supervisor;
 
 pub use base_layer::{build, capture, digest_of_capture, BuildError, EntryKind, EntrySpec, InodeHandling};
