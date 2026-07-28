@@ -2535,6 +2535,47 @@ times consecutively with zero failures.
 **Depends on:** P2-03
 **Exit:** Workers re-imaged **between servers**, not between tools — bounds the damage from a
 successful escape (architecture.md §7).
+**Status:** Done, at the scope this codebase can actually support today — disclosed
+explicitly, the same way P2-10 disclosed its own corpus-size shortfall. Architecture.md §7's
+own deployment topology is a *pool of Linux hosts*, each re-imaged between servers; that pool
+doesn't exist yet (`orchestrator`'s own crate doc comment already names the queue/worker-pool
+*scheduling* machinery as P5-01's placeholder). What lands here is the **policy** a real
+worker-pool scheduler will eventually enforce, made real and testable now — the same "decide
+the rule before the infrastructure that runs it exists" move already made for
+`integrity::RunSignals::resource_cap_hit`/`escape_class_syscall_denied`, both defined and
+gated on well before P2-02/P4-01 landed their real producers.
+
+**A real, checked-before-assuming finding shaped the scope**: every existing orchestrator
+entry point (`arms::one_session`, `network::run_network_isolated_and_bridged`, and so on)
+already takes a brand-new `tempfile::tempdir()` from its own caller for *every single run* —
+there is no cross-call persistence anywhere in this codebase today for a worker to leak
+*from*. That's stronger than architecture.md §7 actually requires (which explicitly allows
+reuse *across tools of the same server*, for real efficiency reasons — avoiding
+re-resolving/re-downloading a package on every tool call, the exact finding P3-06's own
+`resolve_entry_point` already made concrete), but never weaker than it. `orchestrator::
+Worker` is what a caller *choosing* to reuse a workspace across tool calls reaches for, to get
+that reuse and architecture.md §7's own "wiped between servers" guarantee together, in one
+place, rather than reinventing the policy ad hoc at every call site that wants it.
+
+**`Worker::assign_server`** is the whole mechanism: reassigning the *same* server leaves the
+workspace untouched (tool-to-tool reuse, explicitly allowed); assigning a *different* server
+deletes and recreates the workspace directory — a real `remove_dir_all`/`create_dir_all`
+re-image, not a bookkeeping-only server-id swap — before returning, so nothing the previous
+server's tool ever wrote (including anything a successful escape might have planted) survives
+into the next server's runs. The first-ever assignment is a no-op wipe (nothing to re-image
+yet), proven as its own case rather than assumed to fall out of the general rule for free.
+
+**Proven with real files on a real filesystem, not synthetic bookkeeping**:
+`workspace_survives_same_server_reassignment_but_is_wiped_on_a_different_server` writes real
+marker files after each of two same-server reassignments (both must survive), then reassigns
+to a different server and confirms the workspace is genuinely empty; a separate test proves
+re-imaging fires at *every* transition across three servers in sequence, not just the first.
+
+`orchestrator` grew from 20 to 24 tests (plus a new `worker` module, deliberately ungated —
+plain filesystem operations, the same genuinely-cross-platform reasoning `load_ruleset`
+already established). `cargo build --workspace --all-targets`, `cargo clippy --workspace
+--all-targets -- -D warnings`, `cargo xtask purity`, and `cargo test --workspace` all pass
+clean.
 
 ### P4-05 Hostile test server
 

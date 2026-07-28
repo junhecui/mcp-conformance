@@ -8,7 +8,10 @@
 //! parsed [`datamodel::Ruleset`] and stay free of I/O — [`load_ruleset`], brought forward
 //! from P5-01's full scope because P1-06 needed something to actually feed `normalise` a
 //! real ruleset with, rather than only synthetic in-test data. The queue/worker-pool
-//! machinery this crate's doc comment otherwise describes remains P5-01's placeholder.
+//! *scheduling* machinery this crate's doc comment otherwise describes remains P5-01's
+//! placeholder; [`worker::Worker`] (P4-04) is brought forward the same way `load_ruleset`
+//! was — the one piece of it (re-imaging policy) a phase far earlier than P5-01 already
+//! needed a real, testable answer for.
 //!
 //! JSON, not YAML: `serde_json` is already a workspace dependency (`discovery`, `probe`);
 //! reaching for a YAML crate for one small, already-JSON-shaped file would be a second
@@ -20,6 +23,12 @@ use std::path::Path;
 
 use datamodel::Ruleset;
 use serde::Deserialize;
+
+/// P4-04: worker re-imaging policy. Genuinely cross-platform (plain filesystem operations,
+/// no `sandbox`/`observe` dependency), same reasoning as `load_ruleset` above for why this
+/// isn't gated to Linux like the modules below it.
+mod worker;
+pub use worker::{Worker, WorkerError};
 
 /// P2-07: execute `Arm 1'`, `Arm 2`, and `Arm 2R` against a real sandboxed program. Gated at
 /// the module boundary, not the whole crate — `load_ruleset` above is genuinely
