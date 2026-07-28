@@ -43,6 +43,14 @@ mod idempotency;
 #[cfg(target_os = "linux")]
 pub use idempotency::content_delta;
 
+/// P3-02: combine `sandbox`'s network-isolation-plus-bridge halves with `observe`'s
+/// connection-log half, driven against a real sandboxed process. Same gating rationale as
+/// `arms`.
+#[cfg(target_os = "linux")]
+mod network;
+#[cfg(target_os = "linux")]
+pub use network::{run_network_isolated_and_bridged, NetworkSessionError};
+
 #[derive(Deserialize)]
 struct RulesetFile {
     version: String,

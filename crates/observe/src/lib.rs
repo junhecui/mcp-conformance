@@ -16,6 +16,7 @@
 
 #![cfg(target_os = "linux")]
 
+pub mod connection_log;
 pub mod evtree;
 
 use std::path::Path;

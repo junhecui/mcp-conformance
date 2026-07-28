@@ -520,6 +520,18 @@ fn run_sandboxed_init(
 }
 
 impl SandboxHandle {
+    /// The namespace's long-lived "init" process (fork-1 — see the module doc comment).
+    /// P3-02's own `NetworkBridge::set_up` takes exactly this PID: fork-1 and the real
+    /// target share the identical network namespace (the target inherits it unchanged from
+    /// fork-1's own `unshare`), but only fork-1 is guaranteed to survive for the run's
+    /// entire duration, so referencing it instead of the real target's own PID removes a
+    /// real race (a trivially fast target could already have exited) rather than accepting
+    /// it.
+    #[must_use]
+    pub const fn init_pid(&self) -> Pid {
+        self.init_pid
+    }
+
     /// Block until the sandboxed process exits (naturally, or via the timeout watchdog's
     /// `SIGKILL`), reap it, and report what happened. Consumes the handle. If the caller is
     /// still holding the stdin pipe `spawn` returned, drop it first — same requirement as

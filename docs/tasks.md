@@ -1997,9 +1997,102 @@ clean. Verified clean across 5 consecutive runs.
 ### P3-02 veth pair + intercepting proxy
 
 **Depends on:** P3-01
-
-**Depends on:** P3-01
 **Exit:** Every connection logged with its destination.
+**Status:** Done — two new modules, split along this codebase's own containment-vs-evidence
+line (architecture.md §3.1): `sandbox::netns::NetworkBridge` (plumbing — creates the veth
+pair, addresses and routes both ends, installs the `iptables REDIRECT` rule, must not
+interpret anything) and `observe::connection_log::ConnectionLog` (evidence — listens where
+the redirect points, recovers each connection's real destination via `SO_ORIGINAL_DST`, must
+not decide what any of it means). `orchestrator::network` is the one place permitted to
+depend on both, wiring them together against a real sandboxed process.
+
+`NetworkBridge::set_up` takes a network-isolated sandbox's `init_pid` (see P3-01), creates a
+veth pair via raw `rtnetlink` (the `neli` crate, sync-only feature — its `async` feature
+pulls in `tokio`, which nothing else here uses), moves one end into the sandbox's namespace
+via `IFLA_NET_NS_PID`, addresses and brings up both ends (`10.200.0.1`/`10.200.0.2` on a
+`/30`, plus the sandbox side's own loopback and a default route back through the host end),
+and adds `iptables -t nat -A PREROUTING -i <host_ifname> -p tcp -j REDIRECT --to-port
+<proxy_port>` — turning every outbound TCP attempt the sandboxed side makes into a locally-
+delivered connection instead of a dead end. `neli` has no typed `VETH_INFO_PEER` constant
+(only vlan/bridge-style link kinds are covered); encoded as a raw `Rtattr<u16, _>` with the
+literal kernel value from `<linux/if_link.h>`'s `veth_info` enum — `neli`'s own generic
+`Rtattr<T, P>` allows any `T`, so this is a supported escape hatch, not a workaround.
+Addressing the sandbox side runs on a dedicated, short-lived OS thread: `setns()` changes
+only the calling *thread's* own namespace membership, never the whole process, so a thread
+that joins the namespace, opens a fresh post-`setns` netlink connection, does its setup, and
+exits is the only safe way to touch an interface already living in another network
+namespace. No explicit veth teardown is needed — confirmed directly that destroying the
+process owning the sandboxed namespace destroys *both* veth ends automatically (the same
+"kernel tears it down" guarantee P2-01 already established for PID namespaces); only the
+`iptables` rule (which doesn't care whether its named interface still exists) needs
+`NetworkBridge::teardown`.
+
+`ConnectionLog::start` binds an OS-assigned port on *every* local interface (`0.0.0.0`), not
+`127.0.0.1`, and accepts on a background thread. This was not the first thing tried:
+`iptables REDIRECT` rewrites a redirected packet's destination to the primary address of the
+interface it arrived on, not to loopback (loopback rewriting only applies to
+locally-generated packets) — for veth-arriving traffic that's the host-side veth's own
+address, so a loopback-only listener refused every connection outright the first time this
+was wired up end to end, caught immediately by the integration test rather than shipped
+unnoticed. Each accepted connection's real destination is recovered via `getsockopt`
+`SOL_IP`/`SO_ORIGINAL_DST` (raw value `80` from `<linux/netfilter_ipv4.h>`, not exposed by
+mainline `libc` — the same kind of gap `sandbox::supervisor` already found for
+`ifreq`/`SIOCSIFFLAGS`), then the connection is dropped — observed and recorded, never
+forwarded, per this crate's "must not interpret" contract.
+
+**Two real bugs found and fixed by testing against genuine kernel behaviour, not mocks —
+exactly the discipline this project has followed since P1-02's inode finding:**
+
+1. **A `neli` router poisoning race.** The first real run failed with `RouterError::BadSeqOrPid`
+   on an unrelated `Newaddr` request. Root cause, traced into `neli` 0.7.4's own source
+   (`router/synchronous.rs`): `get_link_index`'s `Rtm::Getlink` dump returned early — as soon
+   as the wanted interface was found — without draining the rest of the dump. Dropping the
+   receiver handle mid-dump deregisters its sequence number immediately
+   (`NlRouterReceiverHandle::drop`), but the kernel can still have further messages for that
+   same dump (other interfaces, the trailing `NLMSG_DONE`) in flight; those stragglers then
+   arrive with no sender registered, and `neli`'s router broadcasts that as `BadSeqOrPid` to
+   *every* currently-pending request on the same connection — corrupting whatever request
+   happened to be in flight next. Fixed by draining the dump fully (tracking the match in a
+   local variable, consuming every remaining message) before returning, rather than returning
+   the instant a match is found.
+2. **The loopback-listener mismatch** described above (`ConnectionLog` binding `127.0.0.1`
+   instead of `0.0.0.0`), caught the same way: by running the real mechanism, not by
+   inspecting the code for correctness on paper.
+
+**A third race surfaced only once destination-accuracy was tested with multiple, fast,
+back-to-back connections** (the `orchestrator::network` integration test below): a
+network-isolated process that exits quickly can have its exit observed by `wait()` before
+every connection it opened has actually reached `ConnectionLog`'s accept queue — a client's
+own `connect()` returns as soon as *it* sees the handshake's final ACK sent, which can still
+be microseconds from landing in the listener's kernel backlog. `ConnectionLog::stop` no
+longer exits the instant its queue looks empty; the background thread keeps polling until the
+queue has looked empty for a continuous 200ms grace period, resetting that countdown every
+time another connection is actually accepted — bounded (no indefinite hang once the producer
+is genuinely done), but immune to the fast-exit race. Reproduced directly (roughly 1 run in 3
+failed before the fix, 0 in 26 after) rather than assumed fixed from reasoning about it.
+
+**Proven with real sandboxed processes at two levels**, matching this project's own
+containment/evidence split:
+- `sandbox::netns::tests::a_bridged_sandboxed_connection_reaches_the_host_side_listener`
+  proves the plumbing half alone: a network-isolated Python process, released only after the
+  bridge is fully live (stdin-gated, the same race-avoidance discipline P2-02's cgroup tests
+  established), connects to an arbitrary external address and the connection genuinely
+  succeeds from the sandboxed side's own point of view (`socket.create_connection` returns
+  without raising) because the redirect makes it appear to.
+- `orchestrator::network::tests::every_connection_the_sandboxed_process_attempts_is_logged_with_its_real_destination`
+  proves the full pipeline through production code on both sides: a network-isolated process
+  attempts connections to three distinct destinations (three different ports, one shared
+  host), and `ConnectionLog::stop` returns exactly those three destinations, in order, each
+  with the correct port — provable only via `SO_ORIGINAL_DST`, never a connection's local
+  peer address (always the proxy itself once `REDIRECT` has rewritten it).
+
+`sandbox` grew from 17 to 18 tests (plus a new `netns` module), `observe` grew from 11 to 14
+tests (plus a new `connection_log` module), `orchestrator` grew from 11 to 12 tests (plus a
+new `network` module). `cargo build --workspace --all-targets`, `cargo clippy --workspace
+--all-targets -- -D warnings`, `cargo xtask purity`, and `cargo test --workspace` all pass
+clean. The `orchestrator` integration test (the one exercising the fast-exit race above) was
+run 26 times consecutively post-fix with zero failures; the `sandbox`-level test was run 8
+times consecutively with zero failures.
 
 ### P3-03 Mock backend redirection
 

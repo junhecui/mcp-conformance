@@ -18,8 +18,10 @@
 
 mod base_layer;
 mod cgroup;
+mod netns;
 mod supervisor;
 
 pub use base_layer::{build, capture, digest_of_capture, BuildError, EntryKind, EntrySpec, InodeHandling};
 pub use cgroup::{Cgroup, CgroupError, ResourceLimits, ResourceUsage};
+pub use netns::{NetnsError, NetworkBridge};
 pub use supervisor::{spawn, OverlaySpec, SandboxHandle, SandboxOutcome, SandboxSpec, SpawnError};
