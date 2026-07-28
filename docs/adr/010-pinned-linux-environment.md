@@ -218,6 +218,74 @@ be self-defeating.
 
 ---
 
+## Provisioning record
+
+**The first real boot of this pin, closing the gap this ADR itself left open** ("the checksum
+for the pinned serial is not recorded in this document — deliberately... recording it is the
+first concrete action for whoever provisions the image").
+
+**Date:** 2026-07-27. **Host:** macOS / Apple Silicon (arm64), the primary dev machine named
+throughout this ADR.
+
+- **Serial used:** `20260725` — the serial `.../releases/noble/release/` pointed to at
+  provisioning time, referenced by its own dated, non-symlink path
+  (`https://cloud-images.ubuntu.com/releases/noble/release-20260725/`), confirmed by that
+  path's own page title (`Ubuntu 24.04 LTS (Noble Numbat) release [20260725]`) rather than by
+  trusting the symlink resolution.
+- **Image:** `ubuntu-24.04-server-cloudimg-arm64.img` (arm64, per this ADR's "use arm64
+  natively on Apple Silicon" guidance — no amd64 image was fetched for this boot).
+- **Checksum, independently verified, not copied from a search result:**
+  `sha256:2eaec7286c49fdea713dddabcf5012cafa7097a658e916acb48f4bc5fdc8e419`. Two checks, both
+  necessary:
+  1. `SHA256SUMS.gpg` for serial `20260725` verified with `gpg --verify` against the "UEC Image
+     Automatic Signing Key <cdimage@ubuntu.com>" (fingerprint `D2EB 4462 6FDD C30B 513D 5BB7
+     1A5D 6C4C 7DB8 7C81`, fetched over HTTPS from `keyserver.ubuntu.com` — not the CD-image
+     signing key with a similar name and a different fingerprint, which signs a different
+     `SHA256SUMS`). Result: `gpg: Good signature from "UEC Image Automatic Signing Key
+     <cdimage@ubuntu.com>"`.
+  2. The downloaded image's own `shasum -a 256` computed locally and compared byte-for-byte
+     against the signed `SHA256SUMS` entry for `ubuntu-24.04-server-cloudimg-arm64.img`. Exact
+     match.
+  - Caveat, stated plainly: the signing key itself was fetched over TLS from a keyserver, not
+    verified out-of-band against a second independent source (e.g. a physically distributed
+    keyring or a second, unrelated mirror). This is the standard level of trust most
+    cloud-image consumers operate at, but it is weaker than a true web-of-trust check, and is
+    recorded here rather than silently assumed to be stronger than it is.
+- **Pinned into:** `.lima/mcp-conformance.yaml` (new file, this change) — the exact URL and
+  `sha256:` digest above, as a Lima `images:` entry, so `limactl start` re-derives the same
+  bytes on any contributor's machine without re-deriving the serial choice or re-verifying the
+  signature by hand.
+- **Booted with:** Lima 2.2.0 (Homebrew), `vz` VM driver (Apple's native Virtualization
+  framework — not QEMU), 4 CPUs / 4GiB / 30GB disk, `virtiofs` mount of the repo.
+
+**The four probes this ADR and F-03's CI step both care about, run inside the booted VM,
+verbatim commands and output:**
+
+1. `uname -r` → `6.8.0-136-generic`. GA series confirmed further: `dpkg -l | grep linux-image`
+   shows `linux-image-6.8.0-136-generic` and `linux-image-virtual` installed, no
+   `linux-image-generic-hwe-24.04` or any HWE kernel package present (the one HWE-named
+   package present, `systemd-hwe-hwdb`, is a udev hardware database, unrelated to kernel
+   series). `apt-cache policy linux-image-generic` shows candidate `6.8.0-136.136` from
+   `noble-updates`/`noble-security` — the GA metapackage's own update track, not a jump to a
+   newer upstream series.
+2. `cat /sys/fs/cgroup/cgroup.controllers` → `cpuset cpu io memory hugetlb pids rdma misc`
+   — cgroups v2 unified hierarchy present with the controllers `sandbox` will need
+   (`memory`, `cpu`, `pids`).
+3. `sudo unshare --mount --uts --ipc --net --pid --user --fork -- true` → exit 0. All six
+   namespaces usable, matching F-03's CI probe exactly.
+4. Overlay mount using this ADR's pinned options
+   (`redirect_dir=off,metacopy=off,index=off`) against a throwaway `lower`/`upper`/`work`/
+   `merged` set: mount succeeded, a file written pre-mount in `lower` was visible through
+   `merged`, a file written into `merged` post-mount landed in `upper` (confirming the upper
+   layer is the changeset, per design.md §5), clean `umount` succeeded. `grep overlay
+   /proc/filesystems` also confirms the filesystem type is registered (`nodev overlay`).
+
+**All four passed.** This is the first time any of this ADR's claims were checked against a
+real boot rather than asserted from the pin's specification — the pin now has a real
+provisioning behind it, not only a decision.
+
+---
+
 ## Follow-on decisions this ADR does not make
 
 - **P1-03** decides privileged-host-mount vs. rootless-userns-mount for the sandbox
@@ -226,3 +294,13 @@ be self-defeating.
   Revisit if hosted-runner kernel drift is ever observed to actually change `sandbox`
   behaviour, or once Phase 1 has enough real findings that the infrastructure investment is
   justified rather than anticipatory.
+- **The writable virtiofs mount of the repo into this VM is a P1-03+ blast-radius question,
+  not decided here.** Nothing hostile runs in this guest today — it exists to compile and
+  run `sandbox`'s own namespace/overlayfs/cgroups code, per this file's own "no container
+  runtime needed" note. That changes once P1-03 starts actually launching untrusted MCP
+  server processes inside it: a writable mount of the full repo (build scripts, `cargo`
+  config, evidence store) sitting next to that execution widens what a hostile tool under
+  test could reach if containment inside the guest were ever incomplete. Revisit then —
+  options include a read-only mount for the parts a test run doesn't need to write, or
+  moving untrusted execution to a separate scratch VM instead of this development one. Not
+  a defect in the current pin; a note so it isn't forgotten when P1-03 lands.

@@ -1,0 +1,100 @@
+# Lima config for the F-00 / ADR-010 pinned Linux development target.
+#
+# See docs/adr/010-pinned-linux-environment.md for the full decision record. This file
+# implements only the "boot the pinned image" half of that ADR — the image, its exact dated
+# serial, and its verified checksum. It does NOT implement the overlayfs mount options; those
+# apply later, when P1-03 actually constructs an overlay mount inside this VM, not to booting
+# Lima itself. They're restated below as a comment so this file stays useful as a reference
+# for whoever writes that code.
+#
+# Usage:
+#   limactl start --name=mcp-conformance \
+#     --mount "$(git rev-parse --show-toplevel):w" \
+#     .lima/mcp-conformance.yaml
+#   limactl shell mcp-conformance
+#   limactl stop mcp-conformance
+#   limactl delete mcp-conformance   # to discard and re-provision from scratch
+#
+# The repo root is supplied via `--mount` at start time rather than baked into this file's
+# `mounts:` list — see the note next to `mounts:` below for why.
+#
+# Local parity check once inside: `uname -r` must report 6.8.0-*-generic (GA series, not an
+# HWE point release — see ADR-010's "why 6.8 not HWE" note). This is the same role
+# `rustup show` plays for the compiler pin (rust-toolchain.toml).
+
+# --- The pin (ADR-010 "The exact pin") ---
+# Ubuntu 24.04 LTS (Noble Numbat), GA kernel series 6.8 (linux-image-generic, non-HWE).
+# Referenced by its exact dated, archived build serial — never the `.../releases/noble/release/`
+# symlink, which silently repoints to a new serial over time.
+#
+# Serial 20260725 was the current published release serial on cloud-images.ubuntu.com at the
+# time this file was written (2026-07-27) — confirmed by fetching
+# https://cloud-images.ubuntu.com/releases/noble/release-20260725/SHA256SUMS directly (not the
+# `release/` symlink) and by the page title at that path reading
+# "Ubuntu 24.04 LTS (Noble Numbat) release [20260725]".
+#
+# Checksum verified two ways before being pinned here, not copied from an unverified search
+# result (tasks.md F-00's explicit requirement):
+#   1. SHA256SUMS.gpg verified against the "UEC Image Automatic Signing Key <cdimage@ubuntu.com>"
+#      (fingerprint D2EB 4462 6FDD C30B 513D 5BB7 1A5D 6C4C 7DB8 7C81, fetched over HTTPS from
+#      keyserver.ubuntu.com) — `gpg --verify SHA256SUMS.gpg SHA256SUMS` reported "Good signature".
+#   2. The downloaded arm64 image's own `shasum -a 256` was computed locally and compared
+#      byte-for-byte against the signed SHA256SUMS entry below. Both matched exactly.
+#
+# Apple Silicon uses the arm64 image natively rather than emulating amd64 — per ADR-010,
+# none of the namespace/overlayfs/cgroups v2 behaviour in scope here is architecture-sensitive;
+# the amd64/arm64 distinction only matters for exactly matching CI's own instruction set, which
+# no contributor's local loop needs.
+images:
+  - location: "https://cloud-images.ubuntu.com/releases/noble/release-20260725/ubuntu-24.04-server-cloudimg-arm64.img"
+    arch: "aarch64"
+    digest: "sha256:2eaec7286c49fdea713dddabcf5012cafa7097a658e916acb48f4bc5fdc8e419"
+  # No amd64 entry: this file targets the Apple Silicon contributor loop specifically (per
+  # ADR-010 "Contributor local access"). An amd64 entry at the same serial 20260725 would be
+  # `ubuntu-24.04-server-cloudimg-amd64.img`, digest
+  # sha256:d1940f7d69d343355e183dff1e08a59852d32e7309baa7a4bad8365b11b005ac (from the same
+  # signed SHA256SUMS fetched for this file) — recorded here for anyone who later wants exact
+  # CI-instruction-set parity rather than the native-arm64 loop ADR-010 recommends by default.
+
+cpus: 4
+memory: "4GiB"
+disk: "30GiB"
+
+# No repo mount is declared here. Lima has no template variable that means "the directory
+# containing this YAML file" — {{.Dir}} was checked against Lima's own source
+# (pkg/limayaml/defaults.go: `instDir := filepath.Dir(filePath)` where `filePath` is always
+# `<lima-instance-dir>/lima.yaml`, i.e. under ~/.lima/<name>/) and it resolves to the Lima
+# *instance's* own storage directory, not to wherever a contributor cloned this repo.
+# `{{.Dir}}/..` would therefore mount ~/.lima itself, not the repo — the exact bug this
+# comment exists to prevent someone from reintroducing. A relative-to-template-file mount is
+# a still-open, unimplemented Lima feature request: https://github.com/lima-vm/lima/issues/893.
+#
+# The portable fix is to supply the mount at `limactl start` time via `--mount`, per Usage
+# above, so each contributor's own shell resolves their own clone path — nothing
+# machine-specific is checked in here.
+mounts: []
+mountType: "virtiofs"
+# virtiofs requires vmType: vz on macOS (Lima docs) — vz is only the *default* on macOS
+# 13.5+, so pinning it explicitly (rather than relying on that default) keeps this config
+# from silently falling back to qemu, where virtiofs as configured here would not work.
+# Same pin-things-explicitly posture as `redirect_dir=off` etc. below.
+vmType: "vz"
+
+# No container runtime needed — this VM exists to compile and run the `sandbox` crate's
+# namespace/overlayfs/cgroups code directly, not to run containers.
+containerd:
+  system: false
+  user: false
+
+ssh:
+  loadDotSSHPubKeys: true
+
+# --- Overlayfs mount options (ADR-010) — NOT applied by this file ---
+# These apply when P1-03's sandbox supervisor constructs an overlay mount *inside* this VM,
+# not to Lima's own boot. Restated here only so the pin is discoverable in one place:
+#   redirect_dir=off   — don't rely on distro/kernel default; explicit and re-derivable
+#   metacopy=off       — security-load-bearing: kernel docs warn against metacopy=on with
+#                        untrusted layers, which is exactly design.md §3's hostile-tool model
+#   index=off          — no layer reuse/export exists to protect; every arm is fresh
+#   userxattr          — conditional on P1-03's privileged-host-mount vs. rootless-userns-mount
+#                        choice, not decided yet; see ADR-010 for the exact branch logic

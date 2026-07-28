@@ -69,9 +69,26 @@ local access to a reproducible one) and reintroducing the "one sandbox at a time
 constraint architecture.md §7 already imposes at worker-pool scale, now at the individual
 contributor's desk too. GA kernel series pinned at **6.8** (`linux-image-generic`, not the
 HWE track, which deliberately jumps series over the LTS lifecycle — exactly the drift being
-prevented). Verification checksum is not asserted in the doc itself — recording it is the
-first action for whoever actually provisions the image, not a value invented from an
-unverified search result.
+prevented).
+
+**Provisioned 2026-07-27** (previously the ADR recorded only the decision, not an actual
+boot — closed now, full record in
+[ADR-010's "Provisioning record"](adr/010-pinned-linux-environment.md#provisioning-record)).
+Lima 2.2.0 installed via Homebrew; serial `20260725` of the Noble arm64 cloud image fetched
+from its dated (non-symlink) path, checksum
+`sha256:2eaec7286c49fdea713dddabcf5012cafa7097a658e916acb48f4bc5fdc8e419` independently
+verified both via `gpg --verify` against Canonical's UEC image signing key and via local
+`shasum -a 256` against the signed `SHA256SUMS` — not asserted from a search result, per
+this task's own requirement. Pinned into the new `.lima/mcp-conformance.yaml`. Booted
+(`vz` driver) and all four prerequisite probes passed inside the VM: `uname -r` →
+`6.8.0-136-generic` (GA track confirmed via `dpkg -l`/`apt-cache policy`, no HWE kernel
+package present); `cgroup.controllers` lists `memory`/`cpu`/`pids`; six-namespace
+`unshare --mount --uts --ipc --net --pid --user --fork` exits 0; an overlay mount using the
+pinned `redirect_dir=off,metacopy=off,index=off` options against a throwaway lower/upper
+pair mounts, reflects a pre-existing lower-layer file through the merge, captures a
+post-mount write into `upper`, and unmounts cleanly. VM left running
+(`limactl list` → `mcp-conformance ... Running`) for immediate follow-on use; stop with
+`limactl stop mcp-conformance` when not in use.
 
 Referenced as blocking in [ADR-007](adr/007-implementation-language.md) ("sandbox is
 unbuildable on the macOS host by construction... this is now blocking") and in
