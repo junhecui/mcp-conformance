@@ -1,5 +1,6 @@
-//! Speak MCP `initialize` and `tools/list`; capture the raw JSON byte-exact before parsing;
-//! pin tool metadata.
+//! Speak MCP `initialize` (falling back to `server/discover` per P0-09 when a server has
+//! moved to spec `2026-07-28`'s handshake-free lifecycle) and `tools/list`; capture the raw
+//! JSON byte-exact before parsing; pin tool metadata.
 //!
 //! **Must not:** Call any tool. This is enforced structurally: no tool-call method exists
 //! on the client type (P0-01) — see the `client` module's source for exactly how.
@@ -11,5 +12,5 @@ pub mod jsonrpc;
 mod pin;
 mod transport;
 
-pub use client::{Discovery, DiscoveryClient, DiscoveryError};
+pub use client::{Discovery, DiscoveryClient, DiscoveryError, DiscoveryPath};
 pub use pin::{PinError, ToolPin, pin_tools};

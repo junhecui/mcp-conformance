@@ -6,7 +6,10 @@
 //! `initialize` and `tools/list`, silently accepts the `notifications/initialized`
 //! notification (no id, no response). `argv[1]` selects a mode so one binary covers the
 //! happy path plus a few adversarial server behaviours P0-01 must reject rather than
-//! silently accept.
+//! silently accept, plus (P0-09) a server that has moved to spec `2026-07-28`'s
+//! handshake-free lifecycle: it answers `initialize` with a JSON-RPC `-32601 Method not
+//! found` error (the same shape the generic `other` arm below already produces for any
+//! unhandled method) and answers `server/discover` instead.
 
 use std::io::{self, BufRead, Write};
 
@@ -44,6 +47,24 @@ fn main() {
         }
 
         let response = match method {
+            // P0-09: a server that only speaks the `2026-07-28`+ lifecycle. `initialize`
+            // gets the standard JSON-RPC "unrecognized method" error rather than falling
+            // through to the generic `other` arm below, so this is explicit about exactly
+            // which error shape the fallback is meant to react to.
+            "initialize" if mode == "server_discover" => serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": { "code": -32601, "message": "method not found: initialize" }
+            }),
+            "server/discover" if mode == "server_discover" => serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "protocolVersion": "2026-07-28",
+                    "capabilities": {},
+                    "serverInfo": { "name": "fake-mcp-stdio-server", "version": "0.0.0" }
+                }
+            }),
             "initialize" if mode == "wrong_id" => serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": 999_999,

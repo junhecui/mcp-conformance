@@ -1,8 +1,9 @@
 //! Transport implementations. `pub(crate)` throughout — this is the structural half of
 //! P0-01's "must not call any tool": [`Transport::call`] takes an arbitrary method string,
 //! and nothing outside this crate can name the trait to reach it. [`crate::DiscoveryClient`]
-//! is the only public door in, and it only ever calls `call`/`notify` with the three MCP
-//! method names literal in `client.rs`.
+//! is the only public door in, and it only ever calls `call`/`notify` with the four MCP
+//! method names literal in `client.rs` (`initialize`, `notifications/initialized`,
+//! `tools/list`, and P0-09's `server/discover` fallback).
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
