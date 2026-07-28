@@ -30,6 +30,7 @@ rusqlite = "0.32"
 # same posture as the crates it calls.
 sandbox.workspace = true
 observe.workspace = true
+world.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 tempfile = "3.27.0"

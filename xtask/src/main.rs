@@ -13,6 +13,7 @@ fn main() -> ExitCode {
         Some("dump-tools") => dump_tools(),
         Some("first-verdict") => first_verdict(),
         Some("derive-ruleset-v2") => derive_ruleset_v2(),
+        Some("fixture-generality") => fixture_generality(),
         Some(other) => {
             eprintln!("unknown task `{other}`\n\n{USAGE}");
             ExitCode::FAILURE
@@ -24,7 +25,7 @@ fn main() -> ExitCode {
     }
 }
 
-const USAGE: &str = "usage: cargo xtask <purity|census|census-stage1 [sample_size]|census-stage2-class-a [sample_size]|census-pin-stability <input.json>|probe-stage1 [sample_size]|dump-tools <url>|first-verdict|derive-ruleset-v2>";
+const USAGE: &str = "usage: cargo xtask <purity|census|census-stage1 [sample_size]|census-stage2-class-a [sample_size]|census-pin-stability <input.json>|probe-stage1 [sample_size]|dump-tools <url>|first-verdict|derive-ruleset-v2|fixture-generality>";
 
 #[cfg(target_os = "linux")]
 fn derive_ruleset_v2() -> ExitCode {
@@ -57,6 +58,23 @@ fn first_verdict() -> ExitCode {
 #[cfg(not(target_os = "linux"))]
 fn first_verdict() -> ExitCode {
     eprintln!("first-verdict requires Linux (sandbox/observe are Linux-only)");
+    ExitCode::FAILURE
+}
+
+#[cfg(target_os = "linux")]
+fn fixture_generality() -> ExitCode {
+    match xtask::fixture_generality::run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("fixture-generality failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn fixture_generality() -> ExitCode {
+    eprintln!("fixture-generality requires Linux (sandbox/observe/world are Linux-only)");
     ExitCode::FAILURE
 }
 

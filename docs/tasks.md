@@ -2273,6 +2273,71 @@ test executions) with zero failures.
 Answers open question 2 empirically, and is a publishable result in its own right. It is also
 the primary determinant of achievable audit scale.
 
+**Status: infrastructure done and run for real; the exit criterion's own empirical intent
+("a publishable result") is honestly NOT met yet — same shortfall P2-10 already found and
+reported for this same corpus.** `cargo xtask fixture-generality`
+(`xtask/src/fixture_generality.rs`), `results/conformance/p3_06_fixture_generality.json`. For
+each of `@modelcontextprotocol/server-everything`'s 13 real tools: synthesise real arguments
+via `argsynth::synthesize` against its real `inputSchema`, spawn it under a real
+network-isolated sandbox (P3-01) bridged to a real `world::mock_backend::GenericMockBackend`
+(P3-02, P3-03), drive a real `initialize`/`tools/call` round trip over its stdio, and classify
+the tool `mock_sufficient` iff that round trip completed — 13 real sandboxed spawns, nothing
+synthetic.
+
+**Solves a gap P3-01 explicitly deferred, rather than working around it.** P3-01's own doc
+comment found `npx` hangs under network isolation (its registry freshness check doesn't fail
+fast) and said solving it was "left for whoever wires strict mode into the measurement
+pipeline next (P3-02 onward)." This is that pipeline: `resolve_entry_point` runs `npx`'s own
+package resolution once, on the host, with the same unrestricted network access `list_tools`
+already uses, then locates the resolved package's real on-disk entry script by searching
+`npm`'s own cache directory (`npm config get cache`, never a hardcoded hash path) and reading
+its `package.json`'s `bin` entry. Every sandboxed run then invokes that script directly via
+`node`, entirely bypassing `npx`'s own network-dependent bootstrap — only the *tool's own*
+business-logic network behaviour is ever exposed to the network-isolated sandbox.
+
+**A real, non-degenerate first finding — and a real measurement bug it exposed, investigated
+rather than reported as-is.** The first real run measured 11/13 tools mock-sufficient, with
+`toggle-simulated-logging` and `toggle-subscriber-updates` failing — one crashing the
+sandboxed process with `EPIPE`, one hitting the sandbox's own hard timeout. Investigated
+directly rather than accepted at face value (the same discipline this project has applied to
+every unexpected result since P1-02's inode finding): reproduced the identical
+non-exiting behaviour by hand, running the resolved entry script directly, with **no sandbox
+and no network isolation involved at all** — both tools answer their own `tools/call`
+immediately and correctly, then start a 5-second background timer sending
+`notifications/message`/resource-update notifications indefinitely, by design. The original
+harness required the whole sandboxed *process* to exit cleanly to count as mock-sufficient;
+against a tool whose own design keeps a background timer alive forever, that requirement
+measures "does this tool have a persistent-notification feature," not "did the generic mock
+satisfy this tool's networking needs" — a confound, not a real fixture-generality signal.
+Fixed by reclassifying on the one thing this metric actually asks: did the `tools/call`
+round trip itself receive a response. A process that keeps running afterward (or even
+crashes afterward, once its own answer already arrived) is recorded as an informational note
+on that tool's result, never as the reason it's classified `needs_bespoke_fixture`. After the
+fix, all 13 tools measure mock-sufficient (`fixture_generality_ratio: 1.0`) — the originally
+expected, unglamorous result, now reached honestly rather than by an uninvestigated
+coincidence of two unrelated failures happening to look like fixture insufficiency.
+
+**Why even a clean 1.0 ratio here is not yet the "publishable" result the exit criterion
+asks for, disclosed the same way P2-10 disclosed its own empty noise floor:**
+`@modelcontextprotocol/server-everything` is a *protocol* demonstration server — `echo`,
+`add`, `get-sum`, `long-running-operation`, and so on — not a tool plausibly calling out to
+any real external API at all. None of its 13 tools ever attempted egress in the first place,
+so a perfect mock-sufficiency score here says "this corpus never tested the mock," not "the
+generic mock generalises to tools that genuinely need a backend." `results/conformance/
+p3_06_fixture_generality.json` states this plainly in its own `corpus.note` field rather than
+presenting `1.0` as a finished, generalisable answer. What would close this task for real: a
+broader corpus of vetted servers that make genuine external API calls — the same "P2-10 needs
+a ≥50-tool corpus" shortfall, applied to this metric instead of the noise floor. `cargo xtask
+fixture-generality` is ready to consume that corpus the moment it exists.
+
+`xtask` gains a new `fixture_generality` module (no unit tests, matching `ruleset_v2`/
+`first_verdict`'s own established precedent — an effectful one-off driver over already
+independently-tested components, not itself a unit of reusable logic). `cargo build
+--workspace --all-targets`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo
+xtask purity`, and `cargo test --workspace` all pass clean (this driver is not part of that
+suite, by design — it needs real network and `npx`, the same reason `ruleset_v2`/
+`first_verdict` aren't either).
+
 ---
 
 ## Phase 4 — Hardening
