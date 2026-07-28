@@ -49,6 +49,7 @@ mod tests {
     /// using only `sandbox::BRIDGE_NETWORK`'s own published value, never a hardcoded guess.
     #[test]
     fn a_real_external_attempt_and_a_real_bridge_directed_attempt_are_classified_correctly() {
+        let _slot = crate::arms::tests_support::take_sandbox_slot();
         let lower_dir = tempfile::tempdir().expect("tempdir");
         build(lower_dir.path(), &[]).expect("build base layer");
         let scratch = tempfile::tempdir().expect("tempdir");

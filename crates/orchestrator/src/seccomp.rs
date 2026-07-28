@@ -121,6 +121,7 @@ mod tests {
     }
 
     fn run(script: &str) -> (SandboxOutcome, Vec<SeccompDenialEntry>, GateOutcome) {
+        let _slot = crate::arms::tests_support::take_sandbox_slot();
         let lower_dir = tempfile::tempdir().expect("tempdir");
         build(lower_dir.path(), &[]).expect("build base layer");
         let scratch = tempfile::tempdir().expect("tempdir");

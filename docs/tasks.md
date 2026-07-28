@@ -2583,7 +2583,77 @@ clean.
 **Exit:** A deliberately hostile server attempting escape, exfiltration, resource exhaustion,
 and hangs is contained; every attempt appears in evidence. **Phase 4 exit criterion.**
 
-- [ ] Note in results that observation *evasion* remains out of scope (design.md §8)
+- [x] Note in results that observation *evasion* remains out of scope (design.md §8)
+
+**Status: Done — Phase 4's own exit criterion, met literally.** `orchestrator::hostile::
+run_hostile_script`, combining every containment and evidence-harvesting mechanism this
+project has built across Phases 1–4 in a single real sandboxed process — not four separate
+demonstrations run in isolation, one hostile script attempting all four misbehaviours in
+sequence:
+
+1. **Escape** — a real `ptrace` syscall via `ctypes.CDLL(None).syscall`, denied by P4-01's
+   filter (`EPERM`, non-fatal — the script continues) and harvested by P4-02's
+   `observe::seccomp_audit`.
+2. **Exfiltration** — a real outbound connection attempt, redirected by P3-02's veth bridge
+   under P3-01's network isolation and recorded by `observe::connection_log` with its real
+   destination and port.
+3. **Resource exhaustion** — a bounded fork bomb (50 attempted children), capped by P2-02's
+   `pids_max` cgroup limit; the script's own self-reported successful-fork count (a real
+   number it prints to its own stdout) is asserted well short of the 50 attempted.
+4. **A hang** — an infinite loop, killed by P1-03's hard wall-clock timeout.
+
+Plus one ordinary filesystem write, included specifically to prove the upper-layer evidence
+surface still captures whatever a hostile process does *alongside* its more dramatic
+attempts, not only those — architecture.md's own evidence-surface list ("upper layer,
+conntrack log, seccomp audit log, cgroup counters, exit status") is checked in full, not
+partially.
+
+**Observation evasion is explicitly out of scope, stated in the module's own doc comment and
+repeated on [`HostileRunReport`] itself so it travels with the evidence, not just this
+task's write-up** (design.md §8, the literal checklist item above): the hostile script makes
+no attempt to detect or evade being observed (timing side channels, probing for a tracer or
+for seccomp, and so on). Containing and recording an *overt* attack is what this harness
+claims to do; detecting a sophisticated attempt to evade observation itself is a different,
+harder problem this project has not solved and does not claim to.
+
+**Why `target_pid`, not `init_pid`, gets added to the cgroup — a real sequencing subtlety,
+worked out rather than assumed from `sandbox::Cgroup::add_process`'s own doc comment.** That
+doc comment recommends adding the sandbox's outermost process (fork-1, `init_pid`) *before
+its own second fork*, so every descendant inherits membership automatically — correct advice
+for a caller driving `fork`/`exec` directly, but by the time `sandbox::spawn` itself returns
+a handle, fork-1's second fork (the real target) has already happened, and cgroup membership
+is never applied retroactively to an already-existing process. Adding `init_pid` at that
+point would silently fail to cover the real target at all. Fixed by adding the real target's
+own PID instead (`SandboxHandle::target_pid`, P4-02's own addition, for an unrelated reason)
+*before* releasing the stdin-gated script — every child *it* forks (the fork bomb) then
+correctly inherits membership from its own direct parent.
+
+**A real, previously-undiscovered concurrency bug, found by this test specifically and fixed
+project-wide, not worked around locally.** The first full-suite run after adding this test
+failed — not in `hostile`'s own test, but in `network`'s. Traced directly: `orchestrator`'s
+own crate doc comment states "must not run more than one sandbox per worker slot at a time,"
+and `arms`/`idempotency`/`noise` already serialize their own sandbox-using tests through a
+shared `SANDBOX_SLOT` mutex for exactly that reason — but `network`, `mock`, `destination`,
+`open_world`, and `seccomp`'s own test modules never had, since nothing before this task's
+test was heavy or slow enough (this one holds a live veth bridge, cgroup, and seccomp filter
+simultaneously for several seconds) to actually collide with another module's concurrently-
+running sandbox in practice. Every real sandbox-spawning test in every one of those five
+modules, plus this task's own, now takes the same shared `SANDBOX_SLOT` lock — closing a gap
+that existed since P3-02 landed, not one this task introduced. Verified directly: the full
+`orchestrator` suite was flaky before this fix and passed cleanly across 5 consecutive full
+runs after it.
+
+`orchestrator` grew from 20 to 25 tests (plus a new `hostile` module). `cargo build
+--workspace --all-targets`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo
+xtask purity`, and `cargo test --workspace` all pass clean. The hostile-run test itself was
+run 9 times consecutively with zero failures (consistent ~5.25s runtime, matching its 5s
+timeout), and the full `orchestrator` suite (now correctly serialized) was run 5 times
+consecutively with zero failures afterward.
+
+**Phase 4 (Hardening) is now complete**: P4-01 (seccomp-bpf filter), P4-02 (denied-syscall
+audit log), P4-03 (adversarial flagging through to publication), P4-04 (worker re-imaging),
+and this task together demonstrate the harness surviving a deliberately hostile actor —
+architecture.md's own Phase 4 exit criterion.
 
 ---
 

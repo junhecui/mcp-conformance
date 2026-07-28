@@ -115,6 +115,7 @@ mod tests {
     /// connection's local peer address, which is always the proxy) can recover.
     #[test]
     fn every_connection_the_sandboxed_process_attempts_is_logged_with_its_real_destination() {
+        let _slot = crate::arms::tests_support::take_sandbox_slot();
         let lower_dir = tempfile::tempdir().expect("tempdir");
         build(lower_dir.path(), &[]).expect("build base layer");
         let scratch = tempfile::tempdir().expect("tempdir");

@@ -83,6 +83,14 @@ mod seccomp;
 #[cfg(target_os = "linux")]
 pub use seccomp::{run_and_assess_containment, SeccompSessionError};
 
+/// P4-05: a deliberately hostile sandboxed process exercising every containment and
+/// evidence-harvesting mechanism this project has built at once — Phase 4's own exit
+/// criterion. Same gating rationale as `arms`.
+#[cfg(target_os = "linux")]
+mod hostile;
+#[cfg(target_os = "linux")]
+pub use hostile::{run_hostile_script, HostileRunError, HostileRunReport};
+
 /// P3-05: `openWorldHint`'s decision protocol (`verdict::open_world_hint`), driven end to
 /// end against real sandboxed runs — the strict arm (P3-01) and, for `egress_attempted`,
 /// the instrumented arm (`network`/`destination`) together. Same gating rationale as `arms`.
