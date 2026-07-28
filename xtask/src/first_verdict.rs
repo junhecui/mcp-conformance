@@ -58,6 +58,8 @@ pub enum FirstVerdictError {
     Store(store::StoreError),
     /// Decoding the stored `evtree1` capture failed.
     Decode(String),
+    /// Starting the seccomp audit harvester (P4-02) failed.
+    SeccompAudit(observe::seccomp_audit::SeccompAuditError),
 }
 
 impl std::fmt::Display for FirstVerdictError {
@@ -70,6 +72,7 @@ impl std::fmt::Display for FirstVerdictError {
             Self::Ruleset(e) => write!(f, "ruleset load error: {e}"),
             Self::Store(e) => write!(f, "evidence store error: {e}"),
             Self::Decode(msg) => write!(f, "evidence decode error: {msg}"),
+            Self::SeccompAudit(e) => write!(f, "seccomp audit error: {e}"),
         }
     }
 }
@@ -99,6 +102,11 @@ impl From<orchestrator::LoadRulesetError> for FirstVerdictError {
 impl From<store::StoreError> for FirstVerdictError {
     fn from(e: store::StoreError) -> Self {
         Self::Store(e)
+    }
+}
+impl From<observe::seccomp_audit::SeccompAuditError> for FirstVerdictError {
+    fn from(e: observe::seccomp_audit::SeccompAuditError) -> Self {
+        Self::SeccompAudit(e)
     }
 }
 
@@ -193,8 +201,13 @@ pub fn run() -> Result<(), FirstVerdictError> {
         network_isolated: false,
     };
 
+    // P4-02: start the seccomp-denial harvester *before* spawning — see
+    // `observe::seccomp_audit::SeccompAudit::start`'s own doc comment for why.
+    let seccomp_audit = observe::seccomp_audit::SeccompAudit::start()?;
+
     println!("spawning sandboxed server: npx -y @modelcontextprotocol/server-everything stdio");
     let (handle, stdin, stdout) = sandbox::spawn(&spec)?;
+    let target_pid = handle.target_pid();
     let mut client = RawClient { stdin, reader: BufReader::new(stdout), next_id: 0 };
 
     let init_result = client.call(
@@ -242,6 +255,12 @@ pub fn run() -> Result<(), FirstVerdictError> {
     let outcome = handle.wait()?;
     println!("sandbox outcome: exit_status={:?} timed_out={}", outcome.exit_status, outcome.timed_out);
 
+    // P4-02: harvest whatever seccomp denied during this run — the real `echo` tool is not
+    // expected to attempt anything on the denylist, so an empty result here is the expected,
+    // clean case, not a gap.
+    let seccomp_denials = seccomp_audit.stop(target_pid.as_raw());
+    println!("seccomp denials: {} ({:?})", seccomp_denials.len(), seccomp_denials);
+
     let gate_signals = integrity::RunSignals {
         timed_out: outcome.timed_out,
         containment_uncertain: !outcome.orphans_impossible,
@@ -250,8 +269,9 @@ pub fn run() -> Result<(), FirstVerdictError> {
         // there is nothing a real cap-hit signal could be derived from. A disclosed gap, not
         // a hidden one; see `integrity::RunSignals`'s own doc comment.
         resource_cap_hit: false,
-        // No seccomp instrumentation exists yet (P4-01) to ever set this `true`.
-        escape_class_syscall_denied: false,
+        // P4-01/P4-02: real now, not a hardcoded placeholder — `echo` is expected to trip
+        // none of the denylist, so this is expected to be `false` for this specific run.
+        escape_class_syscall_denied: !seccomp_denials.is_empty(),
     };
     let gate_outcome = integrity::decide(gate_signals);
     println!("integrity gate: {gate_outcome:?}");
@@ -310,17 +330,20 @@ pub fn run() -> Result<(), FirstVerdictError> {
         &call_result,
         &assessment,
         adversarial_flag,
+        &seccomp_denials,
     )?;
 
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_result(
     negotiated_version: &str,
     declared_read_only: bool,
     call_result: &Value,
     assessment: &verdict::Assessment,
     adversarial_flag: bool,
+    seccomp_denials: &[observe::seccomp_audit::SeccompDenialEntry],
 ) -> Result<(), FirstVerdictError> {
     let record = json!({
         "task": "P1-08",
@@ -330,6 +353,8 @@ fn write_result(
         "tool": TARGET_TOOL,
         "declared_read_only_hint": declared_read_only,
         "tool_call_result": call_result,
+        // P4-02: harvested real, not a hardcoded placeholder as of this task landing.
+        "seccomp_denials": seccomp_denials.iter().map(|d| d.syscall_nr).collect::<Vec<_>>(),
         "verdict": {
             "outcome": assessment.outcome().as_db_str(),
             "reason": assessment.reason().map(|r| r.as_db_str()),

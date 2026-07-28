@@ -3,6 +3,7 @@
   "declared_read_only_hint": true,
   "negotiated_spec_revision": "2025-11-25",
   "resolution": "npx -y @modelcontextprotocol/server-everything stdio",
+  "seccomp_denials": [],
   "server": "@modelcontextprotocol/server-everything",
   "task": "P1-08",
   "tool": "echo",

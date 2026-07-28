@@ -2420,6 +2420,65 @@ purity`, and `cargo test --workspace` all pass clean.
 
 **Depends on:** P4-01
 **Exit:** Denials harvested into evidence and surfaced to the integrity gate.
+**Status:** Done — `observe::seccomp_audit::SeccompAudit`, reading `/dev/kmsg` directly
+(no `dmesg` subprocess, the same "raw syscall/device file over shelling out" style
+`connection_log`'s own `SO_ORIGINAL_DST` already established) for the `AUDIT_SECCOMP`
+(`type=1326`) records P4-01's `SECCOMP_FILTER_FLAG_LOG` produces. `Start()` opens and seeks
+to the buffer's current end *before* the sandboxed process is spawned — a denial logged
+during the run is guaranteed to still be there when `stop(target_pid)` drains it afterward.
+`sandbox::SandboxHandle` gains a matching `target_pid()` getter (the real target's PID in the
+host's own initial namespace, not `init_pid()`, fork-1's own PID — the same distinction
+`NetworkBridge` already had to draw for a different reason in P3-02), needed because a
+`SECCOMP_AUDIT` record's own `pid=` field is exactly that value, confirmed directly by
+forking into a fresh PID namespace first and comparing.
+
+**A second real, operationally-important finding, investigated to its root cause rather
+than worked around as a test-only flake.** The first several runs of the real-denial test
+passed, then began failing outright — not a mismatch, but *zero* `/dev/kmsg` records read at
+all. Traced directly, not guessed at: with no `auditd` running, `AUDIT_SECCOMP` records fall
+back to the kernel's own `printk`, which is itself rate-limited
+(`/proc/sys/kernel/printk_ratelimit`/`_burst`, this container's own kernel defaults — `5`
+seconds, `10` messages — not anything this project configured). A rapid burst of denials
+exhausts that allowance and every later record in the window is silently dropped, confirmed
+by a standalone scratch harness that reliably lost every record past the first ten across
+fifteen back-to-back attempts. **Not just a test artifact**: P4-05's own hostile test server
+is expected to attempt several different escape-class syscalls in quick succession — exactly
+the shape that would silently violate this task's own "denials harvested into evidence"
+guarantee for a real hostile actor's later attempts. Fixed at the root, not patched around in
+the test: `SeccompAudit::start` makes a best-effort write of `printk_ratelimit = 0` (the
+kernel's own documented way to disable the limit) before returning — confirmed directly that
+this eliminates the drops entirely across the same fifteen-burst reproduction. Not required
+to succeed (a more restricted deployment lacking the privilege still gets whatever the
+kernel's own default rate limit allows through, the same "best-effort, disclosed" posture
+`sandbox::supervisor`'s own uid/gid-remap fallback already established).
+
+**`sandbox::supervisor`'s `xtask::first_verdict` demo — the one place `escape_class_syscall_
+denied` was hardcoded `false` with an explicit "P4-01 doesn't exist yet" comment — now uses
+the real mechanism**, closing that disclosed gap the same way P2-04 later closed the
+`resource_cap_hit` one. Re-run for real: `echo` (the real reference-server tool P1-08
+targets) trips no denials, `seccomp_denials: 0`, `Accept { adversarial_flag: false }` — the
+expected clean result, now genuinely measured rather than assumed.
+
+**Proven at two levels, matching this project's own established "plumbing first, then the
+full pipeline" discipline.** `observe::seccomp_audit`'s own tests
+(`a_real_seccomp_denial_is_recovered_for_the_denying_pid`, plus targeted unit tests for the
+`/dev/kmsg` record parser) prove the harvesting half alone, against a real, self-triggered
+denial. `orchestrator::seccomp::run_and_assess_containment` combines `sandbox::spawn` (P4-01's
+filter, unconditional), the harvester, and `integrity::decide`, proven against two real
+sandboxed processes:
+`a_real_escape_attempt_is_harvested_and_flags_the_gate_outcome` (a real Python process
+attempts `ptrace` via `ctypes`; the denial is harvested and the gate reports
+`Accept { adversarial_flag: true }`, never rejecting the evidence, per architecture.md
+§5.1) and `a_clean_run_is_accepted_and_unflagged` (no escape attempt, no denial,
+`Accept { adversarial_flag: false }`) — proving the pipeline neither manufactures nor misses
+a flag.
+
+`observe` grew from 15 to 20 tests (plus a new `seccomp_audit` module), `orchestrator` grew
+from 17 to 19 tests (plus a new `seccomp` module). `cargo build --workspace --all-targets`,
+`cargo clippy --workspace --all-targets -- -D warnings`, `cargo xtask purity`, and `cargo
+test --workspace` all pass clean. The observe-level and orchestrator-level real-denial tests
+were each run repeatedly post-fix (15 and 10 consecutive runs respectively) with zero
+failures, after having reliably reproduced the pre-fix `printk_ratelimit` drop every time.
 
 ### P4-03 Adversarial flagging through to publication
 

@@ -18,6 +18,7 @@
 
 pub mod connection_log;
 pub mod evtree;
+pub mod seccomp_audit;
 
 use std::path::Path;
 use std::process::ExitStatus;

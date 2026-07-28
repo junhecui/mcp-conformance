@@ -198,6 +198,7 @@ impl From<io::Error> for SpawnError {
 /// the PID-1-inside-the-namespace process the sandboxed program actually runs as.
 pub struct SandboxHandle {
     init_pid: Pid,
+    target_pid: Pid,
     upper: PathBuf,
     timed_out: Arc<AtomicBool>,
     network_isolated: bool,
@@ -339,6 +340,7 @@ pub fn spawn(
 
             let handle = SandboxHandle {
                 init_pid,
+                target_pid,
                 upper: spec.overlay.upper.clone(),
                 timed_out,
                 network_isolated: spec.network_isolated,
@@ -545,6 +547,17 @@ impl SandboxHandle {
     #[must_use]
     pub const fn init_pid(&self) -> Pid {
         self.init_pid
+    }
+
+    /// The real target's own PID, as seen from the host's (initial) PID namespace — not its
+    /// namespace-local self-view (which is always `1`, since it is PID 1 of its own
+    /// namespace, per P2-01). P4-02's `observe::seccomp_audit` needs exactly this PID:
+    /// confirmed directly that a `SECCOMP_AUDIT` record's own `pid=` field reports a denying
+    /// process's PID in the initial namespace, matching what this getter returns, not the
+    /// namespace-local value the process sees for itself.
+    #[must_use]
+    pub const fn target_pid(&self) -> Pid {
+        self.target_pid
     }
 
     /// Block until the sandboxed process exits (naturally, or via the timeout watchdog's
