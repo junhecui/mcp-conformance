@@ -12,6 +12,7 @@
 
 pub mod aggregate;
 pub mod db;
+pub mod object_store;
 
 use std::fs;
 use std::io;
@@ -49,6 +50,12 @@ pub enum StoreError {
     },
     /// An underlying filesystem operation failed.
     Io(io::Error),
+    /// P5-01's [`object_store::HttpObjectStore`]: the HTTP round trip itself failed
+    /// (connection refused, timed out, an unexpected status, ...). A rendered string, same
+    /// choice `discovery::DiscoveryError::Transport` already made — this crate's `StoreError`
+    /// predates any HTTP dependency, and every existing match on it stays exhaustive over a
+    /// `String` without also needing to name `ureq`'s error type.
+    Transport(String),
 }
 
 impl std::fmt::Display for StoreError {
@@ -60,6 +67,7 @@ impl std::fmt::Display for StoreError {
                 "blob at digest {addressed} actually hashes to {actual} — evidence store corrupt"
             ),
             Self::Io(e) => write!(f, "evidence store I/O error: {e}"),
+            Self::Transport(msg) => write!(f, "object store transport error: {msg}"),
         }
     }
 }
@@ -68,7 +76,7 @@ impl std::error::Error for StoreError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io(e) => Some(e),
-            Self::NotFound(_) | Self::Corrupt { .. } => None,
+            Self::NotFound(_) | Self::Corrupt { .. } | Self::Transport(_) => None,
         }
     }
 }
@@ -79,7 +87,7 @@ impl From<io::Error> for StoreError {
     }
 }
 
-fn digest_of(bytes: &[u8]) -> Digest {
+pub(crate) fn digest_of(bytes: &[u8]) -> Digest {
     let hash = Sha256::digest(bytes);
     Digest::from_bytes(hash.into())
 }

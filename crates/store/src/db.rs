@@ -18,19 +18,27 @@ use rusqlite::{Connection, OptionalExtension};
 /// Migrations in application order. Each name is also the row recorded in
 /// `schema_migrations` once applied, so re-ordering this array without renaming a file
 /// would silently change what "already applied" means — don't.
-const MIGRATIONS: &[(&str, &str)] = &[(
-    "0001_initial_schema",
-    include_str!("../migrations/0001_initial_schema.sql"),
-)];
+const MIGRATIONS: &[(&str, &str)] = &[
+    ("0001_initial_schema", include_str!("../migrations/0001_initial_schema.sql")),
+    ("0002_run_queue", include_str!("../migrations/0002_run_queue.sql")),
+];
 
 /// Open a metadata DB at `path` (or `":memory:"`) and apply any pending migrations.
 ///
 /// Foreign keys are off by default in SQLite for backward-compatibility reasons that don't
 /// apply here; this turns them on for every connection this function returns, since half
 /// the point of this schema is the FK graph in architecture.md §6.
+///
+/// Also sets a 5-second busy timeout: P5-01's `run_queue` is the first table in this schema
+/// meant to be opened from several independent connections (one per worker-pool slot)
+/// against the same on-disk file at once. SQLite's default is to fail a write immediately
+/// with `SQLITE_BUSY` when another connection holds the write lock; a busy timeout makes a
+/// second writer retry internally instead, which is what turns "two workers raced to lease
+/// a job" into "one waits a few milliseconds," not a spurious error.
 pub fn open_and_migrate(path: &str) -> rusqlite::Result<Connection> {
     let mut conn = Connection::open(path)?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
     migrate(&mut conn)?;
     Ok(conn)
 }
@@ -406,6 +414,133 @@ pub fn get_integrity(conn: &Connection, run_id: &str) -> rusqlite::Result<Option
     .optional()
 }
 
+// ---- Run queue (P5-01) ----
+//
+// The primitive a worker pool's slots lease jobs from. Every function here takes "now" and
+// "lease deadline" as caller-supplied unix-epoch-second integers rather than calling a
+// clock itself — this module has no opinion on time, matching the rest of this crate's
+// posture of doing exactly what it's told with the values it's given (F-04's purity rule
+// technically doesn't reach this crate, `store` is already impure by design, but the habit
+// of not hiding a clock read inside a function that looks pure from its signature is worth
+// keeping anyway).
+
+/// One `run_queue` row leased for execution.
+pub struct QueueJobRow {
+    /// Primary key.
+    pub job_id: i64,
+    /// The opaque payload this crate was handed at `enqueue_job` time — this crate has no
+    /// opinion on what it means; that is entirely the enqueuer's and the leaser's business.
+    pub payload: String,
+    /// How many times this job has now been leased, including this lease (starts at 1).
+    pub attempts: i64,
+}
+
+/// Enqueue one job. `payload` must be valid JSON (the schema's own `CHECK` enforces this);
+/// what it contains is opaque to this crate.
+///
+/// # Errors
+///
+/// Propagates any `rusqlite` error, including the `CHECK` violation if `payload` is not
+/// valid JSON.
+pub fn enqueue_job(conn: &Connection, payload: &str, created_at: &str) -> rusqlite::Result<i64> {
+    conn.execute(
+        "INSERT INTO run_queue (payload, created_at) VALUES (?1, ?2)",
+        rusqlite::params![payload, created_at],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// Atomically lease one available job — `pending`, or `leased` with an expired
+/// `leased_until` (a worker that took a job and never came back, whether crashed or merely
+/// slow) — for `worker_id`, marking it `leased` with a new deadline of `lease_until_unix`.
+///
+/// Uses [`rusqlite::Transaction::new_unchecked`] with [`rusqlite::TransactionBehavior::
+/// Immediate`] — deliberately not the default `DEFERRED` behavior
+/// [`Connection::unchecked_transaction`] would give — so this function can still take
+/// `&Connection` like every other function in this module (safe because each worker-pool
+/// slot, this function's only caller, owns its connection exclusively; nothing in this
+/// crate nests a second transaction inside this one), while avoiding a real, empirically
+/// reproduced bug `IMMEDIATE` exists specifically to prevent: two `DEFERRED` transactions
+/// that both read (acquiring a `SHARED` lock) before attempting to write race to *upgrade*
+/// to a write lock, and SQLite fails that upgrade with `SQLITE_BUSY` outright rather than
+/// retrying it — `busy_timeout` never gets a chance to help, because the race is over the
+/// upgrade itself, not over acquiring an already-`RESERVED` lock. `IMMEDIATE` takes the
+/// write lock up front, before the `SELECT`, so there is no upgrade left to race.
+///
+/// # Errors
+///
+/// Propagates any `rusqlite` error.
+pub fn lease_job(
+    conn: &Connection,
+    worker_id: &str,
+    now_unix: i64,
+    lease_until_unix: i64,
+) -> rusqlite::Result<Option<QueueJobRow>> {
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
+    let candidate: Option<(i64, String, i64)> = tx
+        .query_row(
+            "SELECT job_id, payload, attempts FROM run_queue
+             WHERE status = 'pending' OR (status = 'leased' AND leased_until < ?1)
+             ORDER BY job_id LIMIT 1",
+            [now_unix],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+
+    let Some((job_id, payload, attempts_before)) = candidate else {
+        return Ok(None);
+    };
+    let attempts = attempts_before + 1;
+
+    tx.execute(
+        "UPDATE run_queue
+         SET status = 'leased', leased_by = ?1, leased_until = ?2, attempts = ?3
+         WHERE job_id = ?4",
+        rusqlite::params![worker_id, lease_until_unix, attempts, job_id],
+    )?;
+    tx.commit()?;
+    Ok(Some(QueueJobRow { job_id, payload, attempts }))
+}
+
+/// Mark a leased job `done`.
+///
+/// # Errors
+///
+/// Propagates any `rusqlite` error.
+pub fn complete_job(conn: &Connection, job_id: i64) -> rusqlite::Result<()> {
+    conn.execute("UPDATE run_queue SET status = 'done' WHERE job_id = ?1", [job_id])?;
+    Ok(())
+}
+
+/// Mark a leased job `failed` — terminal, not retried. A caller that wants retry-on-failure
+/// semantics gets them for free by simply *not* calling this (an unmarked job's lease
+/// expires and [`lease_job`] picks it up again); this function is for the case a job must
+/// never be retried.
+///
+/// # Errors
+///
+/// Propagates any `rusqlite` error.
+pub fn fail_job(conn: &Connection, job_id: i64) -> rusqlite::Result<()> {
+    conn.execute("UPDATE run_queue SET status = 'failed' WHERE job_id = ?1", [job_id])?;
+    Ok(())
+}
+
+/// Count jobs that still need a worker slot's attention — `pending`, plus `leased` (even a
+/// currently-live lease counts: it is still outstanding work, just not available to lease
+/// again yet). A worker pool computes this once at start-up to know how many completions to
+/// wait for.
+///
+/// # Errors
+///
+/// Propagates any `rusqlite` error.
+pub fn count_outstanding_jobs(conn: &Connection) -> rusqlite::Result<i64> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM run_queue WHERE status IN ('pending', 'leased')",
+        [],
+        |row| row.get(0),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -478,7 +613,11 @@ mod tests {
         let applied: i64 = conn
             .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row.get(0))
             .expect("count migrations");
-        assert_eq!(applied, 1, "migration must be recorded exactly once");
+        assert_eq!(
+            applied,
+            i64::try_from(MIGRATIONS.len()).expect("migration count fits in i64"),
+            "every migration in MIGRATIONS must be recorded exactly once, not zero and not twice"
+        );
     }
 
     /// Seeds a minimal, valid server -> tool_snapshot -> run chain so FK-dependent tests
@@ -895,5 +1034,149 @@ mod tests {
         )
         .expect_err("a run_id with no RUN row must violate the foreign key");
         assert!(format!("{err}").to_lowercase().contains("foreign key"));
+    }
+
+    /// P5-01's own primitive, proven single-threaded first: enqueue, lease, complete —
+    /// each transition reads back exactly as expected, and a completed job is no longer
+    /// available to lease.
+    #[test]
+    fn a_job_can_be_enqueued_leased_and_completed() {
+        let conn = open_and_migrate(":memory:").expect("open_and_migrate");
+        let job_id = enqueue_job(&conn, r#"{"tool":"read_file"}"#, "unix:0").expect("enqueue");
+
+        let leased = lease_job(&conn, "worker-a", 100, 200)
+            .expect("lease_job")
+            .expect("a pending job must be leasable");
+        assert_eq!(leased.job_id, job_id);
+        assert_eq!(leased.payload, r#"{"tool":"read_file"}"#);
+        assert_eq!(leased.attempts, 1);
+
+        // Immediately re-leasing (lease still valid) must find nothing else to hand out.
+        assert!(lease_job(&conn, "worker-b", 101, 201).expect("lease_job").is_none());
+
+        complete_job(&conn, job_id).expect("complete_job");
+        let status: String = conn
+            .query_row("SELECT status FROM run_queue WHERE job_id = ?1", [job_id], |r| r.get(0))
+            .expect("read status");
+        assert_eq!(status, "done");
+
+        // A completed job must never be leasable again, even long after any lease would
+        // have expired.
+        assert!(lease_job(&conn, "worker-c", 999_999, 1_000_000).expect("lease_job").is_none());
+    }
+
+    /// A job whose lease expired (the worker that held it crashed or hung) must become
+    /// leasable again — the crash-recovery half of this primitive, not just the happy path.
+    #[test]
+    fn an_expired_lease_is_reclaimed() {
+        let conn = open_and_migrate(":memory:").expect("open_and_migrate");
+        let job_id = enqueue_job(&conn, "{}", "unix:0").expect("enqueue");
+
+        let first = lease_job(&conn, "worker-a", 100, 150)
+            .expect("lease_job")
+            .expect("must lease the fresh job");
+        assert_eq!(first.attempts, 1);
+
+        // `now` = 151 is past `leased_until` = 150: the lease has expired.
+        let second = lease_job(&conn, "worker-b", 151, 300)
+            .expect("lease_job")
+            .expect("an expired lease must be reclaimable");
+        assert_eq!(second.job_id, job_id);
+        assert_eq!(second.attempts, 2, "reclaiming a lease must count as another attempt");
+    }
+
+    /// A job marked `failed` is terminal — never leasable again, unlike a merely-expired
+    /// lease.
+    #[test]
+    fn a_failed_job_is_never_released() {
+        let conn = open_and_migrate(":memory:").expect("open_and_migrate");
+        let job_id = enqueue_job(&conn, "{}", "unix:0").expect("enqueue");
+        lease_job(&conn, "worker-a", 100, 150).expect("lease_job").expect("lease");
+        fail_job(&conn, job_id).expect("fail_job");
+
+        assert!(lease_job(&conn, "worker-b", 999_999, 1_000_000).expect("lease_job").is_none());
+        let status: String = conn
+            .query_row("SELECT status FROM run_queue WHERE job_id = ?1", [job_id], |r| r.get(0))
+            .expect("read status");
+        assert_eq!(status, "failed");
+    }
+
+    /// `count_outstanding_jobs` counts `pending` and `leased`, never `done` or `failed` —
+    /// proven across all four states at once rather than one at a time, so a bug that
+    /// happens to pass an individual-state check can't hide.
+    #[test]
+    fn outstanding_count_covers_pending_and_leased_only() {
+        let conn = open_and_migrate(":memory:").expect("open_and_migrate");
+        let pending = enqueue_job(&conn, "{}", "unix:0").expect("enqueue pending");
+        let leased = enqueue_job(&conn, "{}", "unix:0").expect("enqueue leased");
+        let done = enqueue_job(&conn, "{}", "unix:0").expect("enqueue done");
+        let failed = enqueue_job(&conn, "{}", "unix:0").expect("enqueue failed");
+
+        lease_job(&conn, "worker-a", 0, 1000).expect("lease_job"); // leases `pending`
+        lease_job(&conn, "worker-b", 0, 1000).expect("lease_job"); // leases `leased`
+        complete_job(&conn, done).expect("complete_job");
+        // `failed` was never leased before being failed — proves `fail_job` doesn't require
+        // a prior lease to take effect.
+        fail_job(&conn, failed).expect("fail_job");
+
+        assert_eq!(count_outstanding_jobs(&conn).expect("count"), 2, "pending job {pending} and \
+                    leased job {leased} outstanding; done job {done} and failed job {failed} not");
+    }
+
+    /// The mutual-exclusion property the whole worker pool depends on, proven against real
+    /// concurrent SQLite connections rather than assumed from reading the SQL: many real OS
+    /// threads, each with its own connection to the same on-disk database file (not
+    /// `:memory:` — separate connections to `:memory:` are separate, isolated databases, so
+    /// this specific race could only ever be observed against a real shared file), race to
+    /// lease a fixed pool of jobs. Every job must be leased by exactly one thread; none may
+    /// be leased twice, and none may be missed.
+    #[test]
+    fn concurrent_connections_never_double_lease_the_same_job() {
+        use std::sync::{Arc, Mutex};
+        use std::thread;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("queue.db");
+        let db_path_str = db_path.to_str().expect("utf8 path").to_string();
+
+        let job_count = 40;
+        {
+            let conn = open_and_migrate(&db_path_str).expect("open_and_migrate");
+            for _ in 0..job_count {
+                enqueue_job(&conn, "{}", "unix:0").expect("enqueue");
+            }
+        }
+
+        let winners: Arc<Mutex<Vec<i64>>> = Arc::new(Mutex::new(Vec::new()));
+        let threads: Vec<_> = (0..8)
+            .map(|worker_index| {
+                let db_path_str = db_path_str.clone();
+                let winners = Arc::clone(&winners);
+                thread::spawn(move || {
+                    let conn = open_and_migrate(&db_path_str).expect("open_and_migrate");
+                    let worker_id = format!("worker-{worker_index}");
+                    let mut leased_here = Vec::new();
+                    while let Some(job) =
+                        lease_job(&conn, &worker_id, 0, 1_000_000_000).expect("lease_job")
+                    {
+                        leased_here.push(job.job_id);
+                    }
+                    winners.lock().expect("lock").extend(leased_here);
+                })
+            })
+            .collect();
+
+        for t in threads {
+            t.join().expect("worker thread must not panic");
+        }
+
+        let mut leased_ids = Arc::try_unwrap(winners).expect("all threads joined").into_inner().expect("lock");
+        leased_ids.sort_unstable();
+        let mut expected: Vec<i64> = (1..=job_count).collect();
+        expected.sort_unstable();
+        assert_eq!(
+            leased_ids, expected,
+            "every job must be leased exactly once across all threads, no duplicates and none missed"
+        );
     }
 }

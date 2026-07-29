@@ -2664,9 +2664,91 @@ architecture.md's own Phase 4 exit criterion.
 **Depends on:** P4-05
 **Exit:** Queue + worker pool over Linux hosts; object-store backend for evidence.
 
-- [ ] **One sandbox per worker slot at a time.** Concurrent sandboxes share a kernel and page
+- [x] **One sandbox per worker slot at a time.** Concurrent sandboxes share a kernel and page
       cache, and the timing coupling is exactly the noise P2-08 is trying to measure. Scale
       out, not up.
+
+**Status: Done, at the scope this one-container environment can actually verify — disclosed
+below rather than assumed.** Two new pieces, matching the exit criterion's own two halves:
+
+**The queue + worker pool.** `store::db` gained a `run_queue` table (`0002_run_queue.sql`,
+deliberately its own migration — this table's rows are mutated in place, the opposite
+mutability contract from every table `0001` defined) plus five typed functions:
+`enqueue_job`, `lease_job`, `complete_job`, `fail_job`, `count_outstanding_jobs`.
+`orchestrator::queue::RunQueue` wraps them with the one thing `store::db` deliberately
+doesn't own, a clock — every lease is expressed as unix-epoch-second integers the caller
+supplies, not a hidden `SystemTime::now()` inside `store`. `orchestrator::worker_pool::
+WorkerPool::drain_all` spawns `slots` real OS threads, each with its own DB connection,
+each looping "lease a job, run the handler, mark it done or failed" until as many jobs have
+been finalized as were outstanding at start — the batch shape P5-02 ("regenerates all
+verdicts; it is not a step in the run loop") actually needs, not a permanent daemon idling
+for work that was never enqueued.
+
+**A real concurrency bug, found empirically, not assumed correct from reading the SQL.**
+The first version of `lease_job` used `Connection::unchecked_transaction()` (SQLite's
+default `DEFERRED` behavior) and failed intermittently under real concurrent threads with
+`SQLITE_BUSY: database is locked` — despite a 5-second `busy_timeout`. Traced to a specific,
+well-documented SQLite gotcha this project hadn't hit before because nothing before this
+task opened the same on-disk file from multiple real connections at once: two `DEFERRED`
+transactions that both read first (each holding a `SHARED` lock) race to *upgrade* to a
+write lock, and that upgrade fails with `SQLITE_BUSY` outright rather than being retried by
+the busy handler — `busy_timeout` only helps when *acquiring* a lock already held by
+another connection, not this specific upgrade race. Fixed by using `rusqlite::Transaction::
+new_unchecked` with `TransactionBehavior::Immediate` instead, which takes the write lock
+up front, before the `SELECT`, leaving no upgrade to race. Verified directly: the
+concurrency test that exposed this (8 real threads, 8 real connections to one on-disk file,
+racing to lease 40 jobs) was run 5 consecutive times after the fix with zero failures,
+where before it failed intermittently.
+
+**What was actually verified, versus what "over Linux hosts" would additionally need —
+stated in `worker_pool`'s own doc comment so it travels with the code, not just this
+write-up.** Every worker-pool test in this task runs its slots as threads inside one
+process on this one container, sharing one kernel. What is proven for real: exactly-once
+job delivery under genuine concurrent threads and connections (24 jobs, 4 slots, asserted
+both zero duplicates/omissions and real overlap — max concurrent handler invocations > 1,
+so the pool isn't accidentally serializing everything down to one slot), and recovery from
+a lease that expired because its worker never came back (simulating a crash: a job is
+leased directly with a 50ms lease and abandoned, then a fresh pool run picks it up once the
+lease expires). A genuine multi-host deployment — separate processes on separate hosts,
+pointed at the same queue file over a shared network filesystem or a network-attached DB
+server — has no second Linux host in this environment to prove it against; nothing in
+`RunQueue`'s design assumes same-host callers (it already has to tolerate independent
+connections racing the same file, which is exactly what the concurrency test above proves),
+but that deployment shape is asserted, not tested, here. The tests also deliberately use a
+lightweight non-sandboxed handler, not real `sandbox::spawn` calls: running several real
+sandboxes concurrently on this one shared kernel to "test" the pool would manufacture
+exactly the noise coupling architecture.md §7 warns `slots > 1` against on a single host —
+a deployment question for wherever this pool actually runs multi-host, not something to
+fake on a one-container dev environment.
+
+**The object-store backend.** `store::object_store` adds an `ObjectStore` trait
+(`put`/`get`/`contains`) that both `store::BlobStore` (F-05's local-filesystem store) and a
+new `HttpObjectStore` implement, so `orchestrator` can be handed either interchangeably.
+`HttpObjectStore` speaks the one HTTP contract every S3-compatible object store — S3
+itself, GCS's XML API, MinIO, Ceph RGW — exposes over a bucket endpoint: `PUT`/`GET`/`HEAD`
+`{base_url}/{digest}`. This environment has no real cloud bucket to verify against
+(disclosed, not glossed over: the only AWS-shaped credentials present are a proxy-injected
+placeholder meant for tooling that merely expects the environment variables to exist, not a
+bucket this project has any business writing evidence into) — what is verified for real is
+the wire protocol itself, against a real hand-rolled HTTP/1.1 server over a real
+`TcpListener` (the same pattern `discovery`'s own `tests/http_discovery.rs` already
+established for a real fake MCP HTTP server): byte-exact put/get round trip over a real
+socket, `contains` correctly distinguishing present from absent, a real 404 mapped to
+`StoreError::NotFound` rather than a generic transport error, and — the same corruption
+check `BlobStore::get` already makes locally — the client independently re-hashing what
+comes back over the wire and refusing tampered bytes the test server was seeded to return,
+rather than trusting the backend silently. Pointing `HttpObjectStore` at an actual
+S3-compatible endpoint is a configuration change (a different `base_url`), not a code
+change, since nothing in the client is MinIO- or AWS-specific.
+
+`store` grew from 27 to 36 tests (`db` gained 5 queue tests, including the real-concurrency
+one; a new `object_store` module gained 4). `orchestrator` grew from 26 to 33 tests
+(`queue`: 3, `worker_pool`: 4, plus one existing test's migration-count assertion
+generalized rather than hardcoded to `1`, so it stays correct as more migrations land).
+`cargo build --workspace
+--all-targets`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo xtask
+purity`, and `cargo test --workspace` all pass clean; `cargo xtask first-verdict` re-run
+with no change to its output beyond what P4-02 already added.
 
 ### P5-02 Offline derivation job
 

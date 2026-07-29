@@ -7,11 +7,15 @@
 //! This is also where ruleset data is loaded and parsed, so that `normalise` can take a
 //! parsed [`datamodel::Ruleset`] and stay free of I/O — [`load_ruleset`], brought forward
 //! from P5-01's full scope because P1-06 needed something to actually feed `normalise` a
-//! real ruleset with, rather than only synthetic in-test data. The queue/worker-pool
-//! *scheduling* machinery this crate's doc comment otherwise describes remains P5-01's
-//! placeholder; [`worker::Worker`] (P4-04) is brought forward the same way `load_ruleset`
-//! was — the one piece of it (re-imaging policy) a phase far earlier than P5-01 already
-//! needed a real, testable answer for.
+//! real ruleset with, rather than only synthetic in-test data. [`worker::Worker`] (P4-04)
+//! was brought forward the same way — the one piece of P5-01's scope (re-imaging policy) a
+//! phase far earlier than P5-01 already needed a real, testable answer for.
+//!
+//! P5-01 itself lands [`queue::RunQueue`] (a persistent, SQLite-backed job queue) and
+//! [`worker_pool::WorkerPool`] (real OS threads leasing from it, each a "worker slot" in
+//! architecture.md §7's sense) — see both modules' own doc comments for exactly what is
+//! verified for real in this one-container environment versus what a genuine multi-host
+//! deployment would additionally need.
 //!
 //! JSON, not YAML: `serde_json` is already a workspace dependency (`discovery`, `probe`);
 //! reaching for a YAML crate for one small, already-JSON-shaped file would be a second
@@ -29,6 +33,18 @@ use serde::Deserialize;
 /// isn't gated to Linux like the modules below it.
 mod worker;
 pub use worker::{Worker, WorkerError};
+
+/// P5-01: a persistent run queue, backed by `store::db`'s `run_queue` table. Genuinely
+/// cross-platform — SQLite plus a clock, nothing Linux-specific — same rationale as
+/// `worker` above.
+mod queue;
+pub use queue::{QueueError, RunQueue};
+
+/// P5-01: a worker pool draining [`RunQueue`] across real OS threads. Same cross-platform
+/// rationale as `queue` above — the pool itself has no Linux-specific dependency; what a
+/// handler closure given to it *does* (e.g. drive `sandbox::spawn`) is a separate concern.
+mod worker_pool;
+pub use worker_pool::{JobOutcome, WorkerPool};
 
 /// P2-07: execute `Arm 1'`, `Arm 2`, and `Arm 2R` against a real sandboxed program. Gated at
 /// the module boundary, not the whole crate — `load_ruleset` above is genuinely

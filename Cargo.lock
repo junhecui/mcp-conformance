@@ -529,6 +529,7 @@ dependencies = [
  "normalise",
  "observe",
  "planner",
+ "rusqlite",
  "sandbox",
  "serde",
  "serde_json",
@@ -800,6 +801,7 @@ dependencies = [
  "rusqlite",
  "sha2",
  "tempfile",
+ "ureq",
 ]
 
 [[package]]
