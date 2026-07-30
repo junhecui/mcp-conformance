@@ -250,6 +250,16 @@ fn validate_relative_path(path: &[u8]) {
         "BaseLayerSpec::add: path must not contain a '..' component: {:?}",
         String::from_utf8_lossy(path)
     );
+    // Empty components (`a//b`, a trailing `/`) and `.` components (`a/./b`) are rejected
+    // too: they materialize/capture at a *different* path string than the spec key (the
+    // kernel collapses them), so two distinct spec keys could silently overwrite one
+    // on-disk path, and the pure `to_entries()` proof path would no longer describe the
+    // same tree the real-disk `capture()` proof path sees.
+    assert!(
+        path.split(|&b| b == b'/').all(|segment| !segment.is_empty() && segment != b"."),
+        "BaseLayerSpec::add: path must not contain empty or '.' components: {:?}",
+        String::from_utf8_lossy(path)
+    );
 }
 
 impl BaseLayerSpec {
@@ -742,6 +752,19 @@ mod tests {
             spec2.add("a/../b", SpecNode::file(b"x".to_vec()));
         }));
         assert!(result2.is_err(), "a '..' component buried mid-path must be rejected too, not just a leading one");
+    }
+
+    #[test]
+    fn add_panics_on_empty_and_dot_components() {
+        // `a//b`, `a/b/`, and `a/./b` all collapse to a different on-disk path than the
+        // spec key, so the pure and real-disk proof paths would silently diverge.
+        for bad in ["a//b", "a/b/", "a/./b", "./a"] {
+            let mut spec = BaseLayerSpec::new();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                spec.add(bad, SpecNode::file(b"x".to_vec()));
+            }));
+            assert!(result.is_err(), "path {bad:?} must be rejected");
+        }
     }
 
     #[test]

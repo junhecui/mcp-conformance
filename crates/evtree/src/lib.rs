@@ -167,6 +167,13 @@ pub enum DecodeError {
     /// A length-prefixed field declared a length that does not fit in this platform's
     /// `usize` (only reachable on 32-bit targets against an adversarially large `u64`).
     LengthOverflow,
+    /// Entries were not in strictly ascending raw-path-byte order, or an entry's xattrs
+    /// were not in strictly ascending name order. [`encode`] always sorts, so bytes it
+    /// produced never trip this; input that does was written by something else, and
+    /// accepting it would let two different byte sequences decode to the same logical
+    /// tree — breaking the one-encoding-per-content property the content-addressed
+    /// evidence store (F-05) relies on. "Strictly" also rejects duplicate paths/names.
+    NotCanonical,
 }
 
 impl fmt::Display for DecodeError {
@@ -178,6 +185,9 @@ impl fmt::Display for DecodeError {
             Self::InvalidTypeTag(t) => write!(f, "evtree1: invalid type_tag {t}"),
             Self::TrailingBytes => write!(f, "evtree1: trailing bytes after last entry"),
             Self::LengthOverflow => write!(f, "evtree1: length-prefixed field overflows usize"),
+            Self::NotCanonical => {
+                write!(f, "evtree1: entries or xattrs not in strict canonical sort order")
+            }
         }
     }
 }
@@ -199,6 +209,11 @@ impl std::error::Error for DecodeError {}
 /// Contains no clock read, no random-number generation, and no field populated from
 /// anything other than `entries` itself — the byte-reproducibility property required by
 /// ADR-009 and P1-02 follows directly from that.
+///
+/// Paths must be unique across `entries` (two entries at one path describe no valid
+/// filesystem tree, and every real caller — a `BTreeMap`-backed spec, a directory walk —
+/// guarantees this by construction). Duplicates are not deduplicated here; the resulting
+/// bytes are non-canonical and [`decode`] rejects them.
 #[must_use]
 pub fn encode(entries: &[Entry]) -> Vec<u8> {
     let mut sorted: Vec<&Entry> = entries.iter().collect();
@@ -256,8 +271,14 @@ fn write_entry(out: &mut Vec<u8>, entry: &Entry) {
 /// Exact round-trip inverse of [`encode`] for any byte sequence `encode` itself produced.
 /// Also usable against untrusted input (bounds-checked throughout; never panics or reads
 /// out of bounds — every length-prefixed field is validated against the remaining buffer
-/// before use), since a future evidence-store reader (P1-04's descendants) will eventually
-/// decode blobs nothing in this workspace wrote.
+/// before use, and pre-allocation is bounded by the buffer's actual size, never by a
+/// self-declared count), since a future evidence-store reader (P1-04's descendants) will
+/// eventually decode blobs nothing in this workspace wrote.
+///
+/// Rejects non-canonical input ([`DecodeError::NotCanonical`]): entries must be strictly
+/// ascending by raw path bytes and each entry's xattrs strictly ascending by name, exactly
+/// as [`encode`] emits them. A canonical format with a content-addressed store behind it
+/// must not admit two byte encodings of one logical tree.
 pub fn decode(bytes: &[u8]) -> Result<Vec<Entry>, DecodeError> {
     let mut r = Reader::new(bytes);
 
@@ -272,15 +293,29 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Entry>, DecodeError> {
     let count = r.u64()?;
     let count = usize::try_from(count).map_err(|_| DecodeError::LengthOverflow)?;
 
-    let mut entries = Vec::with_capacity(count.min(1 << 20));
+    // Pre-allocation is capped by what the remaining bytes could possibly hold, not by the
+    // header's self-declared count: every entry occupies at least MIN_ENTRY_ENCODED_LEN
+    // bytes on the wire, so a forged header claiming billions of entries against a
+    // near-empty buffer allocates nothing of consequence before the first read fails.
+    let mut entries = Vec::with_capacity(count.min(r.remaining() / MIN_ENTRY_ENCODED_LEN));
     for _ in 0..count {
-        entries.push(read_entry(&mut r)?);
+        let entry = read_entry(&mut r)?;
+        if entries.last().is_some_and(|prev: &Entry| prev.path >= entry.path) {
+            return Err(DecodeError::NotCanonical);
+        }
+        entries.push(entry);
     }
     if r.remaining() != 0 {
         return Err(DecodeError::TrailingBytes);
     }
     Ok(entries)
 }
+
+/// The smallest possible encoded entry: path length prefix (8) + type_tag (1) + mode (4) +
+/// uid (4) + gid (4) + mtime_sec (8) + mtime_nsec (4) + inode (8) + dev_major (4) +
+/// dev_minor (4) + xattr count (4) — an empty-path directory with no xattrs. Used only to
+/// bound pre-allocation in [`decode`].
+const MIN_ENTRY_ENCODED_LEN: usize = 8 + 1 + 4 + 4 + 4 + 8 + 4 + 8 + 4 + 4 + 4;
 
 fn read_entry(r: &mut Reader<'_>) -> Result<Entry, DecodeError> {
     let path = r.bytes_len_prefixed()?;
@@ -295,10 +330,15 @@ fn read_entry(r: &mut Reader<'_>) -> Result<Entry, DecodeError> {
     let dev_minor = r.u32()?;
 
     let xattr_count = r.u32()?;
-    let mut xattrs = Vec::with_capacity((xattr_count as usize).min(1 << 16));
+    // Same remaining-bytes cap as the entry list: each xattr is at least two u64 length
+    // prefixes (16 bytes) on the wire.
+    let mut xattrs = Vec::with_capacity((xattr_count as usize).min(r.remaining() / 16));
     for _ in 0..xattr_count {
         let name = r.bytes_len_prefixed()?;
         let value = r.bytes_len_prefixed()?;
+        if xattrs.last().is_some_and(|prev: &XAttr| prev.name >= name) {
+            return Err(DecodeError::NotCanonical);
+        }
         xattrs.push(XAttr { name, value });
     }
 
@@ -623,6 +663,68 @@ mod tests {
         assert_eq!(bytes[type_tag_offset], 2); // sanity: this is indeed Directory's tag
         bytes[type_tag_offset] = 0;
         assert_eq!(decode(&bytes), Err(DecodeError::InvalidTypeTag(0)));
+    }
+
+    /// The 18-byte header of a valid capture, followed by a forged `entry_count`.
+    fn forged_header(count: u64) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&MAGIC);
+        bytes.extend_from_slice(&FORMAT_VERSION.to_be_bytes());
+        bytes.extend_from_slice(&count.to_be_bytes());
+        bytes
+    }
+
+    /// A header claiming u64::MAX entries against an empty remainder must fail fast with
+    /// no allocation of consequence — the pre-allocation cap is derived from the bytes
+    /// actually present, never from the header's own claim.
+    #[test]
+    fn decode_does_not_preallocate_from_a_forged_entry_count() {
+        assert_eq!(decode(&forged_header(u64::MAX)), Err(DecodeError::UnexpectedEof));
+    }
+
+    #[test]
+    fn decode_rejects_entries_out_of_canonical_order() {
+        let a = encode(&[dir("a")]);
+        let b = encode(&[dir("b")]);
+        // Splice the two single-entry bodies together in the wrong order under a count=2
+        // header. 18 = magic (8) + version (2) + entry_count (8).
+        let mut bytes = forged_header(2);
+        bytes.extend_from_slice(&b[18..]);
+        bytes.extend_from_slice(&a[18..]);
+        assert_eq!(decode(&bytes), Err(DecodeError::NotCanonical));
+    }
+
+    #[test]
+    fn decode_rejects_duplicate_paths() {
+        let a = encode(&[dir("a")]);
+        let mut bytes = forged_header(2);
+        bytes.extend_from_slice(&a[18..]);
+        bytes.extend_from_slice(&a[18..]);
+        assert_eq!(decode(&bytes), Err(DecodeError::NotCanonical));
+    }
+
+    #[test]
+    fn decode_rejects_xattrs_out_of_canonical_order() {
+        let mut e = dir("a");
+        e.xattrs = vec![XAttr::new("aaa", "1"), XAttr::new("zzz", "2")];
+        let mut bytes = encode(&[e]);
+        // Locate the two xattr blocks and swap them. Offsets: header 18 + path prefix 8 +
+        // path "a" 1 + type_tag 1 + fixed numeric fields 40 + xattr count 4 = 72. Each
+        // xattr is name prefix 8 + name 3 + value prefix 8 + value 1 = 20 bytes.
+        let first = 72..92;
+        let second = 92..112;
+        assert_eq!(&bytes[first.start + 8..first.start + 11], b"aaa", "offset sanity");
+        assert_eq!(&bytes[second.start + 8..second.start + 11], b"zzz", "offset sanity");
+        let swapped: Vec<u8> = [
+            &bytes[..first.start],
+            &bytes[second.clone()],
+            &bytes[first.clone()],
+            &bytes[second.end..],
+        ]
+        .concat();
+        assert_ne!(swapped, bytes);
+        bytes = swapped;
+        assert_eq!(decode(&bytes), Err(DecodeError::NotCanonical));
     }
 
     #[test]

@@ -84,6 +84,28 @@ fn digest_of(bytes: &[u8]) -> Digest {
     Digest::from_bytes(hash.into())
 }
 
+/// Whether `file`'s content is byte-identical to `expected`, comparing in 64 KiB chunks
+/// with an early exit — never holding more than one chunk of the file in memory.
+fn file_content_matches(file: &mut fs::File, expected: &[u8]) -> io::Result<bool> {
+    use io::Read as _;
+
+    if file.metadata()?.len() != expected.len() as u64 {
+        return Ok(false);
+    }
+    let mut buf = [0u8; 64 * 1024];
+    let mut offset = 0usize;
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            return Ok(offset == expected.len());
+        }
+        if expected.len() - offset < n || buf[..n] != expected[offset..offset + n] {
+            return Ok(false);
+        }
+        offset += n;
+    }
+}
+
 impl BlobStore {
     /// Open (creating if necessary) a blob store rooted at `root`.
     pub fn open(root: impl Into<PathBuf>) -> Result<Self, StoreError> {
@@ -108,13 +130,20 @@ impl BlobStore {
         let digest = digest_of(bytes);
         let path = self.path_for(&digest);
 
-        match fs::read(&path) {
-            Ok(existing) if existing == bytes => return Ok(digest),
-            Ok(existing) => {
-                return Err(StoreError::Corrupt {
-                    addressed: digest,
-                    actual: digest_of(&existing),
-                });
+        // Compare the existing blob against `bytes` in fixed-size chunks rather than
+        // `fs::read`ing it whole: a duplicate put of a large blob would otherwise hold two
+        // full copies in memory at once. The full read (to hash) happens only on the
+        // corruption path, which correct use of this API never reaches.
+        match fs::File::open(&path) {
+            Ok(mut existing) => {
+                return if file_content_matches(&mut existing, bytes)? {
+                    Ok(digest)
+                } else {
+                    Err(StoreError::Corrupt {
+                        addressed: digest,
+                        actual: digest_of(&fs::read(&path)?),
+                    })
+                };
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(e) => return Err(e.into()),

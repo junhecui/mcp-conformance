@@ -62,11 +62,27 @@ fn census() -> ExitCode {
     }
 }
 
+/// The optional `[sample_size]` argument, defaulting to 100 when absent. An argument that
+/// is *present but unparseable* is an error, not the default — silently running a
+/// 100-server sweep because of a typo in "1000" would spend an hour producing the wrong
+/// dataset.
+fn parse_sample_size() -> Result<usize, String> {
+    match std::env::args().nth(2) {
+        None => Ok(100),
+        Some(s) => s
+            .parse()
+            .map_err(|_| format!("invalid sample size `{s}` — expected a positive integer")),
+    }
+}
+
 fn census_stage1() -> ExitCode {
-    let sample_size: usize = std::env::args()
-        .nth(2)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(100);
+    let sample_size = match parse_sample_size() {
+        Ok(n) => n,
+        Err(e) => {
+            eprintln!("census-stage1: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     match xtask::census_stage1::run(sample_size) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -77,7 +93,13 @@ fn census_stage1() -> ExitCode {
 }
 
 fn probe_stage1() -> ExitCode {
-    let sample_size: usize = std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(100);
+    let sample_size = match parse_sample_size() {
+        Ok(n) => n,
+        Err(e) => {
+            eprintln!("probe-stage1: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     match xtask::probe_stage1::run(sample_size) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -88,10 +110,13 @@ fn probe_stage1() -> ExitCode {
 }
 
 fn census_stage2_class_a() -> ExitCode {
-    let sample_size: usize = std::env::args()
-        .nth(2)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(100);
+    let sample_size = match parse_sample_size() {
+        Ok(n) => n,
+        Err(e) => {
+            eprintln!("census-stage2-class-a: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     match xtask::class_a_stage2::run(sample_size) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

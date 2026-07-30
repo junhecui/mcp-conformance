@@ -12,6 +12,8 @@ use intake::catalogue::{self, IngestOutcome};
 use intake::classify::{self};
 use intake::registry::RegistryClient;
 
+use crate::census_stage1::pct;
+
 struct ServerRecord {
     name: Option<String>,
     class: ContainabilityClass,
@@ -88,8 +90,4 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("census: wrote {}", out_path.display());
 
     Ok(())
-}
-
-fn pct(count: usize, total: usize) -> f64 {
-    if total == 0 { 0.0 } else { 100.0 * count as f64 / total as f64 }
 }

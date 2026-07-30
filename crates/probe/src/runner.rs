@@ -98,7 +98,18 @@ pub fn probe_idempotent_hint(
 }
 
 fn invoke(client: &mut ProbeClient, tool_name: &str, arguments: Value) -> Result<(), ProbeError> {
-    client.call("tools/call", serde_json::json!({ "name": tool_name, "arguments": arguments }))?;
+    let result =
+        client.call("tools/call", serde_json::json!({ "name": tool_name, "arguments": arguments }))?;
+    // MCP routes *tool-level* failures through a successful JSON-RPC envelope with
+    // `isError: true` in the result, reserving JSON-RPC error objects for protocol-level
+    // problems. A tool that rejected its (placeholder — see `argsynth_min`) arguments this
+    // way did not run its effectful path, so treating the call as a successful invocation
+    // and then observing "no state change" would manufacture exactly the false `holds`
+    // design.md §8 names as the worst available failure mode. Both callers map this `Err`
+    // to `Ok(protocol::invocation_failed())` — an honest `unverifiable`.
+    if result.get("isError").and_then(Value::as_bool).unwrap_or(false) {
+        return Err(ProbeError::Protocol("tools/call result carried isError: true".into()));
+    }
     Ok(())
 }
 
@@ -191,6 +202,15 @@ mod tests {
     }
     fn tool_call_error(id: u64) -> serde_json::Value {
         with_id(serde_json::json!({"error": {"code": -32602, "message": "Invalid params"}}), id)
+    }
+    /// A *tool-level* failure: a successful JSON-RPC envelope whose result carries
+    /// `isError: true` — MCP's channel for "the tool ran and rejected/failed", distinct
+    /// from the JSON-RPC error object in [`tool_call_error`].
+    fn tool_call_is_error(id: u64) -> serde_json::Value {
+        with_id(
+            serde_json::json!({"result": {"content": [{"type": "text", "text": "bad args"}], "isError": true}}),
+            id,
+        )
     }
 
     fn target<'a>(endpoint: &'a str, schema: &'a Value) -> ProbeTarget<'a> {
@@ -286,6 +306,34 @@ mod tests {
 
         let schema = serde_json::json!({"type": "object"});
         let result = probe_read_only_hint(&target(&endpoint, &schema), true).expect("probe must still return Ok");
+        assert_eq!(result.outcome, Outcome::Unverifiable);
+        assert_eq!(result.reason, Some(ReasonCode("invocation_failed".to_string())));
+        server.join().expect("server thread");
+    }
+
+    /// The regression that motivated `invoke`'s `isError` check: a tool whose invocation
+    /// fails at the *tool* level (successful JSON-RPC envelope, `isError: true`) must land
+    /// on `unverifiable`/`invocation_failed`, never on `holds` — the unchanged after-state
+    /// proves nothing when the tool never ran its effectful path.
+    #[test]
+    fn read_only_hint_tool_level_is_error_is_unverifiable_not_holds() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let endpoint = format!("http://{}", listener.local_addr().expect("addr"));
+        // Only five responses: the run must stop at the failed invocation — if it read the
+        // after-state anyway, a sixth accept would hang this test.
+        let server = scripted_server(
+            listener,
+            vec![
+                init_response(0),
+                ack(),
+                resources_list(1, &["state://x"]),
+                resource_read(2, "same"),
+                tool_call_is_error(3),
+            ],
+        );
+
+        let schema = serde_json::json!({"type": "object"});
+        let result = probe_read_only_hint(&target(&endpoint, &schema), true).expect("probe");
         assert_eq!(result.outcome, Outcome::Unverifiable);
         assert_eq!(result.reason, Some(ReasonCode("invocation_failed".to_string())));
         server.join().expect("server thread");

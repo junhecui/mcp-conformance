@@ -23,6 +23,11 @@ const USER_AGENT: &str = concat!(
     " (annotation conformance research; read-only discovery; contact: see repository)"
 );
 
+/// Upper bound on one stdio JSON-RPC line. A `tools/list` response measured in megabytes
+/// is already extraordinary; past this it is indistinguishable from a deliberate
+/// memory-exhaustion attempt by a hostile server, and the read fails instead of buffering.
+const MAX_LINE_BYTES: usize = 10 * 1024 * 1024;
+
 /// One raw JSON-RPC response, exactly as received, before any parsing.
 ///
 /// P0-01: "the pin depends on this." These bytes ride untouched all the way out to
@@ -97,15 +102,34 @@ impl<R: Read, W: Write> StdioTransport<R, W> {
     }
 
     fn recv_line(&mut self) -> Result<Vec<u8>, DiscoveryError> {
-        let mut line = String::new();
-        let n = self.reader.read_line(&mut line).map_err(DiscoveryError::Io)?;
+        // Bounded read: the peer is assumed hostile (design.md §3), and an unbounded
+        // `read_line` would buffer however many bytes it streams without a newline
+        // straight into host memory. `Read::take` caps that at MAX_LINE_BYTES (+2 so a
+        // response of exactly the cap may still terminate with `\r\n`), matching the
+        // ~10 MiB bound the HTTP transport already gets from ureq's `read_to_vec` default.
+        // `read_until` instead of `read_line` also drops the UTF-8 requirement — these
+        // bytes are captured verbatim and validated as JSON downstream, not as a `String`.
+        let mut line = Vec::new();
+        let n = (&mut self.reader)
+            .take(MAX_LINE_BYTES as u64 + 2)
+            .read_until(b'\n', &mut line)
+            .map_err(DiscoveryError::Io)?;
         if n == 0 {
             return Err(DiscoveryError::Io(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "stdio transport closed before a response was received",
             )));
         }
-        Ok(line.trim_end_matches(['\n', '\r']).as_bytes().to_vec())
+        while line.last().is_some_and(|&b| b == b'\n' || b == b'\r') {
+            line.pop();
+        }
+        if line.len() > MAX_LINE_BYTES {
+            return Err(DiscoveryError::Io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("stdio response line exceeds the {MAX_LINE_BYTES}-byte cap"),
+            )));
+        }
+        Ok(line)
     }
 }
 
@@ -361,6 +385,44 @@ mod tests {
         assert_eq!(value["result"]["echo"], true);
 
         server.join().expect("server thread must not panic");
+    }
+
+    /// A hostile peer streaming an over-cap "line" must produce a bounded error, not an
+    /// unbounded buffer. The writer thread sends MAX_LINE_BYTES + 16 bytes with no newline
+    /// and then closes; the reader must reject it at the cap.
+    #[test]
+    fn stdio_transport_rejects_a_line_exceeding_the_byte_cap() {
+        use std::os::unix::net::UnixStream;
+        use std::thread;
+
+        let (client_side, server_side) = UnixStream::pair().expect("socket pair");
+        let flooder = thread::spawn(move || {
+            let mut writer = &server_side;
+            let mut reader = BufReader::new(server_side.try_clone().expect("clone"));
+            let mut request = String::new();
+            reader.read_line(&mut request).expect("read request");
+            let chunk = vec![b'a'; 64 * 1024];
+            let mut sent = 0usize;
+            while sent < MAX_LINE_BYTES + 16 {
+                // A write error is the expected end state, not a failure: the reader stops
+                // consuming at the cap and closes its end, so a blocked flood write gets
+                // EPIPE. `expect`ing success here would deadlock — reader done, writer
+                // blocked forever on a full socket buffer, test stuck in join().
+                if writer.write_all(&chunk).is_err() {
+                    break;
+                }
+                sent += chunk.len();
+            }
+            // No newline, ever — the connection just closes.
+        });
+
+        let mut transport =
+            StdioTransport::new(client_side.try_clone().expect("clone"), client_side);
+        let err = transport.call("ping", Value::Null).expect_err("flood must be rejected");
+        assert!(matches!(err, DiscoveryError::Io(_)));
+        // Close both fds so a flooder still blocked in write() is woken with EPIPE.
+        drop(transport);
+        flooder.join().expect("flooder thread");
     }
 
     #[test]

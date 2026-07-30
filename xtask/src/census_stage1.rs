@@ -191,7 +191,9 @@ pub fn run(sample_size: usize) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn tally_json(tally: &coverage::AnnotationTally) -> serde_json::Value {
+/// `pub(crate)` like [`stable_hash`]: `class_a_stage2` writes the same output shape and
+/// must not drift into a subtly different one.
+pub(crate) fn tally_json(tally: &coverage::AnnotationTally) -> serde_json::Value {
     fn one(t: coverage::Tally) -> serde_json::Value {
         serde_json::json!({ "explicit": t.explicit, "defaulted": t.defaulted, "absent": t.absent })
     }
@@ -203,6 +205,6 @@ fn tally_json(tally: &coverage::AnnotationTally) -> serde_json::Value {
     })
 }
 
-fn pct(count: usize, total: usize) -> f64 {
+pub(crate) fn pct(count: usize, total: usize) -> f64 {
     if total == 0 { 0.0 } else { 100.0 * count as f64 / total as f64 }
 }

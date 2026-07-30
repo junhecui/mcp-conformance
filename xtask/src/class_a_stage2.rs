@@ -26,6 +26,12 @@ use intake::catalogue::{self, IngestOutcome, ResolvedTarget};
 use intake::classify;
 use intake::registry::RegistryClient;
 
+// Shared with the other sweeps rather than re-derived: sampling comparability across
+// Stage 1 / Stage 2 / Track B depends on all of them selecting by the *same* stable hash,
+// and the output shape staying identical is what lets the result files be read side by
+// side. One definition each, in `census_stage1`.
+use crate::census_stage1::{pct, stable_hash, tally_json};
+
 /// Pre-pulled once before the sweep, not per server — a multi-hundred-MB base image
 /// re-downloaded on every npm/pypi candidate would dominate sweep time for no reason.
 /// `docker pull` of an already-cached image is fast, so re-running this xtask doesn't
@@ -177,16 +183,6 @@ fn attempt(candidate: &Candidate, container_name: &str) -> Attempt {
     result
 }
 
-/// Deterministically hash `name` into a `u64` — same rationale and construction as
-/// `census_stage1::stable_hash`: `DefaultHasher`'s keys are fixed, so this is stable across
-/// runs and processes, unlike `HashMap`'s randomised `RandomState`.
-fn stable_hash(name: &str) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    name.hash(&mut hasher);
-    hasher.finish()
-}
-
 /// Best-effort pre-pull of the two wrapper base images, once, before the sweep. Failure here
 /// is not fatal to the run — npm/pypi attempts against an unpulled image would simply pull
 /// on first use and pay the cost per-attempt instead of up front — but pre-pulling keeps
@@ -331,18 +327,3 @@ pub fn run(sample_size: usize) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn tally_json(tally: &coverage::AnnotationTally) -> serde_json::Value {
-    fn one(t: coverage::Tally) -> serde_json::Value {
-        serde_json::json!({ "explicit": t.explicit, "defaulted": t.defaulted, "absent": t.absent })
-    }
-    serde_json::json!({
-        "readOnlyHint": one(tally.read_only_hint),
-        "destructiveHint": one(tally.destructive_hint),
-        "idempotentHint": one(tally.idempotent_hint),
-        "openWorldHint": one(tally.open_world_hint),
-    })
-}
-
-fn pct(count: usize, total: usize) -> f64 {
-    if total == 0 { 0.0 } else { 100.0 * count as f64 / total as f64 }
-}
