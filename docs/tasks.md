@@ -3073,6 +3073,41 @@ guarded crates); `cargo xtask first-verdict` re-ran with no regression.
 **Depends on:** Q-01
 **Exit:** Labelled set with documented labelling protocol and inter-rater agreement.
 
+**Status: Partial — infrastructure built, disclosed rather than marked Done, because the
+exit criterion literally cannot be met by code alone.** The labelling protocol is written
+(`docs/labelling_protocol.md`): what gets shown to a rater (a tool's name/description/
+arguments, treated as untrusted text, plus Q-01's own mechanical partition of the observed
+changeset — never the tool's own declared `destructiveHint`, to avoid anchoring), the label
+set (`Destructive`/`Additive`/`Ambiguous` — three categories, not two, so "I can't tell" is
+its own recorded outcome rather than a forced binary guess), held-out-set construction
+(stratified by containability class and by Q-01's own partition shape, ≥100 items
+recommended), rater count and independence (at least two, no conferring before both submit),
+and exactly how disagreement is handled (a third-party adjudication may produce a final
+label for later use, but the reported agreement statistic is always computed from the two
+raters' independent submissions *before* adjudication — resolving a disagreement first and
+scoring afterward would make the number describe the adjudication, not the raters).
+
+`destructive::cohens_kappa` (`crates/destructive/src/agreement.rs`) is the statistic
+`docs/labelling_protocol.md` specifies, built and tested against a worked confusion-matrix
+example checked by hand (`p_o = 0.85`, `p_e = 0.6`, `κ = 0.625`, matched to 1e-9), plus
+perfect-agreement, chance-level-agreement, three-category, and degenerate-input cases.
+Generic over the label type rather than hardcoded to this task's own three categories, so
+Q-04's "agreement between mechanical proxy, model classification, and human labels" can call
+the same function pairwise for each of its three comparisons rather than needing a second
+statistic built solely for Q-02.
+
+**What remains, and cannot be built by writing more code:** the actual labelled set itself.
+That requires real, independent human raters reading real held-out items and forming real
+judgements — fabricating "labels" or an "agreement number" here would misrepresent a real
+empirical claim as one this project never actually made, which is exactly the kind of
+padding every other result in `results/` has gone out of its way to avoid. This task stays
+open rather than closed until that labelling actually happens.
+
+`destructive` grew from 5 to 12 tests (7 new, all for `cohens_kappa`). `cargo build
+--workspace --all-targets`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo
+xtask purity`, and `cargo test --workspace` all pass clean; `cargo xtask first-verdict`
+re-ran with no regression.
+
 ### Q-03 Model classifier — untrusted input
 
 **Depends on:** Q-02
