@@ -212,8 +212,7 @@ fn get_link_index(router: &NlRouter, name: &str) -> Result<libc::c_int, NetnsErr
                 .rtattrs()
                 .get_attr_handle()
                 .get_attr_payload_as_with_len_borrowed::<&str>(Ifla::Ifname)
-                .map(|n| n.trim_end_matches('\0') == name)
-                .unwrap_or_default();
+                .is_ok_and(|n| n.trim_end_matches('\0') == name);
             if matches {
                 found = Some(*if_info.ifi_index());
             }
@@ -432,7 +431,7 @@ fn run_iptables(args: &[&str]) -> Result<(), NetnsError> {
     let status = Command::new("iptables").args(args).status()?;
     if !status.success() {
         return Err(NetnsError::IptablesFailed {
-            args: args.iter().map(|s| s.to_string()).collect(),
+            args: args.iter().copied().map(str::to_string).collect(),
             status,
         });
     }

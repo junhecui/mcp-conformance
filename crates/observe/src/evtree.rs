@@ -278,11 +278,11 @@ fn decode_entry(cursor: &mut Cursor<'_>) -> Result<datamodel::EvidenceEntry, Dec
 /// minor number sit in the low 32 bits of `dev_t` (interleaved with each other), and the
 /// remaining high bits of each sit above bit 32. This is the standard glibc encoding used
 /// across current Linux distributions.
-fn device_major(rdev: u64) -> u32 {
+const fn device_major(rdev: u64) -> u32 {
     (((rdev >> 8) & 0xfff) | ((rdev >> 32) & !0xfff)) as u32
 }
 
-fn device_minor(rdev: u64) -> u32 {
+const fn device_minor(rdev: u64) -> u32 {
     ((rdev & 0xff) | ((rdev >> 12) & !0xff)) as u32
 }
 
@@ -505,15 +505,11 @@ mod tests {
                 pos += 8 + value_len;
             }
             match type_tag {
-                TYPE_REGULAR => {
-                    let size = u64::from_be_bytes(bytes[pos..pos + 8].try_into().unwrap())
-                        as usize;
-                    pos += 8 + size;
-                }
-                TYPE_SYMLINK => {
-                    let target_len =
-                        u64::from_be_bytes(bytes[pos..pos + 8].try_into().unwrap()) as usize;
-                    pos += 8 + target_len;
+                // Both wire shapes are a length-prefixed byte blob (file content, symlink
+                // target) — same length-then-skip encoding, so the same arm handles both.
+                TYPE_REGULAR | TYPE_SYMLINK => {
+                    let len = u64::from_be_bytes(bytes[pos..pos + 8].try_into().unwrap()) as usize;
+                    pos += 8 + len;
                 }
                 _ => {}
             }

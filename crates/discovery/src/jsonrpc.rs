@@ -52,12 +52,14 @@ pub(crate) struct ResponseEnvelope {
 
 /// Encode a JSON-RPC 2.0 request. `method` is taken as-is — this function places no
 /// restriction on it; see the module doc comment for where that restriction actually lives.
+#[must_use]
 pub fn encode_request(id: u64, method: &str, params: Value) -> Vec<u8> {
     serde_json::to_vec(&Request { jsonrpc: JSONRPC_VERSION, id, method, params })
         .expect("a JSON-RPC request over Value params always serialises")
 }
 
 /// Encode a JSON-RPC 2.0 notification (no `id`, no response expected).
+#[must_use]
 pub fn encode_notification(method: &str, params: Value) -> Vec<u8> {
     serde_json::to_vec(&Notification { jsonrpc: JSONRPC_VERSION, method, params })
         .expect("a JSON-RPC notification over Value params always serialises")

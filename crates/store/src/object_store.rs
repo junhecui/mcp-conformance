@@ -3,7 +3,7 @@
 //! either without caring which; [`HttpObjectStore`] is the new half.
 //!
 //! `HttpObjectStore` speaks the one HTTP contract every S3-compatible object store — S3
-//! itself, GCS's XML API, MinIO, Ceph RGW — exposes over a bucket endpoint: `PUT
+//! itself, `GCS`'s XML API, `MinIO`, Ceph RGW — exposes over a bucket endpoint: `PUT
 //! {base_url}/{key}` to write an object, `GET {base_url}/{key}` to read one back, `HEAD
 //! {base_url}/{key}` to check existence without transferring the body. This environment has
 //! no real cloud bucket or credentials to verify against (disclosed, not glossed over: the
@@ -16,7 +16,7 @@
 //! detection included. Wiring the same client at an actual S3-compatible endpoint is a
 //! configuration change (a different `base_url`), not a code change — the contract this
 //! module implements against is the generic one every one of those services already
-//! supports, not anything MinIO- or AWS-specific.
+//! supports, not anything `MinIO`- or AWS-specific.
 
 use std::io::Read as _;
 
@@ -274,7 +274,7 @@ mod tests {
     /// that `orchestrator` can be handed either implementation.
     #[test]
     fn blob_store_satisfies_the_object_store_trait() {
-        fn assert_is_object_store<T: ObjectStore>(_: &T) {}
+        const fn assert_is_object_store<T: ObjectStore>(_: &T) {}
 
         let dir = tempfile::tempdir().expect("tempdir");
         let store = BlobStore::open(dir.path()).expect("open store");

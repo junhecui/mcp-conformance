@@ -114,20 +114,17 @@ fn run_slot(
     let worker_id = format!("slot-{slot}");
 
     while finished.load(Ordering::SeqCst) < target {
-        match queue.lease(&worker_id, lease)? {
-            Some(job) => {
-                match handler(&job.payload) {
-                    JobOutcome::Completed => queue.complete(job.job_id)?,
-                    JobOutcome::Failed => queue.fail(job.job_id)?,
-                }
-                finished.fetch_add(1, Ordering::SeqCst);
+        if let Some(job) = queue.lease(&worker_id, lease)? {
+            match handler(&job.payload) {
+                JobOutcome::Completed => queue.complete(job.job_id)?,
+                JobOutcome::Failed => queue.fail(job.job_id)?,
             }
-            None => {
-                if finished.load(Ordering::SeqCst) >= target {
-                    break;
-                }
-                thread::sleep(Duration::from_millis(10));
+            finished.fetch_add(1, Ordering::SeqCst);
+        } else {
+            if finished.load(Ordering::SeqCst) >= target {
+                break;
             }
+            thread::sleep(Duration::from_millis(10));
         }
     }
     Ok(())

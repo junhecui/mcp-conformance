@@ -65,7 +65,8 @@ fn parse_tools(tools_list_raw: &[u8]) -> Result<Vec<ToolEntry>, Box<dyn std::err
         .into_iter()
         .filter_map(|t| {
             let name = t.get("name")?.as_str()?.to_string();
-            let input_schema = t.get("inputSchema").cloned().unwrap_or(Value::Object(Default::default()));
+            let input_schema =
+                t.get("inputSchema").cloned().unwrap_or_else(|| Value::Object(serde_json::Map::default()));
             let annotations = t.get("annotations").cloned().unwrap_or(Value::Null);
             Some(ToolEntry { name, input_schema, annotations })
         })

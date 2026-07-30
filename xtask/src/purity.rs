@@ -58,6 +58,7 @@ impl std::fmt::Display for Violation {
 /// Pure function over an already-collected closure, so the rule is testable against
 /// synthetic graphs without breaking the real build. A crate is always allowed to appear in
 /// its own closure.
+#[must_use]
 pub fn check_closure(pure_crate: &str, closure: &[String], allowlist: &[&str]) -> Vec<Violation> {
     let permitted: BTreeSet<&str> = allowlist.iter().copied().chain([pure_crate]).collect();
     let mut violations: Vec<Violation> = closure
@@ -97,6 +98,7 @@ pub fn dependency_closure(pkg: &str) -> Result<Vec<String>, String> {
 ///
 /// Lines look like `verdict v0.1.0 (/path/to/crate)`, sometimes suffixed `(*)` where cargo
 /// has deduplicated a subtree. Section headers such as `[build-dependencies]` are skipped.
+#[must_use]
 pub fn parse_tree(stdout: &str) -> Vec<String> {
     let mut seen = BTreeSet::new();
     for line in stdout.lines() {

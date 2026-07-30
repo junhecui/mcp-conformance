@@ -510,8 +510,9 @@ fn run_sandboxed_init(
                 match waitpid(real_target, None) {
                     Ok(WaitStatus::Exited(_, code)) => unsafe { libc::_exit(code) },
                     Ok(WaitStatus::Signaled(_, sig, _)) => unsafe { libc::_exit(128 + sig as i32) },
-                    Ok(_) => continue, // stopped/continued — not terminal; keep waiting
-                    Err(nix::Error::EINTR) => continue,
+                    // Ok(_): stopped/continued, not terminal. Err(EINTR): waitpid itself was
+                    // interrupted by a signal. Neither ends the loop; keep waiting either way.
+                    Ok(_) | Err(nix::Error::EINTR) => continue,
                     Err(_) => unsafe { libc::_exit(1) },
                 }
             }
@@ -915,6 +916,7 @@ except OSError as e:
         build_trivial_lower(lower_dir.path());
         let scratch = tempfile::tempdir().expect("tempdir");
 
+        #[allow(clippy::literal_string_with_formatting_args)] // embedded Python source (an f-string), not a Rust format string
         let script = "\
 import ctypes, os
 libc = ctypes.CDLL(None, use_errno=True)

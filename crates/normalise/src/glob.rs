@@ -47,16 +47,16 @@ fn match_segments(pattern: &[&[u8]], path: &[&[u8]]) -> bool {
 /// Anything after a second `*`, if a pattern ever had one, is treated as a literal —
 /// unneeded by any ruleset v1 pattern, and documented here rather than silently mishandled.
 fn segment_match(pattern_segment: &[u8], candidate: &[u8]) -> bool {
-    match pattern_segment.iter().position(|&b| b == b'*') {
-        None => pattern_segment == candidate,
-        Some(star_index) => {
+    pattern_segment.iter().position(|&b| b == b'*').map_or_else(
+        || pattern_segment == candidate,
+        |star_index| {
             let prefix = &pattern_segment[..star_index];
             let suffix = &pattern_segment[star_index + 1..];
             candidate.len() >= prefix.len() + suffix.len()
                 && candidate.starts_with(prefix)
                 && candidate.ends_with(suffix)
-        }
-    }
+        },
+    )
 }
 
 #[cfg(test)]

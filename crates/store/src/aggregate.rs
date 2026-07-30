@@ -355,13 +355,13 @@ pub fn to_report_rows(rows: &[AggregateRow]) -> Vec<ReportRow> {
 mod tests {
     use super::*;
 
-    fn record(
+    const fn record(
         annotation: Annotation,
         containability_class: ContainabilityClass,
         oracle: Oracle,
         outcome: Outcome,
     ) -> VerdictSummary {
-        VerdictSummary { annotation, containability_class, oracle, outcome }
+        VerdictSummary { annotation, oracle, outcome, containability_class }
     }
 
     fn sample_records() -> Vec<VerdictSummary> {

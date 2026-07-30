@@ -273,11 +273,13 @@ pub fn run_arm_2r(
 }
 
 /// Test-only support shared across this crate's other test modules (`crate::noise`'s tests,
-/// notably) — `pub(crate)` rather than nested inside `mod tests` below specifically so a
+/// notably) — a separate module rather than nested inside `mod tests` below specifically so a
 /// sibling module's own `#[cfg(test)]` code can reuse the same stub server and sandbox-slot
-/// discipline instead of duplicating it.
+/// discipline instead of duplicating it. `pub`, not `pub(crate)`: this module is private
+/// (`mod arms;`, not `pub mod arms;`), so the two are equally invisible outside the crate —
+/// `pub` here is simply what that already-imposed boundary makes the simpler spelling.
 #[cfg(test)]
-pub(crate) mod tests_support {
+pub mod tests_support {
     use super::{ArmProgram, ArmRun};
     use sandbox::{EntryKind, EntrySpec};
     use serde_json::json;
@@ -297,7 +299,7 @@ pub(crate) mod tests_support {
     /// itself documents rather than accidentally violating it.
     static SANDBOX_SLOT: Mutex<()> = Mutex::new(());
 
-    pub(crate) fn take_sandbox_slot() -> std::sync::MutexGuard<'static, ()> {
+    pub fn take_sandbox_slot() -> std::sync::MutexGuard<'static, ()> {
         SANDBOX_SLOT.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
@@ -332,7 +334,7 @@ while IFS= read -r line; do
 done
 ";
 
-    pub(crate) fn build_stub_base_layer(root: &Path) {
+    pub fn build_stub_base_layer(root: &Path) {
         let entries = vec![EntrySpec {
             path: PathBuf::from("stub_server.sh"),
             kind: EntryKind::File(STUB_SERVER_SCRIPT.to_vec()),
@@ -341,7 +343,7 @@ done
         sandbox::build(root, &entries).expect("build stub base layer");
     }
 
-    pub(crate) fn stub_program(base_layer: &Path) -> ArmProgram {
+    pub fn stub_program(base_layer: &Path) -> ArmProgram {
         ArmProgram {
             base_layer: base_layer.to_path_buf(),
             program: PathBuf::from("/bin/sh"),
@@ -352,7 +354,7 @@ done
         }
     }
 
-    pub(crate) fn effect_lines(run: &ArmRun) -> usize {
+    pub fn effect_lines(run: &ArmRun) -> usize {
         assert!(
             run.evidence.entries.iter().any(|e| e.path == b"effect.txt"),
             "the decoded changeset must list effect.txt as a real captured entry, not just a \

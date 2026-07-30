@@ -1,8 +1,8 @@
 //! Metadata DB (F-06): `SERVER`, `TOOL_SNAPSHOT`, `RUN`, `INTEGRITY`, `EVIDENCE`,
 //! `VERDICT`, `RULESET`, `FIXTURE` — architecture.md §6.
 //!
-//! SQLite via `rusqlite`'s `bundled` feature, so the schema is reproducible across hosts
-//! regardless of the system's installed SQLite version — the same posture ADR-007 already
+//! `SQLite` via `rusqlite`'s `bundled` feature, so the schema is reproducible across hosts
+//! regardless of the system's installed `SQLite` version — the same posture ADR-007 already
 //! applies to the Rust toolchain, and F-05 applies to the evidence blob store.
 //!
 //! Migrations are `include_str!`'d rather than read from disk at runtime: the harness must
@@ -30,13 +30,13 @@ const MIGRATIONS: &[(&str, &str)] = &[
 
 /// Open a metadata DB at `path` (or `":memory:"`) and apply any pending migrations.
 ///
-/// Foreign keys are off by default in SQLite for backward-compatibility reasons that don't
+/// Foreign keys are off by default in `SQLite` for backward-compatibility reasons that don't
 /// apply here; this turns them on for every connection this function returns, since half
 /// the point of this schema is the FK graph in architecture.md §6.
 ///
 /// Also sets a 5-second busy timeout: P5-01's `run_queue` is the first table in this schema
 /// meant to be opened from several independent connections (one per worker-pool slot)
-/// against the same on-disk file at once. SQLite's default is to fail a write immediately
+/// against the same on-disk file at once. `SQLite`'s default is to fail a write immediately
 /// with `SQLITE_BUSY` when another connection holds the write lock; a busy timeout makes a
 /// second writer retry internally instead, which is what turns "two workers raced to lease
 /// a job" into "one waits a few milliseconds," not a spurious error.
@@ -751,7 +751,7 @@ pub fn enqueue_job(conn: &Connection, payload: &str, created_at: &str) -> rusqli
 /// crate nests a second transaction inside this one), while avoiding a real, empirically
 /// reproduced bug `IMMEDIATE` exists specifically to prevent: two `DEFERRED` transactions
 /// that both read (acquiring a `SHARED` lock) before attempting to write race to *upgrade*
-/// to a write lock, and SQLite fails that upgrade with `SQLITE_BUSY` outright rather than
+/// to a write lock, and `SQLite` fails that upgrade with `SQLITE_BUSY` outright rather than
 /// retrying it — `busy_timeout` never gets a chance to help, because the race is over the
 /// upgrade itself, not over acquiring an already-`RESERVED` lock. `IMMEDIATE` takes the
 /// write lock up front, before the `SELECT`, so there is no upgrade left to race.
@@ -887,7 +887,7 @@ mod tests {
     }
 
     /// Re-running migrations against the same on-disk DB must not error and must not
-    /// re-apply the migration (proven via the schema_migrations row count, not just "no
+    /// re-apply the migration (proven via the `schema_migrations` row count, not just "no
     /// error" — an idempotent no-op and a silently-ignored duplicate-key error look the
     /// same from "it didn't crash" alone).
     #[test]
@@ -909,7 +909,7 @@ mod tests {
         );
     }
 
-    /// Seeds a minimal, valid server -> tool_snapshot -> run chain so FK-dependent tests
+    /// Seeds a minimal, valid `server -> tool_snapshot -> run` chain so FK-dependent tests
     /// don't each have to repeat the setup.
     fn seed_run(conn: &Connection) {
         conn.execute_batch(
@@ -1424,7 +1424,7 @@ mod tests {
     }
 
     /// The mutual-exclusion property the whole worker pool depends on, proven against real
-    /// concurrent SQLite connections rather than assumed from reading the SQL: many real OS
+    /// concurrent `SQLite` connections rather than assumed from reading the SQL: many real OS
     /// threads, each with its own connection to the same on-disk database file (not
     /// `:memory:` — separate connections to `:memory:` are separate, isolated databases, so
     /// this specific race could only ever be observed against a real shared file), race to

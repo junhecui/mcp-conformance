@@ -321,14 +321,16 @@ fn measure_one_tool(
         Ok((call_result, post_response_anomaly)) => ToolMeasurement {
             name,
             mock_sufficient: true,
-            detail: match post_response_anomaly {
-                None => format!("completed: {call_result}"),
-                Some(anomaly) => format!(
-                    "completed: {call_result} (note: {anomaly} — a known background-timer \
-                     tool class, not a mock-insufficiency signal; see this module's own doc \
-                     comment)"
-                ),
-            },
+            detail: post_response_anomaly.map_or_else(
+                || format!("completed: {call_result}"),
+                |anomaly| {
+                    format!(
+                        "completed: {call_result} (note: {anomaly} — a known background-timer \
+                         tool class, not a mock-insufficiency signal; see this module's own doc \
+                         comment)"
+                    )
+                },
+            ),
         },
         Err(e) => ToolMeasurement { name, mock_sufficient: false, detail: e.to_string() },
     })

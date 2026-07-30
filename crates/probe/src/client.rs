@@ -115,7 +115,7 @@ impl ProbeClient {
         Ok(version)
     }
 
-    fn notify(&mut self, method: &str, params: Value) -> Result<(), ProbeError> {
+    fn notify(&self, method: &str, params: Value) -> Result<(), ProbeError> {
         let body = encode_notification(method, params);
         self.post(&body)?;
         Ok(())

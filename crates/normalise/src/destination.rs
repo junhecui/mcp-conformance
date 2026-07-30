@@ -82,7 +82,7 @@ mod tests {
 
     const BRIDGE: Ipv4Network = Ipv4Network::new([10, 200, 0, 0], 30);
 
-    fn destination(address: [u8; 4], port: u16) -> ObservedDestination {
+    const fn destination(address: [u8; 4], port: u16) -> ObservedDestination {
         ObservedDestination::new(address, port)
     }
 

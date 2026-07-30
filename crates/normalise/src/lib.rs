@@ -122,8 +122,7 @@ mod tests {
                 .entries
                 .iter()
                 .find(|e| e.path == path.as_bytes())
-                .map(|e| e.taxonomy)
-                .unwrap_or_else(|| panic!("{path} missing from changeset"))
+                .map_or_else(|| panic!("{path} missing from changeset"), |e| e.taxonomy)
         };
         assert_eq!(taxonomy_of("home/user/document.txt"), PathTaxonomy::UserState);
         assert_eq!(taxonomy_of("tmp/scratch.txt"), PathTaxonomy::Ephemeral);

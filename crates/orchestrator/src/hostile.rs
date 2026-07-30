@@ -144,7 +144,7 @@ pub fn run_hostile_script(
     let seccomp_audit = SeccompAudit::start()?;
 
     let spec = SandboxSpec {
-        overlay: overlay.clone(),
+        overlay,
         program: PathBuf::from("/usr/local/bin/python3"),
         args: vec!["-c".to_string(), script.to_string()],
         timeout,
@@ -220,6 +220,11 @@ mod tests {
 
         const SYS_PTRACE: i64 = 101; // x86_64 SYS_ptrace
         const FORK_ATTEMPTS: u32 = 50;
+        // Embedded Python source below trips clippy::literal_string_with_formatting_args on
+        // its own `key=value` call-argument syntax (e.g. `flush=True`), which merely
+        // resembles a Rust format specifier; the real `{SYS_PTRACE}`/`{FORK_ATTEMPTS}`
+        // interpolations are genuine and already exercised by this test.
+        #[allow(clippy::literal_string_with_formatting_args)]
         let script = format!(
             "\
 import sys, os, socket, ctypes, time

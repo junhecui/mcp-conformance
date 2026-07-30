@@ -105,11 +105,11 @@ const DENIED_SYSCALLS: &[i64] = &[
     libc::SYS_reboot,
 ];
 
-fn stmt(code: u16, k: u32) -> libc::sock_filter {
+const fn stmt(code: u16, k: u32) -> libc::sock_filter {
     libc::sock_filter { code, jt: 0, jf: 0, k }
 }
 
-fn jump(code: u16, k: u32, jt: u8, jf: u8) -> libc::sock_filter {
+const fn jump(code: u16, k: u32, jt: u8, jf: u8) -> libc::sock_filter {
     libc::sock_filter { code, jt, jf, k }
 }
 
@@ -161,7 +161,7 @@ fn build_program() -> Vec<libc::sock_filter> {
 /// way to reach it. `prctl(PR_SET_NO_NEW_PRIVS)` similarly has no typed wrapper for this
 /// exact operation in `nix` at the version this crate depends on.
 #[allow(unsafe_code)]
-pub(crate) fn install_escape_class_denylist() -> Result<(), io::Error> {
+pub fn install_escape_class_denylist() -> Result<(), io::Error> {
     // SAFETY: `PR_SET_NO_NEW_PRIVS` takes no pointer arguments; the trailing zeros are
     // ignored by the kernel for this operation. Required (independent of this process's
     // actual capability set) before an unprivileged seccomp filter install is permitted at

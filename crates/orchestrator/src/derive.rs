@@ -182,12 +182,11 @@ pub fn derive_all_read_only_hint_verdicts(
         slots,
         Duration::from_secs(60),
         move |payload: &str| {
-            match derive_one(&db_path_for_handler, &blob_store_root, &ruleset, payload) {
-                Ok(()) => JobOutcome::Completed,
-                Err(()) => {
-                    failed_for_handler.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    JobOutcome::Failed
-                }
+            if derive_one(&db_path_for_handler, &blob_store_root, &ruleset, payload).is_ok() {
+                JobOutcome::Completed
+            } else {
+                failed_for_handler.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                JobOutcome::Failed
             }
         },
     )?;
@@ -272,7 +271,7 @@ mod tests {
         observe::evtree::capture(upper.path()).expect("capture")
     }
 
-    /// Writes a real server/tool_snapshot/run/evidence chain by hand, with a real
+    /// Writes a real `server`/`tool_snapshot`/`run`/`evidence` chain by hand, with a real
     /// `evtree1` capture stored in a real `BlobStore` — standing in for "P1-04's harvest
     /// already ran and wrote this," so this test proves the batch job's own
     /// storage-to-verdict pipeline, not a live run.

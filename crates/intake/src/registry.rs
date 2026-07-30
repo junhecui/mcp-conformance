@@ -2,7 +2,7 @@
 //! (<https://registry.modelcontextprotocol.io>) so [`crate::catalogue::ingest`] has
 //! something to ingest.
 //!
-//! Read-only GET requests only, paginated per the registry's own OpenAPI spec
+//! Read-only GET requests only, paginated per the registry's own `OpenAPI` spec
 //! (`cursor`/`limit` query parameters; `{"servers": [...], "metadata": {"nextCursor": ...}}`
 //! response shape, verified against the live spec rather than assumed). No authentication
 //! is required or attempted — every request carries a `User-Agent` identifying this harness
@@ -130,7 +130,7 @@ impl RegistryClient {
     /// instance) can stop as soon as it has enough, rather than scanning every remaining
     /// page in the registry for no reason.
     ///
-    /// `delay_between_pages` is a voluntary politeness pause — the registry's OpenAPI spec
+    /// `delay_between_pages` is a voluntary politeness pause — the registry's `OpenAPI` spec
     /// documents no rate limit, so this is a courtesy, not a measured requirement. Pass
     /// [`Duration::ZERO`] in tests.
     pub fn fetch_all(
@@ -254,12 +254,10 @@ mod tests {
 
         // Prove the extracted bytes are exactly what catalogue::ingest expects.
         let outcome = crate::catalogue::ingest(&page.entries_raw[0]);
-        match outcome {
-            crate::catalogue::IngestOutcome::Resolved(server) => {
-                assert_eq!(server.name, "io.example/one");
-            }
-            other => panic!("expected Resolved, got {other:?}"),
-        }
+        let crate::catalogue::IngestOutcome::Resolved(server) = outcome else {
+            panic!("expected Resolved, got {outcome:?}");
+        };
+        assert_eq!(server.name, "io.example/one");
     }
 
     #[test]

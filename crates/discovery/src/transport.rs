@@ -1,8 +1,9 @@
-//! Transport implementations. `pub(crate)` throughout — this is the structural half of
-//! P0-01's "must not call any tool": [`Transport::call`] takes an arbitrary method string,
-//! and nothing outside this crate can name the trait to reach it. [`crate::DiscoveryClient`]
-//! is the only public door in, and it only ever calls `call`/`notify` with the three MCP
-//! method names literal in `client.rs`.
+//! Transport implementations. This module (`mod transport;`, not `pub mod transport;`) is
+//! itself private, which is the structural half of P0-01's "must not call any tool":
+//! [`Transport::call`] takes an arbitrary method string, and nothing outside this crate can
+//! name the trait to reach it, regardless of the `pub` visibility its items carry inside this
+//! already-sealed module. [`crate::DiscoveryClient`] is the only public door in, and it only
+//! ever calls `call`/`notify` with the three MCP method names literal in `client.rs`.
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -28,11 +29,11 @@ const USER_AGENT: &str = concat!(
 /// [`crate::Discovery`], alongside — never instead of — whatever gets parsed out of them
 /// to route the response.
 #[derive(Debug)]
-pub(crate) struct RawResponse {
+pub struct RawResponse {
     pub bytes: Vec<u8>,
 }
 
-pub(crate) trait Transport {
+pub trait Transport {
     fn call(&mut self, method: &str, params: Value) -> Result<RawResponse, DiscoveryError>;
     fn notify(&mut self, method: &str, params: Value) -> Result<(), DiscoveryError>;
 
@@ -77,7 +78,7 @@ fn decode_and_validate(bytes: &[u8], expected_id: u64) -> Result<RawResponse, Di
 /// Generic over `Read`/`Write` so tests can drive it over an in-process `UnixStream` pair
 /// instead of a real subprocess; [`ChildProcessTransport`] below is what production code
 /// actually constructs.
-pub(crate) struct StdioTransport<R, W> {
+pub struct StdioTransport<R, W> {
     reader: BufReader<R>,
     writer: W,
     next_id: u64,
@@ -126,7 +127,7 @@ impl<R: Read, W: Write> Transport for StdioTransport<R, W> {
 /// gets reaped on drop instead of left as a zombie or orphan. Matters at census scale: a
 /// discovery target that never exits on its own must not accumulate across a run of
 /// thousands of servers.
-pub(crate) struct ChildProcessTransport {
+pub struct ChildProcessTransport {
     child: Child,
     inner: StdioTransport<ChildStdout, ChildStdin>,
 }
@@ -208,7 +209,7 @@ impl Drop for ChildProcessTransport {
 /// get a `Content-Type: application/json` body back. A server that upgrades to
 /// `text/event-stream` gets a clear [`DiscoveryError::Protocol`] rather than silent
 /// mishandling — SSE support is out of scope for P0-01's thinnest path.
-pub(crate) struct HttpTransport {
+pub struct HttpTransport {
     endpoint: String,
     agent: ureq::Agent,
     next_id: u64,

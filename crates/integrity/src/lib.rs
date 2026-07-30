@@ -92,7 +92,7 @@ pub enum GateOutcome {
 /// the diagram would reach, never a blend and never whichever field this function happened
 /// to check last.
 #[must_use]
-pub fn decide(signals: RunSignals) -> GateOutcome {
+pub const fn decide(signals: RunSignals) -> GateOutcome {
     if signals.containment_uncertain {
         return GateOutcome::Unverifiable(ReasonCode::ContainmentUncertain);
     }

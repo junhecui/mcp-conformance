@@ -247,12 +247,12 @@ pub fn run() -> Result<(), RulesetV2Error> {
     let corpus_large_enough_to_remove_anything = per_tool_noise.len() >= MIN_CORPUS_SIZE_TO_ACT_ON_REMOVAL;
 
     let mut v2_ephemeral = if corpus_large_enough_to_remove_anything {
-        kept_ephemeral.clone()
+        kept_ephemeral
     } else {
         v1.ephemeral_globs.clone()
     };
     let mut v2_server_internal = if corpus_large_enough_to_remove_anything {
-        kept_server_internal.clone()
+        kept_server_internal
     } else {
         v1.server_internal_globs.clone()
     };

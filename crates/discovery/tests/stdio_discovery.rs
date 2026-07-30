@@ -4,7 +4,7 @@
 
 use discovery::{DiscoveryClient, DiscoveryError, HandshakePath};
 
-fn fake_server_path() -> &'static str {
+const fn fake_server_path() -> &'static str {
     env!("CARGO_BIN_EXE_fake-mcp-stdio-server")
 }
 

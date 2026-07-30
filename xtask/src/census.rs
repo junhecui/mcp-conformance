@@ -18,7 +18,7 @@ struct ServerRecord {
     reason: String,
 }
 
-fn class_str(class: ContainabilityClass) -> &'static str {
+const fn class_str(class: ContainabilityClass) -> &'static str {
     match class {
         ContainabilityClass::A => "A",
         ContainabilityClass::B => "B",

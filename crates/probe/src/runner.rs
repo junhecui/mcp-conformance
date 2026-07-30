@@ -193,7 +193,7 @@ mod tests {
         with_id(serde_json::json!({"error": {"code": -32602, "message": "Invalid params"}}), id)
     }
 
-    fn target<'a>(endpoint: &'a str, schema: &'a Value) -> ProbeTarget<'a> {
+    const fn target<'a>(endpoint: &'a str, schema: &'a Value) -> ProbeTarget<'a> {
         ProbeTarget {
             endpoint,
             tool_name: "some_tool",

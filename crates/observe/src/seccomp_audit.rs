@@ -70,7 +70,7 @@ use std::os::fd::AsRawFd;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SeccompDenialEntry {
     /// The denied syscall's number (architecture-specific; this project only ever runs on
-    /// x86_64, the same scope `sandbox::seccomp`'s own filter is built for).
+    /// `x86_64`, the same scope `sandbox::seccomp`'s own filter is built for).
     pub syscall_nr: i64,
 }
 

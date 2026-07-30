@@ -101,14 +101,10 @@ struct Annotations {
     open_world_hint: Option<bool>,
 }
 
-fn coverage_of(annotations: &Option<Annotations>, field: impl Fn(&Annotations) -> Option<bool>) -> Coverage {
-    match annotations {
-        None => Coverage::Absent,
-        Some(a) => match field(a) {
-            Some(_) => Coverage::Explicit,
-            None => Coverage::Defaulted,
-        },
-    }
+fn coverage_of(annotations: Option<&Annotations>, field: impl Fn(&Annotations) -> Option<bool>) -> Coverage {
+    annotations.map_or(Coverage::Absent, |a| {
+        if field(a).is_some() { Coverage::Explicit } else { Coverage::Defaulted }
+    })
 }
 
 /// Extract per-tool, per-annotation coverage from a raw `tools/list` response — the same
@@ -124,10 +120,10 @@ pub fn tool_coverage(tools_list_raw: &[u8]) -> Result<Vec<ToolCoverage>, Coverag
         .tools
         .into_iter()
         .map(|tool| ToolCoverage {
-            read_only_hint: coverage_of(&tool.annotations, |a| a.read_only_hint),
-            destructive_hint: coverage_of(&tool.annotations, |a| a.destructive_hint),
-            idempotent_hint: coverage_of(&tool.annotations, |a| a.idempotent_hint),
-            open_world_hint: coverage_of(&tool.annotations, |a| a.open_world_hint),
+            read_only_hint: coverage_of(tool.annotations.as_ref(), |a| a.read_only_hint),
+            destructive_hint: coverage_of(tool.annotations.as_ref(), |a| a.destructive_hint),
+            idempotent_hint: coverage_of(tool.annotations.as_ref(), |a| a.idempotent_hint),
+            open_world_hint: coverage_of(tool.annotations.as_ref(), |a| a.open_world_hint),
             tool_name: tool.name,
         })
         .collect())

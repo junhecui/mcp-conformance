@@ -264,7 +264,7 @@ pub fn run(sample_size: usize) -> Result<(), Box<dyn std::error::Error>> {
         // able to target the right container after a watchdog kill — see its doc comment.
         // Includes the loop index for readability and generated_at_unix for uniqueness
         // across separate runs of this xtask that might otherwise race on stale names.
-        let container_name = format!("mcp-conf-stage2-{i}-{}", sweep_id);
+        let container_name = format!("mcp-conf-stage2-{i}-{sweep_id}");
         match attempt(candidate, &container_name) {
             Attempt::Success { tool_count, tools } => {
                 succeeded += 1;

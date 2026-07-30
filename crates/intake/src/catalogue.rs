@@ -228,15 +228,15 @@ mod tests {
         assert_eq!(server.name, "io.example/sample-server");
         assert_eq!(server.targets.len(), 1);
         assert!(server.skipped.is_empty());
-        match &server.targets[0] {
-            ResolvedTarget::Package { registry_type, identifier, version, transport, .. } => {
-                assert_eq!(registry_type, "npm");
-                assert_eq!(identifier, "@example/mcp-server");
-                assert_eq!(version, "1.0.0");
-                assert_eq!(transport.as_deref(), Some("stdio"));
-            }
-            other => panic!("expected Package, got {other:?}"),
-        }
+        let ResolvedTarget::Package { registry_type, identifier, version, transport, .. } =
+            &server.targets[0]
+        else {
+            panic!("expected Package, got {:?}", &server.targets[0]);
+        };
+        assert_eq!(registry_type, "npm");
+        assert_eq!(identifier, "@example/mcp-server");
+        assert_eq!(version, "1.0.0");
+        assert_eq!(transport.as_deref(), Some("stdio"));
     }
 
     #[test]

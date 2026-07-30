@@ -38,15 +38,15 @@ impl ProbeAssessment {
     pub const ORACLE: Oracle = Oracle::ProtocolProbe;
 }
 
-fn holds() -> ProbeAssessment {
+const fn holds() -> ProbeAssessment {
     ProbeAssessment { outcome: Outcome::Holds, reason: None }
 }
 
-fn violated() -> ProbeAssessment {
+const fn violated() -> ProbeAssessment {
     ProbeAssessment { outcome: Outcome::Violated, reason: None }
 }
 
-fn unverifiable(reason: ReasonCode) -> ProbeAssessment {
+const fn unverifiable(reason: ReasonCode) -> ProbeAssessment {
     ProbeAssessment { outcome: Outcome::Unverifiable, reason: Some(reason) }
 }
 
@@ -54,7 +54,7 @@ fn unverifiable(reason: ReasonCode) -> ProbeAssessment {
 /// itself unsupported. The rest must honestly stay `unverifiable`, per B-01's exit
 /// criterion, rather than forcing a verdict the surface can't support.
 #[must_use]
-pub fn no_probe_surface() -> ProbeAssessment {
+pub const fn no_probe_surface() -> ProbeAssessment {
     unverifiable(ReasonCode::NoProbeSurface)
 }
 
@@ -63,7 +63,7 @@ pub fn no_probe_surface() -> ProbeAssessment {
 /// requirements (design.md §8's "semantic argument validity" limitation, arriving here as a
 /// concrete reason code instead of a silent gap).
 #[must_use]
-pub fn invocation_failed() -> ProbeAssessment {
+pub const fn invocation_failed() -> ProbeAssessment {
     unverifiable(ReasonCode::InvocationFailed)
 }
 

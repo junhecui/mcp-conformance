@@ -16,7 +16,7 @@
 //! reproducibility proof a second time: a fixture *is* a base layer — a set of `EntrySpec`s —
 //! and `sandbox::base_layer::build`/`capture`/`digest_of_capture` already prove exactly the
 //! byte-reproducibility property this task's exit criterion asks for again, this time over
-//! content that actually varies (real seed text, a real embedded SQLite database) rather than
+//! content that actually varies (real seed text, a real embedded `SQLite` database) rather than
 //! P1-02's own placeholder sample tree.
 //!
 //! Linux-only, same as `sandbox` and `observe`: this crate exists only to build
@@ -33,9 +33,9 @@ use std::path::PathBuf;
 /// Why building the generic fixture failed.
 #[derive(Debug)]
 pub enum FixtureError {
-    /// The embedded SQLite seed database could not be constructed.
+    /// The embedded `SQLite` seed database could not be constructed.
     Sqlite(rusqlite::Error),
-    /// Reading back the constructed SQLite file's raw bytes failed.
+    /// Reading back the constructed `SQLite` file's raw bytes failed.
     Io(std::io::Error),
 }
 
@@ -84,9 +84,9 @@ INSERT INTO items (id, name, value) VALUES
     (3, 'gamma', 'seed-value-3');
 ";
 
-/// Construct a fresh SQLite database applying [`SEED_SQL`] and return its raw file bytes.
+/// Construct a fresh `SQLite` database applying [`SEED_SQL`] and return its raw file bytes.
 ///
-/// Writes to a real temporary file rather than `:memory:` — SQLite's raw page bytes are only
+/// Writes to a real temporary file rather than `:memory:` — `SQLite`'s raw page bytes are only
 /// observable from an on-disk file, and this function's whole purpose is to hand those bytes
 /// to [`sandbox::base_layer::EntryKind::File`] as the fixture's seeded-database content.
 /// The temp file is created and removed by this function alone; nothing it does depends on
@@ -151,7 +151,7 @@ mod tests {
     /// This task's literal exit criterion: two independent constructions of the generic
     /// fixture (seeded FS *and* seeded database together) produce byte-identical base
     /// layers — proven the same way P1-02 proved it for a placeholder tree, this time over
-    /// content that genuinely could vary (an embedded SQLite file) if anything ambient
+    /// content that genuinely could vary (an embedded `SQLite` file) if anything ambient
     /// leaked into either the filesystem or the database construction.
     #[test]
     fn two_independent_constructions_of_the_generic_fixture_are_byte_identical() {
@@ -180,8 +180,8 @@ mod tests {
     }
 
     /// The seeded database specifically, isolated from the surrounding filesystem tree:
-    /// two independent constructions of *just* the SQLite file must be byte-identical, not
-    /// merely equivalent in queryable content. SQLite's on-disk format has enough internal
+    /// two independent constructions of *just* the `SQLite` file must be byte-identical, not
+    /// merely equivalent in queryable content. `SQLite`'s on-disk format has enough internal
     /// state (page layout, freelist, a file-change counter) that this is a real property to
     /// verify empirically rather than assume follows from "the same SQL ran twice."
     #[test]

@@ -45,7 +45,7 @@ impl Assessment {
     /// The protocol could not decide. Always carries a reason — there is no other way to
     /// reach `Outcome::Unverifiable` through this type.
     #[must_use]
-    pub fn unverifiable(oracle: Oracle, reason: ReasonCode) -> Self {
+    pub const fn unverifiable(oracle: Oracle, reason: ReasonCode) -> Self {
         Self { outcome: Outcome::Unverifiable, reason: Some(reason), oracle }
     }
 
@@ -177,7 +177,7 @@ fn is_subset(delta: &[Vec<u8>], noise_floor: &[Vec<u8>]) -> bool {
 ///   leave — undecidable whether the missing network *caused* that failure, or something
 ///   unrelated did, without the instrumented rerun the reason code names.
 #[must_use]
-pub fn open_world_hint(declared: bool, egress_attempted: bool, tool_succeeded: bool) -> Assessment {
+pub const fn open_world_hint(declared: bool, egress_attempted: bool, tool_succeeded: bool) -> Assessment {
     if !declared {
         if egress_attempted {
             return Assessment::violated(Oracle::KernelChangeset);

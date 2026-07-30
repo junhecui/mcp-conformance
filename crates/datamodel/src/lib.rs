@@ -601,7 +601,7 @@ impl Digest {
     /// the typed value [`store::BlobStore::get`] and [`store::object_store::ObjectStore::
     /// get`] both require. Deliberately stricter than a generic hex parser: only exactly
     /// 64 *lowercase* hex characters are accepted, matching both what [`Display`]
-    /// (core::fmt::Display) ever produces and what `EVIDENCE.digest`'s own `CHECK`
+    /// (`core::fmt::Display`) ever produces and what `EVIDENCE.digest`'s own `CHECK`
     /// constraint (`crates/store/migrations/0001_initial_schema.sql`) already enforces —
     /// `None` for anything else, including a technically-valid uppercase hex string, rather
     /// than silently accepting a shape this type never itself produces.
@@ -623,7 +623,7 @@ impl Digest {
     }
 }
 
-fn hex_nibble(byte: u8) -> Option<u8> {
+const fn hex_nibble(byte: u8) -> Option<u8> {
     match byte {
         b'0'..=b'9' => Some(byte - b'0'),
         b'a'..=b'f' => Some(byte - b'a' + 10),

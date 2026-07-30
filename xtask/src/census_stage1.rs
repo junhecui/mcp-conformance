@@ -28,7 +28,7 @@ pub(crate) struct Candidate {
 }
 
 /// If this ingest outcome classifies as Class B, its name and first declared remote
-/// endpoint. `Unresolvable` entries can never be Class B (classify() maps them to
+/// endpoint. `Unresolvable` entries can never be Class B (`classify()` maps them to
 /// `Unclassifiable`), so this returns `None` for those without inspecting them further.
 pub(crate) fn class_b_candidate(outcome: &IngestOutcome) -> Option<Candidate> {
     if classify::classify(outcome).class != ContainabilityClass::B {
@@ -73,7 +73,7 @@ fn attempt(url: &str) -> Attempt {
 }
 
 /// Deterministically hash `name` into a `u64` — `DefaultHasher`'s keys are fixed (unlike
-/// `HashMap`'s `RandomState`, which is randomised per-process to resist HashDoS), so this
+/// `HashMap`'s `RandomState`, which is randomised per-process to resist `HashDoS`), so this
 /// is stable across runs and processes, not just within one.
 pub(crate) fn stable_hash(name: &str) -> u64 {
     use std::hash::{Hash, Hasher};

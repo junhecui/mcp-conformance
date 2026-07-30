@@ -122,7 +122,10 @@ impl ConnectionLog {
                     Ok((stream, _local_peer_addr_is_always_the_proxy_itself)) => {
                         idle_since_stop = None;
                         if let Ok(destination) = original_destination(&stream) {
-                            thread_entries.lock().unwrap_or_else(|p| p.into_inner()).push(ConnectionLogEntry { destination });
+                            thread_entries
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                .push(ConnectionLogEntry { destination });
                         }
                         // `stream` drops here, closing the connection — this module observes
                         // and records, it does not forward traffic to the real destination.
@@ -161,7 +164,7 @@ impl ConnectionLog {
         self.stop_flag.store(true, Ordering::SeqCst);
         let _ = self.thread.join();
         Arc::try_unwrap(self.entries)
-            .map(|m| m.into_inner().unwrap_or_else(|p| p.into_inner()))
+            .map(|m| m.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner))
             .unwrap_or_default()
     }
 }

@@ -81,7 +81,7 @@ impl FixtureBindings {
 }
 
 /// The result of one [`synthesize`] call.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SynthesisResult {
     /// The generated arguments — the JSON object `tools/call` sends as `arguments`.
     pub arguments: Value,
@@ -246,7 +246,7 @@ fn synthesize_number(object: &Map<String, Value>) -> Number {
 /// `D1` and `D1'` genuinely call with identical arguments; two independently-synthesised
 /// values that merely happen to be equal today would satisfy that by coincidence, not by
 /// guarantee. Produced by [`reuse_across_arms`].
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReusedArguments {
     /// The single argument value every arm in `reused_for` must call with.
     pub arguments: Value,
@@ -260,7 +260,7 @@ pub struct ReusedArguments {
 /// — this crate's own "must not" — instead of an accident of two separate `synthesize` calls
 /// happening to agree.
 #[must_use]
-pub fn reuse_across_arms(arguments: Value, arm_ids: Vec<String>) -> ReusedArguments {
+pub const fn reuse_across_arms(arguments: Value, arm_ids: Vec<String>) -> ReusedArguments {
     ReusedArguments { arguments, reused_for: arm_ids }
 }
 
