@@ -33,6 +33,11 @@ use std::path::{Path, PathBuf};
 /// Sorted by raw path bytes on return, matching this codebase's usual determinism
 /// discipline, even though the caller (`idempotent_hint`'s own subset check) does not
 /// currently depend on that order.
+///
+/// # Errors
+///
+/// Returns an [`io::Error`] if walking either tree, or reading a file's or symlink's
+/// contents for comparison, fails.
 pub fn content_delta(a: &Path, b: &Path) -> io::Result<Vec<Vec<u8>>> {
     let mut a_paths = Vec::new();
     collect_relative_paths(a, Path::new(""), &mut a_paths)?;

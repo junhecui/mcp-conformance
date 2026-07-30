@@ -252,6 +252,11 @@ pub struct SandboxOutcome {
 /// `std::process::Command`); everything after it, until the exec that replaces the child's
 /// process image, is held to the same "only narrow, well-understood operations" discipline
 /// `Command::pre_exec`'s own safety contract already demanded in P1-03.
+///
+/// # Errors
+///
+/// Returns [`SpawnError`] if creating the overlay directories or namespaces, mounting the
+/// overlay, or launching `spec.program` inside it fails.
 #[allow(unsafe_code)]
 pub fn spawn(
     spec: &SandboxSpec,
@@ -572,6 +577,10 @@ impl SandboxHandle {
     /// get the raw wait status integer `std::os::unix::process::ExitStatusExt::from_raw`
     /// needs — this module's `init_pid` was never a `std::process::Child` to begin with (see
     /// the module doc comment), so there is no higher-level `wait()` to call instead.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`io::Error`] if `waitpid` itself fails.
     #[allow(unsafe_code)]
     pub fn wait(self) -> io::Result<SandboxOutcome> {
         use std::os::unix::process::ExitStatusExt;

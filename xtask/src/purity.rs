@@ -78,6 +78,11 @@ pub fn check_closure(pure_crate: &str, closure: &[String], allowlist: &[&str]) -
 ///
 /// Includes build-dependencies: a build script can read a clock just as easily as the crate
 /// can. Excludes dev-dependencies, which do not ship in the derived artifact.
+///
+/// # Errors
+///
+/// Returns an error string if `cargo tree` cannot be run, or exits non-zero (for example,
+/// `pkg` naming a package outside the workspace).
 pub fn dependency_closure(pkg: &str) -> Result<Vec<String>, String> {
     let out = Command::new(env!("CARGO"))
         .args(["tree", "--package", pkg, "--edges", "normal,build", "--prefix", "none"])
@@ -114,6 +119,11 @@ pub fn parse_tree(stdout: &str) -> Vec<String> {
 }
 
 /// Run the check across every pure crate against the real workspace graph.
+///
+/// # Errors
+///
+/// Propagates [`dependency_closure`]'s error for whichever pure crate's closure fails to
+/// resolve.
 pub fn run() -> Result<Vec<Violation>, String> {
     let mut violations = Vec::new();
     for pure in PURE_CRATES {

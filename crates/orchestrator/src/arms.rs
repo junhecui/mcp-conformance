@@ -238,6 +238,13 @@ fn harvest(outcome: sandbox::SandboxOutcome, blob_store: &store::BlobStore) -> R
 /// `Arm 1'`: a single call, in a freshly constructed sandbox, independent of every other
 /// arm — the repeat half of architecture.md §4.2's noise-floor pair (`D1'`, alongside `Arm
 /// 1`'s own `D1`, produced elsewhere).
+///
+/// # Errors
+///
+/// Returns [`ArmError::Sandbox`] if the sandbox can't be constructed or launched,
+/// [`ArmError::Json`]/[`ArmError::Protocol`] if the sandboxed process's JSON-RPC traffic is
+/// malformed or unexpected, or [`ArmError::Io`]/[`ArmError::Store`]/[`ArmError::Decode`] if
+/// harvesting or decoding its evidence afterward fails.
 pub fn run_arm_1_prime(
     program: &ArmProgram,
     scratch_root: &Path,
@@ -249,6 +256,13 @@ pub fn run_arm_1_prime(
 }
 
 /// `Arm 2`: two calls in one freshly constructed sandbox, in the same process — `D2`.
+///
+/// # Errors
+///
+/// Returns [`ArmError::Sandbox`] if the sandbox can't be constructed or launched,
+/// [`ArmError::Json`]/[`ArmError::Protocol`] if the sandboxed process's JSON-RPC traffic is
+/// malformed or unexpected, or [`ArmError::Io`]/[`ArmError::Store`]/[`ArmError::Decode`] if
+/// harvesting or decoding its evidence afterward fails.
 pub fn run_arm_2(
     program: &ArmProgram,
     scratch_root: &Path,
@@ -261,6 +275,13 @@ pub fn run_arm_2(
 
 /// `Arm 2R`: one call, a genuine process restart (see this module's own doc comment), then
 /// one more call — `D2R`, resolving the caching confound architecture.md §4.2 describes.
+///
+/// # Errors
+///
+/// Returns [`ArmError::Sandbox`] if the sandbox can't be constructed or launched,
+/// [`ArmError::Json`]/[`ArmError::Protocol`] if the sandboxed process's JSON-RPC traffic is
+/// malformed or unexpected, or [`ArmError::Io`]/[`ArmError::Store`]/[`ArmError::Decode`] if
+/// harvesting or decoding its evidence afterward fails.
 pub fn run_arm_2r(
     program: &ArmProgram,
     scratch_root: &Path,

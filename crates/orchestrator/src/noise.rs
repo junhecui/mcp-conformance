@@ -17,6 +17,10 @@ use crate::arms::{run_arm_1_prime, ArmError, ArmProgram};
 /// `scratch_root` is split into two subdirectories (`d1`, `d1-prime`) internally so the two
 /// runs never share an overlay — reusing the same overlay across both would make this
 /// `Arm 2R`'s restart, not two independent `Arm 1'`-shaped runs.
+///
+/// # Errors
+///
+/// Propagates [`crate::arms::run_arm_1_prime`]'s error for whichever of the two runs fails.
 pub fn measure_noise_floor(
     program: &ArmProgram,
     scratch_root: &Path,

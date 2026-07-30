@@ -28,6 +28,9 @@ const fn class_str(class: ContainabilityClass) -> &'static str {
 
 /// Run the Stage 0 census against the live registry and write results to
 /// `results/census/registry_class_ratio.json`.
+///
+/// # Errors
+/// A registry fetch failing outright, or writing the result file failing.
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("census: fetching the MCP Registry listing (registry.modelcontextprotocol.io)...");
 

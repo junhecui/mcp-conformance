@@ -165,6 +165,11 @@ fn list_tools() -> Result<Vec<Value>, RulesetV2Error> {
 
 /// Run the full P2-10 derivation end to end and write [`RESULT_PATH`] and
 /// [`RULESET_V2_PATH`].
+///
+/// # Errors
+///
+/// Returns [`RulesetV2Error`] if discovering the reference server's tools, constructing the
+/// sandbox for any per-tool run, or storing/decoding its evidence fails.
 pub fn run() -> Result<(), RulesetV2Error> {
     let tools = list_tools()?;
     println!("discovered {} tools from {SERVER_PROGRAM} {:?}", tools.len(), server_args());

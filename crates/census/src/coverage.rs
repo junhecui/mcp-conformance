@@ -110,6 +110,11 @@ fn coverage_of(annotations: Option<&Annotations>, field: impl Fn(&Annotations) -
 /// Extract per-tool, per-annotation coverage from a raw `tools/list` response — the same
 /// bytes shape [`discovery::pin::pin_tools`] consumes, from
 /// [`discovery::Discovery::tools_list_raw`].
+///
+/// # Errors
+///
+/// Returns [`CoverageError::NotUtf8`] if `tools_list_raw` is not valid UTF-8, or
+/// [`CoverageError::Malformed`] if it doesn't parse as a JSON-RPC `tools/list` response.
 pub fn tool_coverage(tools_list_raw: &[u8]) -> Result<Vec<ToolCoverage>, CoverageError> {
     let text = std::str::from_utf8(tools_list_raw).map_err(CoverageError::NotUtf8)?;
     let envelope: Envelope = serde_json::from_str(text)

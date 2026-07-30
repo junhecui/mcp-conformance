@@ -206,6 +206,11 @@ fn prepull_base_images() {
 /// attempt discovery against each by actually launching its declared package in a fresh,
 /// capped Docker container. Sequential, not concurrent — same politeness posture as Stage 1,
 /// and one container at a time keeps resource accounting simple.
+///
+/// # Errors
+/// Docker being unavailable, a registry fetch failing outright, or writing the result file
+/// failing. A single sampled server's own attempt failing is not an error here — it becomes
+/// a recorded failure outcome in the result file instead.
 pub fn run(sample_size: usize) -> Result<(), Box<dyn std::error::Error>> {
     if std::process::Command::new("docker").arg("info").output().map(|o| !o.status.success()).unwrap_or(true) {
         return Err("docker is not available or the daemon is not running (`docker info` failed) \

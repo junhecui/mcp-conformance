@@ -160,6 +160,15 @@ fn run_and_record(
 /// successfully and declares at least one tool, and persist every server, tool snapshot,
 /// and verdict into `results/conformance/track_b_probe.sqlite3`. Writes a summary to
 /// `results/conformance/track_b_protocol_probe.json`.
+///
+/// # Errors
+/// A registry fetch failing outright, opening/migrating the metadata DB failing, or writing
+/// the summary file failing. A single sampled server's own discovery or probe failing is not
+/// an error here — it is logged and excluded from the summary instead.
+///
+/// # Panics
+/// Panics if the metadata DB path (a fixed literal this function itself constructs) has no
+/// parent directory or is not valid UTF-8 — both unreachable in practice.
 pub fn run(sample_size: usize) -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("probe-stage1: fetching the registry to find all Class B candidates...");
 

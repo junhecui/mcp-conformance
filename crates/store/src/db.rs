@@ -40,6 +40,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
 /// with `SQLITE_BUSY` when another connection holds the write lock; a busy timeout makes a
 /// second writer retry internally instead, which is what turns "two workers raced to lease
 /// a job" into "one waits a few milliseconds," not a spurious error.
+///
+/// # Errors
+///
+/// Propagates any `rusqlite` error, including a migration's own SQL failing to apply.
 pub fn open_and_migrate(path: &str) -> rusqlite::Result<Connection> {
     let mut conn = Connection::open(path)?;
     conn.pragma_update(None, "foreign_keys", "ON")?;

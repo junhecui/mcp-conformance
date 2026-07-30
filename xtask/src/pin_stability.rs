@@ -74,6 +74,11 @@ fn check_one(candidate: &Candidate) -> serde_json::Value {
 /// Re-discover every server a prior Stage 1 run marked successful, twice each, and check
 /// whether the metadata pin is stable across the two discoveries. Writes
 /// `results/census/pin_stability.json`.
+///
+/// # Errors
+/// Reading or parsing `input_path` failing, or writing the result file failing. A single
+/// candidate's own discovery failing is not an error here — it becomes a recorded
+/// `first_discovery_failed`/`second_discovery_failed` result instead.
 pub fn run(input_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let candidates = read_successful_servers(input_path)?;
     eprintln!(

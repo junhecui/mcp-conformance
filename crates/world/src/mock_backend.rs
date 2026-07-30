@@ -74,6 +74,11 @@ impl GenericMockBackend {
     /// `observe::connection_log`'s own doc comment for why: `iptables REDIRECT` rewrites a
     /// redirected packet's destination to the primary address of the interface it arrived
     /// on, not to loopback — and start answering every connection on a background thread.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MockBackendError`] if binding the listener, or reading back its assigned
+    /// local address, fails.
     pub fn start() -> Result<Self, MockBackendError> {
         let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0))?;
         let port = listener.local_addr()?.port();

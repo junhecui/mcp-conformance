@@ -176,6 +176,11 @@ impl std::error::Error for LoadRulesetError {
 /// Read and parse a ruleset file (e.g. `rulesets/v1.json`) into a [`datamodel::Ruleset`]
 /// `normalise` can consume directly. The only place in this codebase that touches a
 /// ruleset file's bytes — `normalise` itself never does (ADR-005).
+///
+/// # Errors
+///
+/// Returns [`LoadRulesetError::Io`] if `path` can't be read, or [`LoadRulesetError::Json`]
+/// if its contents don't parse as the expected ruleset shape.
 pub fn load_ruleset(path: &Path) -> Result<Ruleset, LoadRulesetError> {
     let bytes = fs::read(path).map_err(LoadRulesetError::Io)?;
     let file: RulesetFile = serde_json::from_slice(&bytes).map_err(LoadRulesetError::Json)?;

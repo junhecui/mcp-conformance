@@ -170,6 +170,10 @@ impl NetworkBridge {
     /// Remove the `iptables` redirect rule. The veth pair itself is expected to already be
     /// gone by the time this runs (torn down automatically when the sandboxed namespace
     /// was destroyed) — this only cleans up the one thing that genuinely outlives it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NetnsError`] if removing the `iptables` rule fails.
     pub fn teardown(self) -> Result<(), NetnsError> {
         remove_redirect_rule(&self.host_ifname, self.proxy_port)
     }

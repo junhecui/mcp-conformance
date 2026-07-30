@@ -412,6 +412,13 @@ fn run_one_tool(
 }
 
 /// Run the full P3-06 measurement end to end and write [`RESULT_PATH`].
+///
+/// # Errors
+///
+/// Returns [`FixtureGeneralityError`] if discovering the reference server's tools, resolving
+/// its entry point, or constructing the sandbox/bridge/mock backend for any per-tool
+/// measurement fails. A single tool's own `tools/call` failing is not an error here — it
+/// becomes a recorded `mock_sufficient: false` measurement instead.
 pub fn run() -> Result<(), FixtureGeneralityError> {
     let tools = list_tools()?;
     println!("discovered {} tools from {SERVER_PROGRAM} {:?}", tools.len(), server_args());

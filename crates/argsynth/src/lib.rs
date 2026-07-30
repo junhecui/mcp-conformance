@@ -97,6 +97,12 @@ pub struct SynthesisResult {
 ///
 /// `bindings` overrides properties by name at any nesting depth; every other property is
 /// generated purely from the schema's own structure.
+///
+/// # Errors
+///
+/// Returns [`SynthesisError::UnsupportedSchema`] if `schema` (or a nested subschema) uses a
+/// shape outside this crate's documented subset — see the module doc comment's "Scope"
+/// section.
 pub fn synthesize(
     schema: &Value,
     bindings: &FixtureBindings,

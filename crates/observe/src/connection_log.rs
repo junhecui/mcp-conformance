@@ -91,6 +91,11 @@ impl ConnectionLog {
     /// for `sandbox::NetworkBridge`'s veth-arriving traffic that's the host-side veth's own
     /// address, never `127.0.0.1`. A loopback-only listener would refuse every such
     /// connection outright, confirmed directly the first time this was wired up end to end.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConnectionLogError`] if binding the listener, or reading back its assigned
+    /// local address, fails.
     pub fn start() -> Result<Self, ConnectionLogError> {
         let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0))?;
         let port = listener.local_addr()?.port();

@@ -68,6 +68,10 @@ impl RunQueue {
     ///
     /// # Errors
     /// Whatever `store::db::open_and_migrate` can fail with.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `path` is not valid UTF-8.
     pub fn open(path: &Path) -> Result<Self, QueueError> {
         let path_str = path.to_str().expect("run queue path must be valid UTF-8");
         let conn = store::db::open_and_migrate(path_str)?;

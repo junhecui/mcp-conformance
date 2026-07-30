@@ -140,6 +140,10 @@ pub struct DiscoveryClient {
 
 impl DiscoveryClient {
     /// Spawn `program` and speak MCP over its stdin/stdout.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DiscoveryError::Io`] if `program` cannot be spawned.
     pub fn stdio(program: impl AsRef<OsStr>, args: &[&str]) -> Result<Self, DiscoveryError> {
         let transport = ChildProcessTransport::spawn(program, args)?;
         Ok(Self { transport: Box::new(transport) })
@@ -150,6 +154,10 @@ impl DiscoveryClient {
     /// stdio target this harness does not control the code of (e.g. a containerized Class A
     /// package under Stage 2 census), unbounded blocking on `recv_line` is not acceptable at
     /// sweep scale.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DiscoveryError::Io`] if `program` cannot be spawned.
     pub fn stdio_with_timeout(
         program: impl AsRef<OsStr>,
         args: &[&str],
@@ -187,6 +195,12 @@ impl DiscoveryClient {
     /// under the second method — retrying on an ambiguous signal would risk masking a genuine
     /// reachability problem as a spec mismatch at census scale. Never calls a tool, under
     /// either path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DiscoveryError::Io`]/[`DiscoveryError::Protocol`] for a transport failure or
+    /// a malformed response, or [`DiscoveryError::ServerError`] for any JSON-RPC error other
+    /// than the "method not found" one this function itself falls back on.
     pub fn discover(&mut self) -> Result<Discovery, DiscoveryError> {
         let init_params = json!({
             "protocolVersion": CLIENT_PROTOCOL_VERSION,

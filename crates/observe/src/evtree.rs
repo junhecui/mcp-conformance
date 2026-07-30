@@ -32,6 +32,11 @@ const TYPE_SOCKET: u8 = 7;
 
 /// Walk `root` (the overlay upper directory, read directly from the host filesystem — never
 /// through the overlay mount itself) and serialise it per ADR-009's `evtree1` wire format.
+///
+/// # Errors
+///
+/// Returns an [`io::Error`] if reading the directory tree, or any entry's metadata or
+/// xattrs, fails.
 pub fn capture(root: &Path) -> io::Result<Vec<u8>> {
     let mut relative_paths = Vec::new();
     collect_relative_paths(root, Path::new(""), &mut relative_paths)?;
@@ -181,6 +186,18 @@ impl std::error::Error for DecodeError {}
 /// present in the wire bytes (skipped over here, not stored — see `datamodel::EvidenceEntry`'s
 /// own doc comment for why the in-memory type doesn't carry them yet); everything
 /// `normalise`'s current job (ADR-008 path taxonomy) needs is decoded.
+///
+/// # Errors
+///
+/// Returns [`DecodeError::Truncated`] if `bytes` ends before a complete entry,
+/// [`DecodeError::BadMagic`] if the leading magic doesn't match, or
+/// [`DecodeError::UnsupportedVersion`]/[`DecodeError::UnknownTypeTag`] for a well-formed but
+/// unrecognized format version or entry type tag.
+///
+/// # Panics
+///
+/// Never in practice: every `try_into().unwrap()` below converts a slice [`Cursor::take`]
+/// already sized to the exact target array length, so the conversion cannot fail.
 pub fn decode(bytes: &[u8]) -> Result<datamodel::RawEvidence, DecodeError> {
     let mut cursor = Cursor { bytes, pos: 0 };
 

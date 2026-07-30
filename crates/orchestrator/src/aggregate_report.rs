@@ -61,6 +61,10 @@ impl From<rusqlite::Error> for AggregateReportError {
 /// Whatever `store::db` fails with, or [`AggregateReportError::SelfVerificationFailed`] if
 /// this module's own output somehow fails B-03's independent guard (should be unreachable
 /// in practice — see this function's own tests).
+///
+/// # Panics
+///
+/// Panics if `db_path` is not valid UTF-8.
 pub fn build_report(db_path: &Path) -> Result<Value, AggregateReportError> {
     let conn = store::db::open_and_migrate(db_path.to_str().expect("utf8 db path"))?;
 

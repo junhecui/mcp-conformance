@@ -46,6 +46,11 @@ pub enum ProbeSurface {
 /// A `resources/list` that errors with anything other than "method not found" is a real
 /// failure ([`ProbeError`]), not evidence of an absent surface — the caller should
 /// distinguish "this server has no resources" from "something went wrong talking to it."
+///
+/// # Errors
+///
+/// Returns [`ProbeError`] if `resources/list` fails with anything other than a "method not
+/// found" JSON-RPC error.
 pub fn discover_surface(client: &mut ProbeClient) -> Result<ProbeSurface, ProbeError> {
     match client.call("resources/list", serde_json::json!({})) {
         Ok(result) => {

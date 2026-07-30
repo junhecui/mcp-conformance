@@ -66,6 +66,11 @@ impl std::error::Error for PinError {
 /// server returned it, on the same "bytes, not semantics" principle as the per-tool pin — a
 /// server that reorders its tool list between two discoveries has changed its response,
 /// and that is exactly the kind of change a pin exists to make visible rather than absorb.
+///
+/// # Errors
+///
+/// Returns [`PinError::NotUtf8`] if `tools_list_raw` is not valid UTF-8, or
+/// [`PinError::Malformed`] if it doesn't parse as a JSON-RPC `tools/list` response.
 pub fn pin_tools(tools_list_raw: &[u8]) -> Result<(Vec<ToolPin>, Digest), PinError> {
     let text = std::str::from_utf8(tools_list_raw).map_err(PinError::NotUtf8)?;
 

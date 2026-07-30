@@ -117,6 +117,12 @@ impl From<io::Error> for BuildError {
 /// `root` itself must not already exist (or must be empty) — `build` creates it and refuses
 /// to layer onto pre-existing content it did not itself create, since that content would be
 /// exactly the kind of ambient state this module exists to exclude.
+///
+/// # Errors
+///
+/// Returns [`BuildError::NotSorted`] if `entries` is not in the required order,
+/// [`BuildError::UnsafePath`] if an entry's path is absolute or escapes `root` via `..`, or
+/// [`BuildError::Io`] if a filesystem operation fails.
 pub fn build(root: &Path, entries: &[EntrySpec]) -> Result<(), BuildError> {
     for (index, pair) in entries.windows(2).enumerate() {
         if sort_key(&pair[0].path) > sort_key(&pair[1].path) {
@@ -215,6 +221,12 @@ pub enum InodeHandling {
 /// makes this return an I/O error rather than guess at an encoding for a shape this module
 /// never creates), and xattrs are not read at all (`build` never sets any, so every entry's
 /// `xattr_count` is `0`) — P1-04 owns the general case over the ADR-009 spec in full.
+///
+/// # Errors
+///
+/// Returns an [`io::Error`] if walking the tree or reading an entry's metadata or contents
+/// fails, or if an entry on disk is a device, fifo, or socket — a shape [`build`] never
+/// produces and this walker does not attempt to encode.
 pub fn capture(root: &Path, inode_handling: InodeHandling) -> io::Result<Vec<u8>> {
     let mut relative_paths = Vec::new();
     collect_relative_paths(root, Path::new(""), &mut relative_paths)?;

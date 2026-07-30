@@ -69,6 +69,8 @@ pub fn probe_read_only_hint(
 /// Run the `idempotentHint` protocol: invoke, probe, invoke again with identical
 /// arguments, probe.
 ///
+/// # Errors
+///
 /// Same error/outcome split as [`probe_read_only_hint`].
 pub fn probe_idempotent_hint(
     target: &ProbeTarget,

@@ -122,6 +122,10 @@ fn now_iso() -> String {
 /// # Errors
 /// Opening the queue or metadata DB, or the initial verdict-wipe, failing outright. A
 /// single job's own failure does not surface here — see [`DeriveReport::failed`].
+///
+/// # Panics
+///
+/// Panics if `db_path` is not valid UTF-8.
 pub fn derive_all_read_only_hint_verdicts(
     db_path: &Path,
     blob_store_root: &Path,

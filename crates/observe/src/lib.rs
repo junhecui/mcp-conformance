@@ -117,6 +117,11 @@ impl From<StoreError> for HarvestError {
 /// pass its own `orphans_impossible` field here) — this function adds no judgment of its
 /// own about what they mean, and takes plain parameters rather than depending on the
 /// `sandbox` crate's types, keeping the two components' contracts independent.
+///
+/// # Errors
+///
+/// Returns [`HarvestError::Io`] if walking or serialising `upper` fails, or
+/// [`HarvestError::Store`] if storing the resulting capture fails.
 pub fn harvest(
     upper: &Path,
     exit_status: Option<ExitStatus>,

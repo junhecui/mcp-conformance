@@ -113,6 +113,11 @@ impl SeccompAudit {
     /// syscall's own semantics for this specific device (positioning at the current end of
     /// the kernel ring buffer rather than a byte-offset seek within a regular file) — no
     /// higher-level Rust API models this, so a raw call is the only way to reach it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SeccompAuditError`] if opening `/dev/kmsg` or seeking it to the current end
+    /// fails.
     #[allow(unsafe_code)]
     pub fn start() -> Result<Self, SeccompAuditError> {
         // Best-effort, per this module's own doc comment: disable the kernel's default

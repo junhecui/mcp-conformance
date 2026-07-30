@@ -123,6 +123,10 @@ pub const SEEDED_DATABASE_PATH: &str = "data/fixtures.db";
 /// Entries are returned pre-sorted ascending by raw path bytes, exactly as `build` requires
 /// — this is the one property a caller must not have to re-derive by re-sorting output this
 /// function already produced in the right order.
+///
+/// # Errors
+///
+/// Returns [`FixtureError`] if constructing or reading back the seeded database fails.
 pub fn generic_fixture_entries() -> Result<Vec<EntrySpec>, FixtureError> {
     let database = seeded_database_bytes()?;
     Ok(vec![

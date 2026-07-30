@@ -197,6 +197,16 @@ impl RawClient {
 }
 
 /// Run the full P1-08 demonstration end to end and write [`RESULT_PATH`].
+///
+/// # Errors
+///
+/// Returns [`FirstVerdictError`] if constructing the sandbox, speaking MCP with the
+/// sandboxed server, harvesting evidence, or deriving/storing the verdict fails at any step.
+///
+/// # Panics
+///
+/// Panics if the scratch directory's path is not valid UTF-8 (it is always a fresh
+/// [`tempfile::tempdir`], so this cannot happen in practice).
 pub fn run() -> Result<(), FirstVerdictError> {
     let scratch = tempfile::tempdir()?;
     let lower = scratch.path().join("lower");

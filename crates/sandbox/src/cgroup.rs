@@ -113,6 +113,11 @@ impl Cgroup {
     /// — confirmed directly by hand, not assumed, after `cpu.max`'s accounting file
     /// (`cpuacct.usage`) came back readable-but-always-zero the first time this was written,
     /// because it was being read from the `cpu` directory, which never had that file at all.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CgroupError`] if creating any of the per-controller directories, or writing
+    /// any of their control files, fails.
     pub fn create_legacy_v1(
         name: &str,
         legacy_root: &Path,
@@ -142,6 +147,12 @@ impl Cgroup {
     /// these; this project's own dev container happens to have both, at different
     /// sub-paths, which is exactly why this function takes both roots explicitly rather
     /// than assuming one implies the other).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CgroupError`] if creating the cgroup directory, or writing any of its
+    /// control files, fails — including, via [`Self::create_legacy_v1`], the legacy
+    /// fallback path.
     pub fn create(
         name: &str,
         v2_root: &Path,
@@ -164,6 +175,11 @@ impl Cgroup {
     /// automatically — calling this once, early, on the sandbox's outermost process (before
     /// its own second fork; see `supervisor`'s module doc comment) is enough to cover every
     /// descendant it or the real target ever creates.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CgroupError`] if writing `pid` to any of this cgroup's `cgroup.procs` files
+    /// fails.
     pub fn add_process(&self, pid: Pid) -> Result<(), CgroupError> {
         let pid_str = pid.as_raw().to_string();
         match &self.backend {
@@ -219,6 +235,11 @@ impl Cgroup {
     /// (observed directly here — empty, member-less cgroup directories left behind by a bare,
     /// unretried `remove_dir` under this project's own dev-container test load). A real
     /// orchestrator calling this right after `wait()` returns would hit the exact same race.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CgroupError`] if a cgroup directory still won't `rmdir` after this
+    /// function's retries — most often because a member process hasn't actually exited yet.
     pub fn remove(self) -> Result<(), CgroupError> {
         match self.backend {
             Backend::UnifiedV2(dir) => remove_dir_retrying(&dir)?,

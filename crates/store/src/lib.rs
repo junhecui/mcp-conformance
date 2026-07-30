@@ -94,6 +94,10 @@ pub(crate) fn digest_of(bytes: &[u8]) -> Digest {
 
 impl BlobStore {
     /// Open (creating if necessary) a blob store rooted at `root`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::Io`] if `root` cannot be created.
     pub fn open(root: impl Into<PathBuf>) -> Result<Self, StoreError> {
         let root = root.into();
         fs::create_dir_all(&root)?;
@@ -112,6 +116,12 @@ impl BlobStore {
     /// result. If a digest's path already holds *different* bytes, that is the
     /// [`StoreError::Corrupt`] case: correct use of this API can never produce it, because
     /// the address is derived from the content being written, never chosen by the caller.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::Corrupt`] if a different blob is already stored under `bytes`'s
+    /// digest, or [`StoreError::Io`] if reading the existing path or writing the new one
+    /// fails.
     pub fn put(&self, bytes: &[u8]) -> Result<Digest, StoreError> {
         let digest = digest_of(bytes);
         let path = self.path_for(&digest);
@@ -141,6 +151,12 @@ impl BlobStore {
     /// Recomputes the digest of what was actually read before returning it, so a caller
     /// gets [`StoreError::Corrupt`] rather than silently-wrong bytes if the store root was
     /// tampered with outside this API.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::NotFound`] if no blob is stored under `digest`,
+    /// [`StoreError::Corrupt`] if what's stored there no longer hashes to `digest`, or
+    /// [`StoreError::Io`] if reading it fails.
     pub fn get(&self, digest: &Digest) -> Result<Vec<u8>, StoreError> {
         let path = self.path_for(digest);
         let bytes = match fs::read(&path) {

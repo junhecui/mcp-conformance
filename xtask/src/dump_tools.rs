@@ -8,6 +8,10 @@ use discovery::DiscoveryClient;
 
 /// Discover `url` and print each tool's name, its coverage classification per annotation,
 /// and the raw `annotations` object it came from.
+///
+/// # Errors
+/// Discovery against `url` failing, or the `tools/list` response not parsing as either
+/// coverage input or plain JSON.
 pub fn run(url: &str) -> Result<(), Box<dyn std::error::Error>> {
     let mut client = DiscoveryClient::http(url.to_string());
     let discovery = client.discover()?;

@@ -93,6 +93,12 @@ impl ProbeClient {
     /// `discovery::DiscoveryClient::discover` already performs. A probe target has always
     /// already passed discovery once; this repeats the handshake because a probe run is a
     /// fresh connection, not a continuation of a prior one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProbeError::Transport`] if the request fails,
+    /// [`ProbeError::Protocol`] if the response is malformed or missing `protocolVersion`, or
+    /// [`ProbeError::ServerError`] if the server returns a JSON-RPC error.
     pub fn initialize(&mut self) -> Result<String, ProbeError> {
         let params = serde_json::json!({
             "protocolVersion": CLIENT_PROTOCOL_VERSION,
@@ -125,6 +131,12 @@ impl ProbeClient {
     ///
     /// This is the deliberate capability `discovery` withholds — see the crate and module
     /// doc comments for why that capability belongs here and not there.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProbeError::Transport`] if the request fails, [`ProbeError::Protocol`] if
+    /// the response is not well-formed JSON-RPC, or [`ProbeError::ServerError`] if the server
+    /// returns a JSON-RPC error object.
     pub fn call(&mut self, method: &str, params: Value) -> Result<Value, ProbeError> {
         let id = self.next_id;
         self.next_id += 1;

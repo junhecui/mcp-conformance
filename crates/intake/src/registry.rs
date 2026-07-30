@@ -90,6 +90,12 @@ impl RegistryClient {
     /// first run produced 59,484 records for what turned out to be 18,664 distinct server
     /// names (some appearing over 1,000 times), a 3.2x inflation that would have corrupted
     /// every downstream count. There is no code path in this client that omits the filter.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistryError::Transport`] if the request itself fails, or
+    /// [`RegistryError::Malformed`] if the response isn't valid UTF-8 or doesn't match the
+    /// registry's documented list-response shape.
     pub fn fetch_page(&self, cursor: Option<&str>, limit: u32) -> Result<Page, RegistryError> {
         let limit = limit.clamp(1, 100);
         let mut url = format!("{}/v0.1/servers?version=latest&limit={limit}", self.base_url);
@@ -133,6 +139,10 @@ impl RegistryClient {
     /// `delay_between_pages` is a voluntary politeness pause — the registry's `OpenAPI` spec
     /// documents no rate limit, so this is a courtesy, not a measured requirement. Pass
     /// [`Duration::ZERO`] in tests.
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`Self::fetch_page`]'s error for whichever page fails.
     pub fn fetch_all(
         &self,
         page_limit: u32,

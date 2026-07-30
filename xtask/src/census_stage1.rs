@@ -93,6 +93,11 @@ pub(crate) fn stable_hash(name: &str) -> u64 {
 /// -order is not alphabetical, unbiased with respect to namespace, and — unlike a
 /// randomised selection — reproducible: the same registry snapshot always yields the same
 /// sample, which matters for comparing across runs.
+///
+/// # Errors
+/// A registry fetch failing outright, a discovery attempt against a sampled server failing
+/// for a reason other than the ones this sweep already tolerates, or writing the result file
+/// failing.
 pub fn run(sample_size: usize) -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("census-stage1: fetching the registry to find all Class B candidates...");
 
