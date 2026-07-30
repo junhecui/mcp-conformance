@@ -13,6 +13,7 @@ fn main() -> ExitCode {
         Some("dump-tools") => dump_tools(),
         Some("first-verdict") => first_verdict(),
         Some("derive-ruleset-v2") => derive_ruleset_v2(),
+        Some("derive-verdicts") => derive_verdicts(),
         Some("fixture-generality") => fixture_generality(),
         Some(other) => {
             eprintln!("unknown task `{other}`\n\n{USAGE}");
@@ -25,7 +26,25 @@ fn main() -> ExitCode {
     }
 }
 
-const USAGE: &str = "usage: cargo xtask <purity|census|census-stage1 [sample_size]|census-stage2-class-a [sample_size]|census-pin-stability <input.json>|probe-stage1 [sample_size]|dump-tools <url>|first-verdict|derive-ruleset-v2|fixture-generality>";
+const USAGE: &str = "usage: cargo xtask <purity|census|census-stage1 [sample_size]|census-stage2-class-a [sample_size]|census-pin-stability <input.json>|probe-stage1 [sample_size]|dump-tools <url>|first-verdict|derive-ruleset-v2|derive-verdicts <db-path> <blob-store-root> [ruleset-path] [slots]|fixture-generality>";
+
+#[cfg(target_os = "linux")]
+fn derive_verdicts() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(2).collect();
+    match xtask::derive_verdicts::run(&args) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("derive-verdicts failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn derive_verdicts() -> ExitCode {
+    eprintln!("derive-verdicts requires Linux (sandbox/observe are Linux-only)");
+    ExitCode::FAILURE
+}
 
 #[cfg(target_os = "linux")]
 fn derive_ruleset_v2() -> ExitCode {

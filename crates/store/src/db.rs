@@ -21,6 +21,7 @@ use rusqlite::{Connection, OptionalExtension};
 const MIGRATIONS: &[(&str, &str)] = &[
     ("0001_initial_schema", include_str!("../migrations/0001_initial_schema.sql")),
     ("0002_run_queue", include_str!("../migrations/0002_run_queue.sql")),
+    ("0003_evidence_synthetic_key", include_str!("../migrations/0003_evidence_synthetic_key.sql")),
 ];
 
 /// Open a metadata DB at `path` (or `":memory:"`) and apply any pending migrations.
@@ -184,6 +185,42 @@ pub fn insert_tool_snapshot(conn: &Connection, record: &ToolSnapshotRecord<'_>) 
     Ok(())
 }
 
+/// A `RULESET` row (architecture.md §6) — found missing, not merely unused, while wiring
+/// P5-02's offline derivation batch job: `VERDICT.ruleset_version` is a `REFERENCES ruleset
+/// (ruleset_version)` foreign key, and nothing before this task had ever written a `RULESET`
+/// row, so no verdict naming a ruleset version could ever have been inserted at all. The
+/// same shape of gap P4-03 closed for `RUN`/`INTEGRITY` and this same task closed for
+/// `EVIDENCE`.
+pub struct RulesetRecord<'a> {
+    /// Primary key — e.g. `"v1"`.
+    pub ruleset_version: &'a str,
+    /// The ruleset's rules, as JSON text (the schema's own `CHECK` enforces validity). This
+    /// crate has no opinion on the rules' shape; `orchestrator::load_ruleset`/`normalise`
+    /// own that.
+    pub rules: &'a str,
+    /// When this ruleset version was published.
+    pub published_at: &'a str,
+}
+
+/// Insert one `RULESET` row — a no-op if `ruleset_version` already exists (`INSERT OR
+/// IGNORE`), since a ruleset version's rules are conceptually fixed once published: the
+/// same version tag naming different rules would be the actual error, not something this
+/// function should overwrite silently. A batch job re-deriving verdicts against a ruleset
+/// it has already registered can call this unconditionally, every run, without erroring on
+/// the second and subsequent calls.
+///
+/// # Errors
+///
+/// Propagates any `rusqlite` error, including the `CHECK` violation if `rules` is not valid
+/// JSON.
+pub fn insert_ruleset(conn: &Connection, record: &RulesetRecord<'_>) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO ruleset (ruleset_version, rules, published_at) VALUES (?1, ?2, ?3)",
+        rusqlite::params![record.ruleset_version, record.rules, record.published_at],
+    )?;
+    Ok(())
+}
+
 /// A `VERDICT` row (architecture.md §6). `oracle` is mandatory and typed
 /// ([`datamodel::Oracle`]) rather than a caller-supplied string — the one property B-02
 /// exists to guarantee: every verdict this function can write carries a real oracle value,
@@ -285,6 +322,60 @@ pub fn list_verdicts(conn: &Connection) -> rusqlite::Result<Vec<VerdictRow>> {
         Ok(VerdictRow { annotation, oracle, outcome })
     })?
     .collect()
+}
+
+/// The two `TOOL_SNAPSHOT`/`SERVER` fields the offline derivation batch job (P5-02) needs
+/// to re-derive a verdict for a snapshot: its raw annotations (to read the declared value
+/// out of) and the spec revision its server negotiated (`VERDICT.protocol_version`).
+pub struct SnapshotForVerdict {
+    /// `TOOL_SNAPSHOT.annotations_raw`, exactly as stored — a caller parses the specific
+    /// annotation it means to check out of this JSON itself; this crate has no opinion on
+    /// which one.
+    pub annotations_raw: String,
+    /// `SERVER.spec_revision`, joined in because `TOOL_SNAPSHOT` itself carries no protocol
+    /// version column of its own.
+    pub spec_revision: String,
+}
+
+/// Read the fields [`SnapshotForVerdict`] needs, joined from `TOOL_SNAPSHOT` and its
+/// `SERVER`, for `snapshot_id`. `None` if no such snapshot exists.
+///
+/// # Errors
+///
+/// Propagates any `rusqlite` error.
+pub fn get_snapshot_for_verdict(
+    conn: &Connection,
+    snapshot_id: &str,
+) -> rusqlite::Result<Option<SnapshotForVerdict>> {
+    conn.query_row(
+        "SELECT tool_snapshot.annotations_raw, server.spec_revision
+         FROM tool_snapshot
+         JOIN server ON server.server_id = tool_snapshot.server_id
+         WHERE tool_snapshot.snapshot_id = ?1",
+        [snapshot_id],
+        |row| Ok(SnapshotForVerdict { annotations_raw: row.get(0)?, spec_revision: row.get(1)? }),
+    )
+    .optional()
+}
+
+/// Delete every `VERDICT` row for exactly one `(annotation, oracle)` pair — the "safe to
+/// truncate" half of architecture.md §6 invariant 2, scoped precisely rather than a blanket
+/// wipe, so a batch job regenerating one annotation/oracle pair's verdicts can never
+/// silently discard a different oracle's results (ADR-002, B-03's own cross-oracle guard).
+/// Returns how many rows were deleted.
+///
+/// # Errors
+///
+/// Propagates any `rusqlite` error.
+pub fn delete_verdicts_by_annotation_and_oracle(
+    conn: &Connection,
+    annotation: datamodel::Annotation,
+    oracle: datamodel::Oracle,
+) -> rusqlite::Result<usize> {
+    conn.execute(
+        "DELETE FROM verdict WHERE annotation = ?1 AND oracle = ?2",
+        rusqlite::params![annotation.as_db_str(), oracle.as_db_str()],
+    )
 }
 
 /// A `RUN` row (architecture.md §6) — one sandboxed execution. Exists as a typed helper
@@ -412,6 +503,92 @@ pub fn get_integrity(conn: &Connection, run_id: &str) -> rusqlite::Result<Option
         },
     )
     .optional()
+}
+
+// ---- Evidence (P5-02) ----
+//
+// Until this addition, nothing in production code had ever written an `EVIDENCE` row
+// either (the only prior `INSERT`s were raw SQL inside this module's own test module) —
+// the same kind of gap P4-03 closed for `RUN`/`INTEGRITY`. Closing it here is what exposed
+// the real `digest`-as-primary-key bug `0003_evidence_synthetic_key.sql` fixes: building
+// the batch job that actually needs to write more than one run's worth of evidence is what
+// surfaced it, not inspection of the schema alone.
+
+/// An `EVIDENCE` row (architecture.md §6) — one piece of durable, content-addressed proof a
+/// specific run produced. `digest` addresses the blob in a [`crate::BlobStore`] or
+/// [`crate::object_store::ObjectStore`]; `blob_ref` is that store's own locator for it
+/// (for a local `BlobStore` this is conventionally the digest's own string form again —
+/// there is nothing else to point at — but a networked store might use a full URL, so this
+/// crate does not assume the two are always equal).
+pub struct EvidenceRecord<'a> {
+    /// FK to `RUN`.
+    pub run_id: &'a str,
+    /// What kind of evidence this is (e.g. `"upper_layer"`). One row per `(run_id, kind)` —
+    /// enforced by the schema's own `UNIQUE` constraint, not just convention.
+    pub kind: &'a str,
+    /// The content digest, as lowercase hex — must match [`crate::digest_of`]'s own output
+    /// shape (the schema's `CHECK` enforces this).
+    pub digest: &'a str,
+    /// The backing store's own locator for this digest.
+    pub blob_ref: &'a str,
+}
+
+/// Insert one `EVIDENCE` row.
+///
+/// # Errors
+///
+/// Propagates any `rusqlite` error, including a foreign-key violation if `run_id` does not
+/// reference an existing `RUN` row, a `CHECK` violation if `digest` is not 64 lowercase hex
+/// characters, or the `UNIQUE(run_id, kind)` violation if this run already has an evidence
+/// row of this kind.
+pub fn insert_evidence(conn: &Connection, record: &EvidenceRecord<'_>) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO evidence (run_id, kind, digest, blob_ref) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![record.run_id, record.kind, record.digest, record.blob_ref],
+    )?;
+    Ok(())
+}
+
+/// One `EVIDENCE` row read back out, paired with the `RUN` it came from — what the offline
+/// derivation batch job (P5-02) actually iterates over: every run that has evidence of
+/// `kind`, regardless of which tool or server it belongs to.
+pub struct EvidenceForRun {
+    /// The `RUN` this evidence belongs to.
+    pub run_id: String,
+    /// FK to `TOOL_SNAPSHOT`, carried along so a caller doesn't need a second query per row
+    /// just to look up which tool this run tested.
+    pub snapshot_id: String,
+    /// The evidence's own content digest.
+    pub digest: String,
+    /// The backing store's own locator for `digest`, exactly as [`insert_evidence`] stored
+    /// it.
+    pub blob_ref: String,
+}
+
+/// Every `EVIDENCE` row of `kind`, joined to its `RUN` for the `snapshot_id` a caller needs
+/// to look up the tool it belongs to — the offline derivation batch job's own entry point
+/// into "what is there to (re-)derive a verdict from."
+///
+/// # Errors
+///
+/// Propagates any `rusqlite` error.
+pub fn list_evidence_by_kind(conn: &Connection, kind: &str) -> rusqlite::Result<Vec<EvidenceForRun>> {
+    let mut stmt = conn.prepare(
+        "SELECT run.run_id, run.snapshot_id, evidence.digest, evidence.blob_ref
+         FROM evidence
+         JOIN run ON run.run_id = evidence.run_id
+         WHERE evidence.kind = ?1
+         ORDER BY run.run_id",
+    )?;
+    stmt.query_map([kind], |row| {
+        Ok(EvidenceForRun {
+            run_id: row.get(0)?,
+            snapshot_id: row.get(1)?,
+            digest: row.get(2)?,
+            blob_ref: row.get(3)?,
+        })
+    })?
+    .collect()
 }
 
 // ---- Run queue (P5-01) ----
@@ -1178,5 +1355,170 @@ mod tests {
             leased_ids, expected,
             "every job must be leased exactly once across all threads, no duplicates and none missed"
         );
+    }
+
+    /// [`insert_evidence`] and [`list_evidence_by_kind`] round trip — the ordinary path.
+    #[test]
+    fn evidence_can_be_inserted_and_listed_by_kind() {
+        let conn = open_and_migrate(":memory:").expect("open_and_migrate");
+        seed_run(&conn);
+
+        let digest = "b".repeat(64);
+        insert_evidence(
+            &conn,
+            &EvidenceRecord { run_id: "run-1", kind: "upper_layer", digest: &digest, blob_ref: &digest },
+        )
+        .expect("insert_evidence");
+
+        let rows = list_evidence_by_kind(&conn, "upper_layer").expect("list_evidence_by_kind");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].run_id, "run-1");
+        assert_eq!(rows[0].snapshot_id, "snap-1");
+        assert_eq!(rows[0].digest, digest);
+
+        assert!(list_evidence_by_kind(&conn, "connection_log").expect("list other kind").is_empty());
+    }
+
+    /// The real bug `0003_evidence_synthetic_key.sql` fixes, proven directly rather than
+    /// just trusting the migration comment: two *different* runs producing byte-identical
+    /// evidence (the common case for a clean read-only tool — F-05's `BlobStore` dedupes the
+    /// underlying blob, but each run still needs its own `EVIDENCE` row) must both be
+    /// insertable at the same digest. Before this migration, the second insert failed with
+    /// `UNIQUE constraint failed: evidence.digest`.
+    #[test]
+    fn two_different_runs_can_share_the_same_evidence_digest() {
+        let conn = open_and_migrate(":memory:").expect("open_and_migrate");
+        seed_run(&conn);
+        conn.execute(
+            "INSERT INTO run (run_id, snapshot_id, arm, arguments, harness_version, started_at)
+             VALUES ('run-2', 'snap-1', 'arm0', '{}', '0.1.0', 'now')",
+            [],
+        )
+        .expect("seed second run");
+
+        let shared_digest = "c".repeat(64);
+        insert_evidence(
+            &conn,
+            &EvidenceRecord {
+                run_id: "run-1",
+                kind: "upper_layer",
+                digest: &shared_digest,
+                blob_ref: &shared_digest,
+            },
+        )
+        .expect("insert evidence for run-1");
+        insert_evidence(
+            &conn,
+            &EvidenceRecord {
+                run_id: "run-2",
+                kind: "upper_layer",
+                digest: &shared_digest,
+                blob_ref: &shared_digest,
+            },
+        )
+        .expect("insert evidence for run-2 at the same digest must succeed");
+
+        let rows = list_evidence_by_kind(&conn, "upper_layer").expect("list_evidence_by_kind");
+        assert_eq!(rows.len(), 2, "both runs' evidence rows must be present");
+        let run_ids: Vec<&str> = rows.iter().map(|r| r.run_id.as_str()).collect();
+        assert_eq!(run_ids, vec!["run-1", "run-2"]);
+        assert!(rows.iter().all(|r| r.digest == shared_digest));
+    }
+
+    /// A run may have at most one evidence row per kind — the schema's `UNIQUE(run_id,
+    /// kind)` constraint, proven directly (a second `upper_layer` row for the same run must
+    /// be rejected, while a different `kind` for that same run must still be accepted).
+    #[test]
+    fn a_run_may_have_only_one_evidence_row_per_kind() {
+        let conn = open_and_migrate(":memory:").expect("open_and_migrate");
+        seed_run(&conn);
+        let digest_a = "d".repeat(64);
+        insert_evidence(
+            &conn,
+            &EvidenceRecord { run_id: "run-1", kind: "upper_layer", digest: &digest_a, blob_ref: &digest_a },
+        )
+        .expect("first upper_layer row");
+
+        let digest_b = "e".repeat(64);
+        let err = insert_evidence(
+            &conn,
+            &EvidenceRecord { run_id: "run-1", kind: "upper_layer", digest: &digest_b, blob_ref: &digest_b },
+        )
+        .expect_err("a second upper_layer row for the same run must be rejected");
+        assert!(format!("{err}").to_lowercase().contains("unique"));
+
+        insert_evidence(
+            &conn,
+            &EvidenceRecord {
+                run_id: "run-1",
+                kind: "connection_log",
+                digest: &digest_b,
+                blob_ref: &digest_b,
+            },
+        )
+        .expect("a different kind for the same run must still be accepted");
+    }
+
+    /// The real gap `insert_ruleset` closes, reproduced directly before the fix existed:
+    /// inserting a `VERDICT` naming a `ruleset_version` that has no `RULESET` row fails the
+    /// foreign key, exactly as it should — proving the constraint is real, not merely
+    /// declared.
+    #[test]
+    fn a_verdict_naming_an_unregistered_ruleset_version_violates_the_foreign_key() {
+        let conn = open_and_migrate(":memory:").expect("open_and_migrate");
+        seed_run(&conn);
+
+        let err = conn
+            .execute(
+                "INSERT INTO verdict
+                 (verdict_id, snapshot_id, annotation, declared, outcome, reason_code, oracle,
+                  ruleset_version, protocol_version, derived_at)
+                 VALUES ('v-1', 'snap-1', 'readOnlyHint', 'true', 'holds', NULL,
+                         'kernel_changeset', 'v1', '2026-06-18', 'now')",
+                [],
+            )
+            .expect_err("an unregistered ruleset_version must violate the foreign key");
+        assert!(format!("{err}").to_lowercase().contains("foreign key"));
+    }
+
+    /// `insert_ruleset` closes that gap, and a verdict naming the now-registered version
+    /// succeeds.
+    #[test]
+    fn insert_ruleset_registers_the_version_a_verdict_can_then_reference() {
+        let conn = open_and_migrate(":memory:").expect("open_and_migrate");
+        seed_run(&conn);
+
+        insert_ruleset(
+            &conn,
+            &RulesetRecord { ruleset_version: "v1", rules: r#"{"ephemeral":[]}"#, published_at: "now" },
+        )
+        .expect("insert_ruleset");
+
+        conn.execute(
+            "INSERT INTO verdict
+             (verdict_id, snapshot_id, annotation, declared, outcome, reason_code, oracle,
+              ruleset_version, protocol_version, derived_at)
+             VALUES ('v-1', 'snap-1', 'readOnlyHint', 'true', 'holds', NULL,
+                     'kernel_changeset', 'v1', '2026-06-18', 'now')",
+            [],
+        )
+        .expect("a verdict naming a registered ruleset_version must be accepted");
+    }
+
+    /// Registering the same ruleset version twice must be a no-op, not an error — a batch
+    /// job that re-derives verdicts against the same ruleset on every run must be able to
+    /// call this unconditionally.
+    #[test]
+    fn insert_ruleset_is_idempotent_for_the_same_version() {
+        let conn = open_and_migrate(":memory:").expect("open_and_migrate");
+        let record =
+            RulesetRecord { ruleset_version: "v1", rules: r#"{"ephemeral":[]}"#, published_at: "now" };
+        insert_ruleset(&conn, &record).expect("first insert_ruleset");
+        insert_ruleset(&conn, &record).expect("second insert_ruleset must not error");
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM ruleset WHERE ruleset_version = 'v1'", [], |r| r.get(0))
+            .expect("count");
+        assert_eq!(count, 1, "re-registering the same version must not create a duplicate row");
     }
 }

@@ -513,6 +513,41 @@ impl Digest {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
+
+    /// Parse [`Display`](core::fmt::Display)'s own output back into a `Digest` — the
+    /// direction nothing needed until P5-02's offline derivation batch job, which reads a
+    /// digest back out of `EVIDENCE.digest` (stored as text) and has to turn it back into
+    /// the typed value [`store::BlobStore::get`] and [`store::object_store::ObjectStore::
+    /// get`] both require. Deliberately stricter than a generic hex parser: only exactly
+    /// 64 *lowercase* hex characters are accepted, matching both what [`Display`]
+    /// (core::fmt::Display) ever produces and what `EVIDENCE.digest`'s own `CHECK`
+    /// constraint (`crates/store/migrations/0001_initial_schema.sql`) already enforces —
+    /// `None` for anything else, including a technically-valid uppercase hex string, rather
+    /// than silently accepting a shape this type never itself produces.
+    ///
+    /// [`store`]: ../../store/index.html
+    #[must_use]
+    pub fn from_hex(s: &str) -> Option<Self> {
+        let bytes = s.as_bytes();
+        if bytes.len() != 64 {
+            return None;
+        }
+        let mut out = [0u8; 32];
+        for (i, slot) in out.iter_mut().enumerate() {
+            let hi = hex_nibble(bytes[2 * i])?;
+            let lo = hex_nibble(bytes[2 * i + 1])?;
+            *slot = (hi << 4) | lo;
+        }
+        Some(Self(out))
+    }
+}
+
+fn hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        _ => None,
+    }
 }
 
 impl core::fmt::Display for Digest {
@@ -558,5 +593,29 @@ mod tests {
     #[test]
     fn display_matches_as_db_str() {
         assert_eq!(ReasonCode::Timeout.to_string(), "timeout");
+    }
+
+    #[test]
+    fn digest_from_hex_round_trips_through_display() {
+        let original = Digest::from_bytes([0xabu8; 32]);
+        let rendered = original.to_string();
+        assert_eq!(Digest::from_hex(&rendered), Some(original));
+    }
+
+    #[test]
+    fn digest_from_hex_rejects_uppercase() {
+        let hex = Digest::from_bytes([0xabu8; 32]).to_string().to_uppercase();
+        assert_eq!(Digest::from_hex(&hex), None);
+    }
+
+    #[test]
+    fn digest_from_hex_rejects_the_wrong_length() {
+        assert_eq!(Digest::from_hex("abcd"), None);
+        assert_eq!(Digest::from_hex(&"a".repeat(65)), None);
+    }
+
+    #[test]
+    fn digest_from_hex_rejects_non_hex_characters() {
+        assert_eq!(Digest::from_hex(&"g".repeat(64)), None);
     }
 }

@@ -3,6 +3,8 @@
 pub mod census;
 pub mod census_stage1;
 pub mod class_a_stage2;
+#[cfg(target_os = "linux")]
+pub mod derive_verdicts;
 pub mod dump_tools;
 #[cfg(target_os = "linux")]
 pub mod first_verdict;

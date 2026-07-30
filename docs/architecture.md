@@ -417,7 +417,8 @@ erDiagram
         bool adversarial_flag
     }
     EVIDENCE {
-        string digest PK
+        string evidence_id PK
+        string digest "not unique — see note below"
         string run_id FK
         string kind
         string blob_ref
@@ -453,6 +454,15 @@ its relationship to `RUN` ("seeds") was. F-06 filled the gap: `server_id` is `NU
 `fixtures/generic` fixture and required for a `fixtures/per-server` one, enforced as a
 `CHECK` alongside the FK, and `content_digest` points into the same evidence store F-05
 built rather than duplicating fixture bytes into the metadata DB.
+
+`EVIDENCE.digest` was originally this table's own primary key. P5-02 found — empirically,
+building the batch job that actually writes and reads this table for the first time — that
+this made it impossible to record two different runs producing byte-identical evidence,
+which content-addressed storage makes a common case rather than a rare one (a clean
+read-only tool run produces the exact same empty-changeset digest every time). Fixed with a
+synthetic `evidence_id` key and a `UNIQUE(run_id, kind)` constraint in its place — one
+evidence row per kind per run, `digest` free to repeat across as many rows as point at the
+one deduplicated blob.
 
 Three invariants:
 

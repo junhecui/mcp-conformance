@@ -2756,6 +2756,74 @@ with no change to its output beyond what P4-02 already added.
 **Exit:** Batch job over the object store regenerates all verdicts; it is not a step in the
 run loop.
 
+**Status: Done, at the scope disclosed below.** `orchestrator::derive_all_read_only_hint_
+verdicts` — the same pipeline P1-08/P1-09 already proved by hand
+(`store::BlobStore` → `observe::evtree::decode` → `orchestrator::load_ruleset` →
+`normalise::normalise` → `verdict::read_only_hint`), now driven for real from whatever the
+metadata DB and evidence store actually hold, executing no sandboxed tool. Reuses P5-01's
+`RunQueue`/`WorkerPool` for real: every `upper_layer` evidence row becomes one queued job,
+processed across real concurrent worker threads — proving that machinery generalises to
+plain CPU-bound batch work, not only sandbox-driving jobs. Exposed as `cargo xtask
+derive-verdicts <db-path> <blob-store-root> [ruleset-path] [slots]`, run for real against a
+hand-seeded DB and evidence store as part of this task (not only exercised from a test):
+a tool declaring `readOnlyHint: true` whose stored evidence contains a real write correctly
+derived `Violated`.
+
+**Scope disclosed, not silently narrowed:** only `readOnlyHint`, from each run's single
+`upper_layer` evidence row — exactly P1-08/P1-09's own demonstrated single-arm pipeline.
+`idempotentHint` and `openWorldHint` would need correlating *several* runs' worth of
+evidence per tool (arms `1'`, `2`, `2R` for the former; the strict and instrumented arms
+together for the latter) rather than one row at a time — a real extension this task does not
+build, stated in `derive`'s own doc comment rather than left for a reader to notice by its
+absence. Wired concretely to `store::BlobStore` (the "object store" the exit criterion
+names), not the `ObjectStore` trait generically — `HttpObjectStore` satisfies the same trait
+and could be substituted, but nothing in this task's own scope needed that generality yet.
+
+**Three real, previously-latent bugs found while building this — not by inspection, by
+actually trying to write and read the rows this task needs, each the same shape of gap
+P4-03 closed for `RUN`/`INTEGRITY`:**
+
+1. **`EVIDENCE.digest` was the table's own primary key** (`0001_initial_schema.sql`), which
+   made it impossible to record two different runs producing byte-identical evidence — the
+   common case for a clean read-only tool, not a rare one (P1-08's own write-up already
+   noted "same evidence digest both times, since the tool writes nothing" without anything
+   yet depending on storing both). Reproduced directly (a second `INSERT` at an
+   already-used digest failing `UNIQUE constraint failed: evidence.digest`) before fixing
+   it: `0003_evidence_synthetic_key.sql` gives `EVIDENCE` a synthetic `evidence_id` key and
+   a `UNIQUE(run_id, kind)` constraint in its place, mirrored back into architecture.md §6's
+   own ER diagram (the same precedent F-06 set for `FIXTURE`'s columns). Proven directly: a
+   test seeds two different runs with the same empty-changeset digest and both now insert
+   and both now derive their own verdict.
+2. **`VERDICT.ruleset_version` is a foreign key into `RULESET`, and nothing had ever written
+   a `RULESET` row** — any verdict naming a ruleset version failed outright
+   (`FOREIGN KEY constraint failed`), caught by this task's own first test run before it
+   ever reached a committed line of production code. Closed with `store::db::insert_ruleset`
+   (`INSERT OR IGNORE` — idempotent, since a ruleset version's rules are fixed once
+   published, and a batch job re-deriving against the same ruleset on every run must be able
+   to call this unconditionally without erroring the second time).
+3. **Nothing had ever written a production `EVIDENCE` row at all** (only this module's own
+   test-seeded rows existed anywhere in the codebase before this task) — closed with
+   `store::db::insert_evidence`/`EvidenceRecord`/`list_evidence_by_kind`.
+
+Also added `datamodel::Digest::from_hex` — parsing `Display`'s own output back into a
+`Digest`, the direction nothing needed until this task had to read a stored `EVIDENCE.digest`
+column back out as a typed value to hand to `BlobStore::get`. Deliberately strict (64
+lowercase hex characters only, matching what `Display` ever produces and what the schema's
+own `CHECK` already enforces) rather than a generic case-insensitive hex parser.
+
+"Regenerates the whole verdict table" is real, not just additive: `derive_all_read_only_
+hint_verdicts` deletes existing `readOnlyHint`/`kernel_changeset` verdicts first (scoped to
+exactly that annotation/oracle pair, never a blanket wipe — B-03's cross-oracle guard stays
+intact even during a "safe to truncate" regeneration), then re-derives. Proven directly:
+running the batch job twice over the same evidence leaves exactly one verdict, not two.
+
+`datamodel` grew from 3 to 7 tests (`Digest::from_hex` round-trip, uppercase/length/non-hex
+rejection). `store` grew from 36 to 42 (`EVIDENCE`: 3 new tests including the two-runs-
+share-a-digest regression; `RULESET`: 3 new tests). `orchestrator` grew from 33 to 37 (new
+`derive` module: 5 tests). `cargo build --workspace --all-targets`, `cargo clippy --workspace
+--all-targets -- -D warnings`, `cargo xtask purity`, and `cargo test --workspace` all pass
+clean; `cargo xtask first-verdict` and the P1-09 replay tests re-run with no regression.
+
 ### P5-03 Disclosure workflow
 
 **Depends on:** F-06

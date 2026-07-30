@@ -115,6 +115,16 @@ mod open_world;
 #[cfg(target_os = "linux")]
 pub use open_world::assess_open_world_hint;
 
+/// P5-02: an offline batch job regenerating `VERDICT` rows from stored `EVIDENCE` plus a
+/// ruleset — no sandboxed tool execution, but it depends on `observe::evtree::decode`
+/// (Linux-only, per that crate's own crate-root `cfg`), so it is gated the same way `arms`
+/// is, for the same reason: nothing here has anything to offer a target where `observe`
+/// itself compiles to an empty crate.
+#[cfg(target_os = "linux")]
+mod derive;
+#[cfg(target_os = "linux")]
+pub use derive::{derive_all_read_only_hint_verdicts, DeriveError, DeriveReport};
+
 #[derive(Deserialize)]
 struct RulesetFile {
     version: String,
