@@ -77,6 +77,54 @@ impl core::fmt::Display for Oracle {
     }
 }
 
+/// Where a `VERDICT` sits in the responsible-disclosure workflow (P5-03, design.md's open
+/// question 4). `VERDICT.embargo_state` (architecture.md §6) — added ahead of Phase 5 while
+/// it was cheap (architecture.md §12 item 6), given real behaviour by P5-03's disclosure
+/// workflow.
+///
+/// A verdict that never needs naming (the common case — most results are published in
+/// aggregate, never per-server) simply stays [`Self::None`] forever; this state machine is
+/// only ever exercised for a verdict someone has decided to name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EmbargoState {
+    /// No embargo consideration — the default, and where an aggregated-only verdict stays.
+    None,
+    /// Under active responsible-disclosure embargo: known internally, not yet safe to name
+    /// in published results.
+    Embargoed,
+    /// The embargo has run its course; safe to publish by name.
+    Disclosed,
+}
+
+impl EmbargoState {
+    /// The exact text F-06's `VERDICT.embargo_state` `CHECK` constraint accepts.
+    #[must_use]
+    pub const fn as_db_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Embargoed => "embargoed",
+            Self::Disclosed => "disclosed",
+        }
+    }
+
+    /// The inverse of [`Self::as_db_str`].
+    #[must_use]
+    pub fn from_db_str(s: &str) -> Option<Self> {
+        match s {
+            "none" => Some(Self::None),
+            "embargoed" => Some(Self::Embargoed),
+            "disclosed" => Some(Self::Disclosed),
+            _ => None,
+        }
+    }
+}
+
+impl core::fmt::Display for EmbargoState {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.as_db_str())
+    }
+}
+
 impl Outcome {
     /// The exact text F-06's `VERDICT.outcome` `CHECK` constraint accepts.
     #[must_use]
@@ -617,5 +665,25 @@ mod tests {
     #[test]
     fn digest_from_hex_rejects_non_hex_characters() {
         assert_eq!(Digest::from_hex(&"g".repeat(64)), None);
+    }
+
+    #[test]
+    fn every_embargo_state_round_trips_through_its_db_string() {
+        let all = [EmbargoState::None, EmbargoState::Embargoed, EmbargoState::Disclosed];
+        for state in all {
+            assert_eq!(EmbargoState::from_db_str(state.as_db_str()), Some(state));
+        }
+    }
+
+    #[test]
+    fn embargo_state_as_db_str_matches_the_schemas_check_constraint() {
+        assert_eq!(EmbargoState::None.as_db_str(), "none");
+        assert_eq!(EmbargoState::Embargoed.as_db_str(), "embargoed");
+        assert_eq!(EmbargoState::Disclosed.as_db_str(), "disclosed");
+    }
+
+    #[test]
+    fn an_unrecognised_embargo_state_string_is_not_guessed_at() {
+        assert_eq!(EmbargoState::from_db_str("cleared"), None);
     }
 }

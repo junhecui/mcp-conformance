@@ -40,6 +40,13 @@ pub use worker::{Worker, WorkerError};
 mod queue;
 pub use queue::{QueueError, RunQueue};
 
+/// P5-03: the responsible-disclosure workflow — an embargo state machine over
+/// `VERDICT.embargo_state`/`disclosed_at`, plus a maintainer-contact-path derivation from
+/// `intake::catalogue::Provenance`. Genuinely cross-platform (SQLite plus string
+/// formatting, nothing Linux-specific), same rationale as `worker`/`queue` above.
+mod disclosure;
+pub use disclosure::{advance_embargo, is_valid_transition, maintainer_contact_path, ContactPath, DisclosureError};
+
 /// P5-01: a worker pool draining [`RunQueue`] across real OS threads. Same cross-platform
 /// rationale as `queue` above — the pool itself has no Linux-specific dependency; what a
 /// handler closure given to it *does* (e.g. drive `sandbox::spawn`) is a separate concern.

@@ -2833,6 +2833,63 @@ Open question 4, now a component rather than an afterthought. Open question 3 re
 aggregate by default, named on violation after disclosure — the metadata pin is what makes
 named publication defensible, since a claim is bound to an exact observed snapshot.
 
+**Status: Done.** `datamodel::EmbargoState` (`none`/`embargoed`/`disclosed`, mirroring
+`VERDICT.embargo_state`'s `CHECK`, same shape as `Oracle`/`Outcome`/`Annotation`) plus
+`orchestrator::disclosure`, giving F-06's `embargo_state`/`disclosed_at` columns — added
+back in F-06, ahead of Phase 5, per architecture.md §12 item 6 — their first real behaviour.
+
+**Embargo state machine:** `orchestrator::disclosure::advance_embargo(conn, verdict_id,
+target, disclosed_at)` allows exactly `none -> embargoed -> disclosed`, one-way. `none ->
+disclosed` directly is deliberately rejected: open question 3's own recommendation is
+"aggregate by default, named on violation after disclosure," and a verdict that will only
+ever be published in aggregate never needs to enter this machine at all — it simply stays
+`none` forever. The only reason a verdict *does* enter it is that someone has decided to
+name it, and letting `disclosed` be reachable without ever passing through `embargoed`
+would let that word quietly stop meaning "the maintainer-contact step actually happened."
+`Disclosed -> Embargoed` (reverting) and `Embargoed -> None` (cancelling) are rejected too —
+proven directly, not just by the two allowed transitions succeeding.
+
+**A second real schema gap, found the same way P5-02's two were — by trying to write the
+rows this task needs, not by inspection:** `VERDICT.disclosed_at` had no constraint tying it
+to `embargo_state` at all; nothing stopped a timestamp being set while `embargo_state`
+stayed `'none'`, or `'disclosed'` being set with no timestamp. Closed with
+`0004_verdict_embargo_consistency.sql` (`CHECK ((embargo_state = 'disclosed') =
+(disclosed_at IS NOT NULL))`, the same "invariant enforced as a constraint, not a comment"
+discipline invariant 3 already applies to `outcome`/`reason_code`), a straight
+drop-and-recreate — safe for the same reason `0003` was: nothing outside this schema's own
+tests, plus P5-02's handful of test-seeded rows, has ever written a `VERDICT` row, and
+nothing else in the schema holds a foreign key into it. `orchestrator::disclosure::
+advance_embargo` enforces the same rule one layer up (`DisclosureError::TimestampMismatch`)
+so a caller gets a specific, named error instead of a raw constraint violation; `store::db`
+itself stays a dumb persistence layer (`get_verdict_embargo_state`/`set_verdict_embargo_
+state`, no transition validation) — the same store-versus-orchestrator split this codebase
+has followed at every other Phase 4/5 wiring point.
+
+**Maintainer contact path:** `orchestrator::disclosure::maintainer_contact_path`, a pure
+function over `intake::catalogue::Provenance` (P0-03's already-captured
+`repository_url`/`repository_source`) — `ContactPath::GitHubIssues({repository_url}/issues)`
+for a GitHub-sourced entry, `ContactPath::Unknown` otherwise (a non-GitHub source, or no
+provenance recorded at all — a real, common case for registry entries, not an error). No
+new data source: `intake::catalogue` already resolved this at ingest time (P0-03); this
+task is the first thing to actually read it back out for a purpose.
+
+**Scope boundary, stated plainly (the same posture P4-05 took with observation evasion):**
+this module computes *where* to send a report and *whether* a state transition is legal. It
+never sends anything anywhere on its own. Filing a real issue or emailing a real maintainer
+about a real third-party server is a human decision with real consequences, made once per
+finding — not something a batch job should ever do unattended, and not something this task
+builds.
+
+`datamodel` grew from 7 to 10 tests (`EmbargoState` round-trip/rejection). `store` grew from
+42 to 46 (`VERDICT`'s new `CHECK`, `get_verdict_embargo_state`/`set_verdict_embargo_state`
+round trip). `orchestrator` grew from 37 to 48 (new `disclosure` module: 11 tests — 4 for
+the contact path, 7 for the state machine, including every rejected transition and the
+timestamp-mismatch cases in both directions). `cargo build --workspace --all-targets`,
+`cargo clippy --workspace --all-targets -- -D warnings`, `cargo xtask purity`, and `cargo
+test --workspace` all pass clean; `cargo xtask first-verdict`, the P1-09 replay tests, and a
+manual `cargo xtask derive-verdicts` run against the recreated `VERDICT` table all re-ran
+with no regression.
+
 ### P5-04 Aggregate reporting
 
 **Depends on:** P5-02, B-03

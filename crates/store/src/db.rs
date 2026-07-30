@@ -22,6 +22,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
     ("0001_initial_schema", include_str!("../migrations/0001_initial_schema.sql")),
     ("0002_run_queue", include_str!("../migrations/0002_run_queue.sql")),
     ("0003_evidence_synthetic_key", include_str!("../migrations/0003_evidence_synthetic_key.sql")),
+    (
+        "0004_verdict_embargo_consistency",
+        include_str!("../migrations/0004_verdict_embargo_consistency.sql"),
+    ),
 ];
 
 /// Open a metadata DB at `path` (or `":memory:"`) and apply any pending migrations.
@@ -322,6 +326,70 @@ pub fn list_verdicts(conn: &Connection) -> rusqlite::Result<Vec<VerdictRow>> {
         Ok(VerdictRow { annotation, oracle, outcome })
     })?
     .collect()
+}
+
+/// One `VERDICT` row's disclosure state — `embargo_state` plus `disclosed_at`, read
+/// together because P5-03's state machine (`orchestrator::disclosure`) needs both to decide
+/// whether a requested transition is valid.
+pub struct EmbargoRow {
+    /// Where this verdict sits in the disclosure workflow.
+    pub embargo_state: datamodel::EmbargoState,
+    /// When it was disclosed, if it has been. `None` in every other state — the schema's
+    /// own `CHECK` (`0004_verdict_embargo_consistency.sql`) makes the two ways this could
+    /// disagree impossible to write in the first place.
+    pub disclosed_at: Option<String>,
+}
+
+/// Read back `verdict_id`'s current disclosure state. `None` if no such verdict exists.
+///
+/// # Errors
+///
+/// Propagates any `rusqlite` error, including [`rusqlite::Error::InvalidColumnType`] if the
+/// stored `embargo_state` doesn't round-trip through [`datamodel::EmbargoState::from_db_str`]
+/// (which should be impossible — [`set_verdict_embargo_state`] is the only writer, and the
+/// schema's own `CHECK` already rejects anything else).
+pub fn get_verdict_embargo_state(
+    conn: &Connection,
+    verdict_id: &str,
+) -> rusqlite::Result<Option<EmbargoRow>> {
+    conn.query_row(
+        "SELECT embargo_state, disclosed_at FROM verdict WHERE verdict_id = ?1",
+        [verdict_id],
+        |row| {
+            let state_str: String = row.get(0)?;
+            let embargo_state = datamodel::EmbargoState::from_db_str(&state_str).ok_or_else(|| {
+                rusqlite::Error::InvalidColumnType(0, "embargo_state".into(), rusqlite::types::Type::Text)
+            })?;
+            Ok(EmbargoRow { embargo_state, disclosed_at: row.get(1)? })
+        },
+    )
+    .optional()
+}
+
+/// Write `verdict_id`'s `embargo_state`/`disclosed_at` unconditionally — this function
+/// enforces nothing about *which* transitions are legal (that decision belongs to
+/// `orchestrator::disclosure`, one layer up, the same store-is-dumb-persistence split every
+/// other typed helper in this module already follows); it only enforces what the schema
+/// itself already requires (the `CHECK` linking the two columns).
+///
+/// # Errors
+///
+/// Propagates any `rusqlite` error, including the schema's own `CHECK` violation if
+/// `disclosed_at`'s presence disagrees with `embargo_state`, or if `verdict_id` doesn't
+/// exist (`execute` succeeding with zero rows affected is not itself an error — a caller
+/// wanting to know a verdict existed should check with [`get_verdict_embargo_state`] first,
+/// exactly as `orchestrator::disclosure::advance_embargo` does).
+pub fn set_verdict_embargo_state(
+    conn: &Connection,
+    verdict_id: &str,
+    embargo_state: datamodel::EmbargoState,
+    disclosed_at: Option<&str>,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE verdict SET embargo_state = ?1, disclosed_at = ?2 WHERE verdict_id = ?3",
+        rusqlite::params![embargo_state.as_db_str(), disclosed_at, verdict_id],
+    )?;
+    Ok(())
 }
 
 /// The two `TOOL_SNAPSHOT`/`SERVER` fields the offline derivation batch job (P5-02) needs
@@ -1520,5 +1588,92 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM ruleset WHERE ruleset_version = 'v1'", [], |r| r.get(0))
             .expect("count");
         assert_eq!(count, 1, "re-registering the same version must not create a duplicate row");
+    }
+
+    fn seed_verdict(conn: &Connection) {
+        seed_run(conn);
+        insert_verdict(
+            conn,
+            &VerdictRecord {
+                verdict_id: "v-1",
+                snapshot_id: "snap-1",
+                annotation: datamodel::Annotation::ReadOnlyHint,
+                declared: "true",
+                outcome: datamodel::Outcome::Violated,
+                reason_code: None,
+                oracle: datamodel::Oracle::KernelChangeset,
+                ruleset_version: None,
+                protocol_version: "2026-06-18",
+                derived_at: "unix:0",
+            },
+        )
+        .expect("insert_verdict");
+    }
+
+    /// P5-03's own invariant, proven directly against the schema rather than trusted from
+    /// the migration comment: a `disclosed_at` timestamp with `embargo_state != 'disclosed'`
+    /// must be rejected.
+    #[test]
+    fn a_disclosed_at_timestamp_without_disclosed_state_violates_the_check() {
+        let conn = open_and_migrate(":memory:").expect("open_and_migrate");
+        seed_verdict(&conn);
+
+        let err = conn
+            .execute(
+                "UPDATE verdict SET embargo_state = 'embargoed', disclosed_at = 'unix:0' \
+                 WHERE verdict_id = 'v-1'",
+                [],
+            )
+            .expect_err("disclosed_at set while not disclosed must violate the CHECK");
+        assert!(format!("{err}").to_lowercase().contains("check"));
+    }
+
+    /// The other half of the same invariant: `embargo_state = 'disclosed'` with no
+    /// `disclosed_at` must also be rejected.
+    #[test]
+    fn a_disclosed_state_with_no_timestamp_violates_the_check() {
+        let conn = open_and_migrate(":memory:").expect("open_and_migrate");
+        seed_verdict(&conn);
+
+        let err = conn
+            .execute("UPDATE verdict SET embargo_state = 'disclosed' WHERE verdict_id = 'v-1'", [])
+            .expect_err("disclosed state with no timestamp must violate the CHECK");
+        assert!(format!("{err}").to_lowercase().contains("check"));
+    }
+
+    /// [`get_verdict_embargo_state`]/[`set_verdict_embargo_state`] round trip, and a fresh
+    /// verdict defaults to `None` with no timestamp — the common case for a verdict that
+    /// will only ever be published in aggregate.
+    #[test]
+    fn embargo_state_round_trips_and_defaults_to_none() {
+        let conn = open_and_migrate(":memory:").expect("open_and_migrate");
+        seed_verdict(&conn);
+
+        let fresh = get_verdict_embargo_state(&conn, "v-1")
+            .expect("get_verdict_embargo_state")
+            .expect("row exists");
+        assert_eq!(fresh.embargo_state, datamodel::EmbargoState::None);
+        assert_eq!(fresh.disclosed_at, None);
+
+        set_verdict_embargo_state(&conn, "v-1", datamodel::EmbargoState::Embargoed, None)
+            .expect("set_verdict_embargo_state");
+        let embargoed = get_verdict_embargo_state(&conn, "v-1")
+            .expect("get_verdict_embargo_state")
+            .expect("row exists");
+        assert_eq!(embargoed.embargo_state, datamodel::EmbargoState::Embargoed);
+
+        set_verdict_embargo_state(&conn, "v-1", datamodel::EmbargoState::Disclosed, Some("unix:100"))
+            .expect("set_verdict_embargo_state");
+        let disclosed = get_verdict_embargo_state(&conn, "v-1")
+            .expect("get_verdict_embargo_state")
+            .expect("row exists");
+        assert_eq!(disclosed.embargo_state, datamodel::EmbargoState::Disclosed);
+        assert_eq!(disclosed.disclosed_at.as_deref(), Some("unix:100"));
+    }
+
+    #[test]
+    fn get_verdict_embargo_state_for_an_unknown_verdict_is_none() {
+        let conn = open_and_migrate(":memory:").expect("open_and_migrate");
+        assert!(get_verdict_embargo_state(&conn, "no-such-verdict").expect("query").is_none());
     }
 }
