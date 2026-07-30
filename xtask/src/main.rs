@@ -17,6 +17,7 @@ fn main() -> ExitCode {
         Some("aggregate-report") => aggregate_report(),
         Some("methodology") => methodology(),
         Some("fixture-generality") => fixture_generality(),
+        Some("build-q02-items") => build_q02_items(),
         Some(other) => {
             eprintln!("unknown task `{other}`\n\n{USAGE}");
             ExitCode::FAILURE
@@ -28,7 +29,7 @@ fn main() -> ExitCode {
     }
 }
 
-const USAGE: &str = "usage: cargo xtask <purity|census|census-stage1 [sample_size]|census-stage2-class-a [sample_size]|census-pin-stability <input.json>|probe-stage1 [sample_size]|dump-tools <url>|first-verdict|derive-ruleset-v2|derive-verdicts <db-path> <blob-store-root> [ruleset-path] [slots]|aggregate-report <db-path>|methodology [design-md-path] [ruleset-path]|fixture-generality>";
+const USAGE: &str = "usage: cargo xtask <purity|census|census-stage1 [sample_size]|census-stage2-class-a [sample_size]|census-pin-stability <input.json>|probe-stage1 [sample_size]|dump-tools <url>|first-verdict|derive-ruleset-v2|derive-verdicts <db-path> <blob-store-root> [ruleset-path] [slots]|aggregate-report <db-path>|methodology [design-md-path] [ruleset-path]|fixture-generality|build-q02-items>";
 
 fn aggregate_report() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(2).collect();
@@ -118,6 +119,23 @@ fn fixture_generality() -> ExitCode {
 #[cfg(not(target_os = "linux"))]
 fn fixture_generality() -> ExitCode {
     eprintln!("fixture-generality requires Linux (sandbox/observe/world are Linux-only)");
+    ExitCode::FAILURE
+}
+
+#[cfg(target_os = "linux")]
+fn build_q02_items() -> ExitCode {
+    match xtask::q02_held_out_items::run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("build-q02-items failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn build_q02_items() -> ExitCode {
+    eprintln!("build-q02-items requires Linux (sandbox/observe are Linux-only)");
     ExitCode::FAILURE
 }
 

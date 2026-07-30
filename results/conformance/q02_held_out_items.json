@@ -1,0 +1,368 @@
+{
+  "auto_additive_skipped": 16,
+  "corpus": [
+    "@modelcontextprotocol/server-everything",
+    "@modelcontextprotocol/server-filesystem"
+  ],
+  "items": [
+    {
+      "item_id": "server-everything/echo",
+      "mechanical_partition": {
+        "deletions_or_overwrites": [],
+        "pure_additions": []
+      },
+      "note": "empty mechanical partition: auto-classified Additive per docs/labelling_protocol.md, not shown to a rater.",
+      "resolution": "npx -y @modelcontextprotocol/server-everything stdio",
+      "shown_to_rater": false,
+      "source_server": "@modelcontextprotocol/server-everything",
+      "tool_arguments": {
+        "message": "example"
+      },
+      "tool_description": "Echoes back the input string",
+      "tool_name": "echo"
+    },
+    {
+      "item_id": "server-everything/get-annotated-message",
+      "mechanical_partition": {
+        "deletions_or_overwrites": [],
+        "pure_additions": []
+      },
+      "note": "empty mechanical partition: auto-classified Additive per docs/labelling_protocol.md, not shown to a rater.",
+      "resolution": "npx -y @modelcontextprotocol/server-everything stdio",
+      "shown_to_rater": false,
+      "source_server": "@modelcontextprotocol/server-everything",
+      "tool_arguments": {
+        "includeImage": true,
+        "messageType": "error"
+      },
+      "tool_description": "Demonstrates how annotations can be used to provide metadata about content.",
+      "tool_name": "get-annotated-message"
+    },
+    {
+      "item_id": "server-everything/get-env",
+      "mechanical_partition": {
+        "deletions_or_overwrites": [],
+        "pure_additions": []
+      },
+      "note": "empty mechanical partition: auto-classified Additive per docs/labelling_protocol.md, not shown to a rater.",
+      "resolution": "npx -y @modelcontextprotocol/server-everything stdio",
+      "shown_to_rater": false,
+      "source_server": "@modelcontextprotocol/server-everything",
+      "tool_arguments": {},
+      "tool_description": "Returns all environment variables, helpful for debugging MCP server configuration",
+      "tool_name": "get-env"
+    },
+    {
+      "item_id": "server-everything/get-resource-links",
+      "mechanical_partition": {
+        "deletions_or_overwrites": [],
+        "pure_additions": []
+      },
+      "note": "empty mechanical partition: auto-classified Additive per docs/labelling_protocol.md, not shown to a rater.",
+      "resolution": "npx -y @modelcontextprotocol/server-everything stdio",
+      "shown_to_rater": false,
+      "source_server": "@modelcontextprotocol/server-everything",
+      "tool_arguments": {
+        "count": 1.0
+      },
+      "tool_description": "Returns up to ten resource links that reference different types of resources",
+      "tool_name": "get-resource-links"
+    },
+    {
+      "item_id": "server-everything/get-resource-reference",
+      "mechanical_partition": {
+        "deletions_or_overwrites": [],
+        "pure_additions": []
+      },
+      "note": "empty mechanical partition: auto-classified Additive per docs/labelling_protocol.md, not shown to a rater.",
+      "resolution": "npx -y @modelcontextprotocol/server-everything stdio",
+      "shown_to_rater": false,
+      "source_server": "@modelcontextprotocol/server-everything",
+      "tool_arguments": {
+        "resourceId": 0.0,
+        "resourceType": "Text"
+      },
+      "tool_description": "Returns a resource reference that can be used by MCP clients",
+      "tool_name": "get-resource-reference"
+    },
+    {
+      "item_id": "server-everything/get-structured-content",
+      "mechanical_partition": {
+        "deletions_or_overwrites": [],
+        "pure_additions": []
+      },
+      "note": "empty mechanical partition: auto-classified Additive per docs/labelling_protocol.md, not shown to a rater.",
+      "resolution": "npx -y @modelcontextprotocol/server-everything stdio",
+      "shown_to_rater": false,
+      "source_server": "@modelcontextprotocol/server-everything",
+      "tool_arguments": {
+        "location": "New York"
+      },
+      "tool_description": "Returns structured content along with an output schema for client data validation",
+      "tool_name": "get-structured-content"
+    },
+    {
+      "item_id": "server-everything/get-sum",
+      "mechanical_partition": {
+        "deletions_or_overwrites": [],
+        "pure_additions": []
+      },
+      "note": "empty mechanical partition: auto-classified Additive per docs/labelling_protocol.md, not shown to a rater.",
+      "resolution": "npx -y @modelcontextprotocol/server-everything stdio",
+      "shown_to_rater": false,
+      "source_server": "@modelcontextprotocol/server-everything",
+      "tool_arguments": {
+        "a": 0.0,
+        "b": 0.0
+      },
+      "tool_description": "Returns the sum of two numbers",
+      "tool_name": "get-sum"
+    },
+    {
+      "item_id": "server-everything/get-tiny-image",
+      "mechanical_partition": {
+        "deletions_or_overwrites": [],
+        "pure_additions": []
+      },
+      "note": "empty mechanical partition: auto-classified Additive per docs/labelling_protocol.md, not shown to a rater.",
+      "resolution": "npx -y @modelcontextprotocol/server-everything stdio",
+      "shown_to_rater": false,
+      "source_server": "@modelcontextprotocol/server-everything",
+      "tool_arguments": {},
+      "tool_description": "Returns a tiny MCP logo image.",
+      "tool_name": "get-tiny-image"
+    },
+    {
+      "item_id": "server-everything/gzip-file-as-resource",
+      "mechanical_partition": {
+        "deletions_or_overwrites": [],
+        "pure_additions": []
+      },
+      "note": "empty mechanical partition: auto-classified Additive per docs/labelling_protocol.md, not shown to a rater.",
+      "resolution": "npx -y @modelcontextprotocol/server-everything stdio",
+      "shown_to_rater": false,
+      "source_server": "@modelcontextprotocol/server-everything",
+      "tool_arguments": {
+        "data": "example",
+        "name": "example",
+        "outputType": "resourceLink"
+      },
+      "tool_description": "Compresses a single file using gzip compression. Depending upon the selected output type, returns either the compressed data as a gzipped resource or a resource link, allowing it to be downloaded in a subsequent request during the current session.",
+      "tool_name": "gzip-file-as-resource"
+    },
+    {
+      "item_id": "server-everything/toggle-simulated-logging",
+      "mechanical_partition": {
+        "deletions_or_overwrites": [],
+        "pure_additions": []
+      },
+      "note": "empty mechanical partition: auto-classified Additive per docs/labelling_protocol.md, not shown to a rater.",
+      "resolution": "npx -y @modelcontextprotocol/server-everything stdio",
+      "shown_to_rater": false,
+      "source_server": "@modelcontextprotocol/server-everything",
+      "tool_arguments": {},
+      "tool_description": "Toggles simulated, random-leveled logging on or off.",
+      "tool_name": "toggle-simulated-logging"
+    },
+    {
+      "item_id": "server-everything/toggle-subscriber-updates",
+      "mechanical_partition": {
+        "deletions_or_overwrites": [],
+        "pure_additions": []
+      },
+      "note": "empty mechanical partition: auto-classified Additive per docs/labelling_protocol.md, not shown to a rater.",
+      "resolution": "npx -y @modelcontextprotocol/server-everything stdio",
+      "shown_to_rater": false,
+      "source_server": "@modelcontextprotocol/server-everything",
+      "tool_arguments": {},
+      "tool_description": "Toggles simulated resource subscription updates on or off.",
+      "tool_name": "toggle-subscriber-updates"
+    },
+    {
+      "item_id": "server-everything/trigger-long-running-operation",
+      "mechanical_partition": {
+        "deletions_or_overwrites": [],
+        "pure_additions": []
+      },
+      "note": "empty mechanical partition: auto-classified Additive per docs/labelling_protocol.md, not shown to a rater.",
+      "resolution": "npx -y @modelcontextprotocol/server-everything stdio",
+      "shown_to_rater": false,
+      "source_server": "@modelcontextprotocol/server-everything",
+      "tool_arguments": {
+        "duration": 0.0,
+        "steps": 0.0
+      },
+      "tool_description": "Demonstrates a long running operation with progress updates.",
+      "tool_name": "trigger-long-running-operation"
+    },
+    {
+      "item_id": "server-everything/simulate-research-query",
+      "mechanical_partition": {
+        "deletions_or_overwrites": [],
+        "pure_additions": []
+      },
+      "note": "empty mechanical partition: auto-classified Additive per docs/labelling_protocol.md, not shown to a rater.",
+      "resolution": "npx -y @modelcontextprotocol/server-everything stdio",
+      "shown_to_rater": false,
+      "source_server": "@modelcontextprotocol/server-everything",
+      "tool_arguments": {
+        "ambiguous": true,
+        "topic": "example"
+      },
+      "tool_description": "Simulates a deep research operation that gathers, analyzes, and synthesizes information. Demonstrates MCP task-based operations with progress through multiple stages. If 'ambiguous' is true and client supports elicitation, sends an elicitation request for clarification.",
+      "tool_name": "simulate-research-query"
+    },
+    {
+      "item_id": "server-filesystem/write_file_overwrite",
+      "mechanical_partition": {
+        "deletions_or_overwrites": [
+          {
+            "change": "Overwrite",
+            "path": "existing_file.txt"
+          }
+        ],
+        "pure_additions": []
+      },
+      "note": null,
+      "resolution": "npx -y @modelcontextprotocol/server-filesystem <mountpoint>",
+      "shown_to_rater": true,
+      "source_server": "@modelcontextprotocol/server-filesystem",
+      "tool_arguments": {
+        "content": "overwritten by Q-02 held-out set generation\n",
+        "path": "existing_file.txt"
+      },
+      "tool_description": "Create a new file or completely overwrite an existing file with new content. Use with caution as it will overwrite existing files without warning. Handles text content with proper encoding. Only works within allowed directories.",
+      "tool_name": "write_file"
+    },
+    {
+      "item_id": "server-filesystem/write_file_new",
+      "mechanical_partition": {
+        "deletions_or_overwrites": [],
+        "pure_additions": [
+          {
+            "change": "Addition",
+            "path": "brand_new_file.txt"
+          }
+        ]
+      },
+      "note": null,
+      "resolution": "npx -y @modelcontextprotocol/server-filesystem <mountpoint>",
+      "shown_to_rater": true,
+      "source_server": "@modelcontextprotocol/server-filesystem",
+      "tool_arguments": {
+        "content": "brand new content for Q-02 held-out set generation\n",
+        "path": "brand_new_file.txt"
+      },
+      "tool_description": "Create a new file or completely overwrite an existing file with new content. Use with caution as it will overwrite existing files without warning. Handles text content with proper encoding. Only works within allowed directories.",
+      "tool_name": "write_file"
+    },
+    {
+      "item_id": "server-filesystem/edit_file",
+      "mechanical_partition": {
+        "deletions_or_overwrites": [
+          {
+            "change": "Overwrite",
+            "path": "existing_file.txt"
+          }
+        ],
+        "pure_additions": []
+      },
+      "note": null,
+      "resolution": "npx -y @modelcontextprotocol/server-filesystem <mountpoint>",
+      "shown_to_rater": true,
+      "source_server": "@modelcontextprotocol/server-filesystem",
+      "tool_arguments": {
+        "dryRun": false,
+        "edits": [
+          {
+            "newText": "edited content\n",
+            "oldText": "original content\n"
+          }
+        ],
+        "path": "existing_file.txt"
+      },
+      "tool_description": "Make line-based edits to a text file. Each edit replaces exact line sequences with new content. Returns a git-style diff showing the changes made. Only works within allowed directories.",
+      "tool_name": "edit_file"
+    },
+    {
+      "item_id": "server-filesystem/move_file",
+      "mechanical_partition": {
+        "deletions_or_overwrites": [
+          {
+            "change": "Deletion",
+            "path": "to_move.txt"
+          }
+        ],
+        "pure_additions": [
+          {
+            "change": "Addition",
+            "path": "moved_target.txt"
+          }
+        ]
+      },
+      "note": null,
+      "resolution": "npx -y @modelcontextprotocol/server-filesystem <mountpoint>",
+      "shown_to_rater": true,
+      "source_server": "@modelcontextprotocol/server-filesystem",
+      "tool_arguments": {
+        "destination": "moved_target.txt",
+        "source": "to_move.txt"
+      },
+      "tool_description": "Move or rename files and directories. Can move files between directories and rename them in a single operation. If the destination exists, the operation will fail. Works across different directories and can be used for simple renaming within the same directory. Both source and destination must be within allowed directories.",
+      "tool_name": "move_file"
+    },
+    {
+      "item_id": "server-filesystem/create_directory",
+      "mechanical_partition": {
+        "deletions_or_overwrites": [],
+        "pure_additions": []
+      },
+      "note": "empty mechanical partition: auto-classified Additive per docs/labelling_protocol.md, not shown to a rater.",
+      "resolution": "npx -y @modelcontextprotocol/server-filesystem <mountpoint>",
+      "shown_to_rater": false,
+      "source_server": "@modelcontextprotocol/server-filesystem",
+      "tool_arguments": {
+        "path": "new_dir/nested_subdir"
+      },
+      "tool_description": "Create a new directory or ensure a directory exists. Can create multiple nested directories in one operation. If the directory already exists, this operation will succeed silently. Perfect for setting up directory structures for projects or ensuring required paths exist. Only works within allowed directories.",
+      "tool_name": "create_directory"
+    },
+    {
+      "item_id": "server-filesystem/list_directory_readonly",
+      "mechanical_partition": {
+        "deletions_or_overwrites": [],
+        "pure_additions": []
+      },
+      "note": "empty mechanical partition: auto-classified Additive per docs/labelling_protocol.md, not shown to a rater.",
+      "resolution": "npx -y @modelcontextprotocol/server-filesystem <mountpoint>",
+      "shown_to_rater": false,
+      "source_server": "@modelcontextprotocol/server-filesystem",
+      "tool_arguments": {
+        "path": "."
+      },
+      "tool_description": "Get a detailed listing of all files and directories in a specified path. Results clearly distinguish between files and directories with [FILE] and [DIR] prefixes. This tool is essential for understanding directory structure and finding specific files within a directory. Only works within allowed directories.",
+      "tool_name": "list_directory"
+    },
+    {
+      "item_id": "server-filesystem/read_text_file_readonly",
+      "mechanical_partition": {
+        "deletions_or_overwrites": [],
+        "pure_additions": []
+      },
+      "note": "empty mechanical partition: auto-classified Additive per docs/labelling_protocol.md, not shown to a rater.",
+      "resolution": "npx -y @modelcontextprotocol/server-filesystem <mountpoint>",
+      "shown_to_rater": false,
+      "source_server": "@modelcontextprotocol/server-filesystem",
+      "tool_arguments": {
+        "path": "existing_file.txt"
+      },
+      "tool_description": "Read the complete contents of a file from the file system as text. Handles various text encodings and provides detailed error messages if the file cannot be read. Use this tool when you need to examine the contents of a single file. Use the 'head' parameter to read only the first N lines of a file, or the 'tail' parameter to read only the last N lines of a file. Operates on the file as text regardless of extension. Only works within allowed directories.",
+      "tool_name": "read_text_file"
+    }
+  ],
+  "note": "Item set only — no labels, no agreement statistic. Producing those requires real independent human raters (see docs/labelling_protocol.md); this file is what they label. Every item's tool_name/tool_description/tool_arguments are untrusted display text, never executed. The tool's own declared destructiveHint/idempotentHint/readOnlyHint are deliberately not included anywhere in this file, to avoid a rater anchoring on them.",
+  "protocol": "docs/labelling_protocol.md",
+  "shown_to_rater": 4,
+  "task": "Q-02",
+  "total_items": 20
+}

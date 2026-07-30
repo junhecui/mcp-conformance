@@ -1047,6 +1047,7 @@ dependencies = [
  "argsynth",
  "census",
  "datamodel",
+ "destructive",
  "discovery",
  "intake",
  "integrity",

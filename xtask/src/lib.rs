@@ -16,4 +16,6 @@ pub mod pin_stability;
 pub mod probe_stage1;
 pub mod purity;
 #[cfg(target_os = "linux")]
+pub mod q02_held_out_items;
+#[cfg(target_os = "linux")]
 pub mod ruleset_v2;

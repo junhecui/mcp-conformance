@@ -3108,6 +3108,60 @@ open rather than closed until that labelling actually happens.
 xtask purity`, and `cargo test --workspace` all pass clean; `cargo xtask first-verdict`
 re-ran with no regression.
 
+**Follow-up: the actual real held-out item set (`cargo xtask build-q02-items`).** The
+protocol needed a real corpus to run against, not just a schema. `@modelcontextprotocol/
+server-everything` alone (P1-08/P2-10/P3-06's existing target) is a benign protocol-demo
+server — known in advance to produce mostly empty changesets — so it cannot alone supply the
+destructive/additive diversity the protocol's stratification calls for. Two real changes,
+combined: (1) widened from P1-08's single `echo` tool to this server's full discovered tool
+list (13 tools, real argument synthesis via `argsynth::synthesize`, one real sandboxed
+`tools/call` per tool via `orchestrator::run_arm_1_prime`); (2) added the official
+`@modelcontextprotocol/server-filesystem` reference server, whose `write_file`/`edit_file`/
+`move_file` tools declare real `destructiveHint: true` — confirmed by hand via a real
+`tools/list` round trip before writing any driver code, not assumed from the package name.
+
+Each `server-filesystem` item gets its own freshly seeded base layer (a handful of
+pre-existing files — `sandbox::build` requires entries pre-sorted ascending by raw path
+bytes, caught immediately by a real run failing with "entries must be pre-sorted... violated
+at index 2" and fixed by reordering, not by relaxing the check), and hand-picked (not
+schema-generic) arguments that actually target that pre-existing state — schema-generic
+synthesis alone would almost always invent a path that doesn't exist yet and produce nothing
+but additions, defeating the entire point of adding this server. `argsynth`'s generic
+boolean synthesis always produces `true` (`"boolean" => Ok(Value::Bool(true))`), which for
+`edit_file`'s optional `dryRun` field would silently write nothing at all — caught before
+the first real run by reading `argsynth::synthesize_at`'s source, not discovered empirically
+after a false "it worked" result.
+
+Each of the 20 total tool-call items' mechanical partition (Q-01's `destructive::partition`,
+run for real over the real captured base-layer path set and the real captured upper layer)
+decides whether it is shown to a rater at all: an item whose partition is entirely empty is
+`Additive` by definition per `docs/labelling_protocol.md` and is excluded from the
+rater-facing subset (recorded in the output for transparency, not hidden). The real run:
+all 13 `server-everything` tools plus `server-filesystem`'s `create_directory`/
+`list_directory`/`read_text_file` came back empty (16 auto-classified, matching P3-06's own
+prior finding about this reference server's shape) — but `write_file` targeted at an
+existing file, `edit_file`, `write_file` targeted at a new path, and `move_file` produced
+four real, genuinely differently-shaped items: a pure overwrite, a second pure overwrite, a
+pure addition, and a mixed deletion-plus-addition (the move's source and destination) —
+real destructive/additive/mixed diversity, not just repeated empty changesets. Written to
+`results/conformance/q02_held_out_items.json`; the tool's own declared `destructiveHint`/
+`idempotentHint`/`readOnlyHint` are never read out of `tools/list` for inclusion anywhere in
+this file, so there is nothing to anchor a rater on even by accident.
+
+**Disclosed honestly, not padded:** 4 items shown to a rater is far short of the protocol's
+own "at least 100 items recommended before treating a computed kappa as stable" — this is a
+real, genuine, but small demonstration corpus, not the full held-out set. Reaching 100 needs
+either a broader corpus of vetted third-party servers (this task's own option 3, not yet
+done) or deliberately varying the seeded pre-existing state per item to synthesise more
+shapes from the same two servers. Q-02 remains **Partial**: the item set now exists for
+real, but the labelling itself — real independent human raters, real submitted labels, a
+real reported `κ` — still has not happened, and nothing above changes that.
+
+`xtask` gained `q02_held_out_items.rs` and the `build-q02-items` command (Linux-gated, same
+as `first_verdict`/`fixture_generality`); `destructive` was added to `xtask`'s dependencies.
+`cargo build --workspace --all-targets`, `cargo clippy --workspace --all-targets -- -D
+warnings`, `cargo xtask purity`, and `cargo test --workspace` all pass clean.
+
 ### Q-03 Model classifier — untrusted input
 
 **Depends on:** Q-02

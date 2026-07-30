@@ -9,6 +9,7 @@ publish.workspace = true
 argsynth.workspace = true
 census.workspace = true
 datamodel.workspace = true
+destructive.workspace = true
 discovery.workspace = true
 intake.workspace = true
 integrity.workspace = true
