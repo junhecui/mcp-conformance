@@ -93,6 +93,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[allow(clippy::cast_precision_loss)] // report-scale counts, not precision-critical
 fn pct(count: usize, total: usize) -> f64 {
     if total == 0 { 0.0 } else { 100.0 * count as f64 / total as f64 }
 }

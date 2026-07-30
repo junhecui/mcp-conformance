@@ -239,7 +239,9 @@ fn create_veth_pair(host_ifname: &str, sandbox_ifname: &str, target_pid: Pid) ->
     peer_attrs.push(
         RtattrBuilder::default()
             .rta_type(Ifla::NetNsPid)
-            .rta_payload(target_pid.as_raw() as u32)
+            // Real Linux PIDs are always positive and well under u32::MAX (pid_max is
+            // 2^22 by default, and can be raised only up to 2^30).
+            .rta_payload(u32::try_from(target_pid.as_raw()).expect("a real Linux pid is positive"))
             .build()
             .map_err(|e| NetnsError::Netlink(e.to_string()))?,
     );
@@ -323,7 +325,8 @@ fn assign_address_and_bring_up(router: &NlRouter, ifname: &str, ip: Ipv4Addr) ->
         .ifa_family(RtAddrFamily::Inet)
         .ifa_prefixlen(PREFIX_LEN)
         .ifa_scope(RtScope::Universe)
-        .ifa_index(index as u32)
+        // A kernel-assigned interface index is always positive.
+        .ifa_index(u32::try_from(index).expect("a real interface index is positive"))
         .rtattrs(addr_attrs)
         .build()
         .map_err(|e| NetnsError::Netlink(e.to_string()))?;
@@ -385,8 +388,10 @@ fn configure_sandbox_side(init_pid: Pid, sandbox_ifname: &str) -> Result<(), Net
             RtattrBuilder::default().rta_type(Rta::Gateway).rta_payload(gw_be).build().map_err(|e| NetnsError::Netlink(e.to_string()))?,
         );
         let oif = get_link_index(&router, &sandbox_ifname)?;
+        // A kernel-assigned interface index is always positive.
+        let oif = u32::try_from(oif).expect("a real interface index is positive");
         rt_attrs.push(
-            RtattrBuilder::default().rta_type(Rta::Oif).rta_payload(oif as u32).build().map_err(|e| NetnsError::Netlink(e.to_string()))?,
+            RtattrBuilder::default().rta_type(Rta::Oif).rta_payload(oif).build().map_err(|e| NetnsError::Netlink(e.to_string()))?,
         );
         let rtmsg: Rtmsg = RtmsgBuilder::default()
             .rtm_family(RtAddrFamily::Inet)

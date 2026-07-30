@@ -113,6 +113,13 @@ const fn jump(code: u16, k: u32, jt: u8, jf: u8) -> libc::sock_filter {
     libc::sock_filter { code, jt, jf, k }
 }
 
+/// Classic-BPF opcode flags (`libc::BPF_LD`, `BPF_JMP`, etc.) are exposed as `u32` for
+/// cross-platform uniformity, but every real opcode value is a small, fixed constant that
+/// fits in the `u16` `sock_filter::code` field actually uses.
+fn opcode(flags: u32) -> u16 {
+    u16::try_from(flags).expect("BPF opcode flag constants always fit in u16")
+}
+
 /// Build the classic-BPF program: verify the architecture, then test the syscall number
 /// against every entry in [`DENIED_SYSCALLS`] in turn, denying a match and allowing anything
 /// else.
@@ -127,21 +134,23 @@ const fn jump(code: u16, k: u32, jt: u8, jf: u8) -> libc::sock_filter {
 /// spec alone.
 fn build_program() -> Vec<libc::sock_filter> {
     let mut program = Vec::with_capacity(4 + DENIED_SYSCALLS.len());
-    program.push(stmt((libc::BPF_LD | libc::BPF_W | libc::BPF_ABS) as u16, SECCOMP_DATA_OFFSET_ARCH));
-    program.push(jump((libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K) as u16, AUDIT_ARCH_X86_64, 1, 0));
-    program.push(stmt((libc::BPF_RET | libc::BPF_K) as u16, SECCOMP_RET_KILL_PROCESS));
-    program.push(stmt((libc::BPF_LD | libc::BPF_W | libc::BPF_ABS) as u16, SECCOMP_DATA_OFFSET_NR));
+    program.push(stmt(opcode(libc::BPF_LD | libc::BPF_W | libc::BPF_ABS), SECCOMP_DATA_OFFSET_ARCH));
+    program.push(jump(opcode(libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K), AUDIT_ARCH_X86_64, 1, 0));
+    program.push(stmt(opcode(libc::BPF_RET | libc::BPF_K), SECCOMP_RET_KILL_PROCESS));
+    program.push(stmt(opcode(libc::BPF_LD | libc::BPF_W | libc::BPF_ABS), SECCOMP_DATA_OFFSET_NR));
 
     let denied_count = DENIED_SYSCALLS.len();
     for (i, &nr) in DENIED_SYSCALLS.iter().enumerate() {
         // Jump forward exactly far enough to skip every remaining candidate check plus the
         // `RET ALLOW` instruction, landing on the shared `RET ERRNO` at the very end.
         let jump_to_deny = u8::try_from(denied_count - i).expect("fewer than 256 denied syscalls");
-        program.push(jump((libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K) as u16, nr as u32, jump_to_deny, 0));
+        // Real x86_64 syscall numbers are always non-negative and well under u32::MAX.
+        let nr = u32::try_from(nr).expect("syscall numbers are always non-negative and fit in u32");
+        program.push(jump(opcode(libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K), nr, jump_to_deny, 0));
     }
-    program.push(stmt((libc::BPF_RET | libc::BPF_K) as u16, SECCOMP_RET_ALLOW));
+    program.push(stmt(opcode(libc::BPF_RET | libc::BPF_K), SECCOMP_RET_ALLOW));
     program.push(stmt(
-        (libc::BPF_RET | libc::BPF_K) as u16,
+        opcode(libc::BPF_RET | libc::BPF_K),
         SECCOMP_RET_ERRNO | (libc::EPERM as u32 & SECCOMP_RET_DATA_MASK),
     ));
     program

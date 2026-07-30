@@ -227,7 +227,9 @@ mod tests {
             unsafe {
                 libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
                 let filter = [libc::sock_filter {
-                    code: (libc::BPF_RET | libc::BPF_K) as u16,
+                    // BPF opcode flags are libc constants always < 256; always fits in u16.
+                    code: u16::try_from(libc::BPF_RET | libc::BPF_K)
+                        .expect("BPF opcode flag constants always fit in u16"),
                     jt: 0,
                     jf: 0,
                     k: 0x0005_0000 | (libc::EPERM as u32 & 0x0000_ffff), // SECCOMP_RET_ERRNO

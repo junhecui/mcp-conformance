@@ -565,11 +565,13 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)] // exact 0.0 by construction (early-return literal), not an approximation
     fn unverifiable_rate_of_an_empty_corpus_is_zero_not_nan() {
         assert_eq!(unverifiable_rate(&[]), 0.0);
     }
 
     #[test]
+    #[allow(clippy::float_cmp)] // 0 / N is exact in IEEE754, not an approximation
     fn unverifiable_rate_of_an_entirely_decisive_corpus_is_zero() {
         assert_eq!(unverifiable_rate(&sample_records()), 0.0);
     }
@@ -585,12 +587,14 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)] // exact 0.0 by construction (early-return literal), not an approximation
     fn snapshot_coverage_of_an_empty_corpus_is_zero_not_nan() {
         let coverage = snapshot_coverage(0, 0);
         assert_eq!(coverage.no_verdict_fraction, 0.0);
     }
 
     #[test]
+    #[allow(clippy::float_cmp)] // (N - N) / N is exact in IEEE754, not an approximation
     fn full_snapshot_coverage_has_a_zero_no_verdict_fraction() {
         let coverage = snapshot_coverage(5, 5);
         assert_eq!(coverage.no_verdict_fraction, 0.0);

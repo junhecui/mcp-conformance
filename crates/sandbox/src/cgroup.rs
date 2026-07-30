@@ -134,7 +134,13 @@ impl Cgroup {
 
         std::fs::write(memory.join("memory.limit_in_bytes"), limits.memory_max_bytes.to_string())?;
         std::fs::write(pids.join("pids.max"), limits.pids_max.to_string())?;
-        let quota = (limits.cpu_fraction * CPU_PERIOD_USEC as f64).round() as u64;
+        // `CPU_PERIOD_USEC` (100_000) is exactly representable as f64, and a sane
+        // `cpu_fraction` (always a small positive multiple of a core) keeps `quota`
+        // well within u64 — this is a resource-limit knob, not a precision-critical value.
+        #[allow(clippy::cast_precision_loss)]
+        let period_usec_f64 = CPU_PERIOD_USEC as f64;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let quota = (limits.cpu_fraction * period_usec_f64).round() as u64;
         std::fs::write(cpu.join("cpu.cfs_period_us"), CPU_PERIOD_USEC.to_string())?;
         std::fs::write(cpu.join("cpu.cfs_quota_us"), quota.to_string())?;
 
@@ -164,7 +170,11 @@ impl Cgroup {
             std::fs::create_dir_all(&dir)?;
             std::fs::write(dir.join("memory.max"), limits.memory_max_bytes.to_string())?;
             std::fs::write(dir.join("pids.max"), limits.pids_max.to_string())?;
-            let quota = (limits.cpu_fraction * CPU_PERIOD_USEC as f64).round() as u64;
+            // Same reasoning as `create_legacy_v1`'s identical computation above.
+            #[allow(clippy::cast_precision_loss)]
+            let period_usec_f64 = CPU_PERIOD_USEC as f64;
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let quota = (limits.cpu_fraction * period_usec_f64).round() as u64;
             std::fs::write(dir.join("cpu.max"), format!("{quota} {CPU_PERIOD_USEC}"))?;
             return Ok(Self { backend: Backend::UnifiedV2(dir) });
         }
@@ -417,8 +427,10 @@ mod tests {
             .spawn()
             .expect("spawn fork-bomb child");
 
+        // A real Linux PID is always positive and well under i32::MAX (pid_max is
+        // 2^22 by default, and can be raised only up to 2^30).
         cgroup
-            .add_process(Pid::from_raw(child.id() as i32))
+            .add_process(Pid::from_raw(i32::try_from(child.id()).expect("a real pid fits in i32")))
             .expect("add child to cgroup before releasing it");
         child.stdin.take().expect("piped stdin").write_all(b"\n").expect("release child");
 
@@ -492,7 +504,10 @@ while time.time() - t < 0.3:
             .stdin(std::process::Stdio::piped())
             .spawn()
             .expect("spawn resource-consuming child (requires python3)");
-        cgroup.add_process(Pid::from_raw(child.id() as i32)).expect("add child to cgroup");
+        // A real Linux PID is always positive and well under i32::MAX.
+        cgroup
+            .add_process(Pid::from_raw(i32::try_from(child.id()).expect("a real pid fits in i32")))
+            .expect("add child to cgroup");
         child.stdin.take().expect("piped stdin").write_all(b"\n").expect("release child");
 
         let status = child.wait().expect("wait for child");

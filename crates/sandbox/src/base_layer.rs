@@ -227,6 +227,11 @@ pub enum InodeHandling {
 /// Returns an [`io::Error`] if walking the tree or reading an entry's metadata or contents
 /// fails, or if an entry on disk is a device, fifo, or socket — a shape [`build`] never
 /// produces and this walker does not attempt to encode.
+///
+/// # Panics
+///
+/// Never in practice: POSIX guarantees a nanoseconds-within-a-second field is always
+/// `< 1_000_000_000`, well inside `u32`'s range.
 pub fn capture(root: &Path, inode_handling: InodeHandling) -> io::Result<Vec<u8>> {
     let mut relative_paths = Vec::new();
     collect_relative_paths(root, Path::new(""), &mut relative_paths)?;
@@ -268,7 +273,11 @@ pub fn capture(root: &Path, inode_handling: InodeHandling) -> io::Result<Vec<u8>
         out.extend_from_slice(&metadata.uid().to_be_bytes());
         out.extend_from_slice(&metadata.gid().to_be_bytes());
         out.extend_from_slice(&metadata.mtime().to_be_bytes());
-        out.extend_from_slice(&(metadata.mtime_nsec() as u32).to_be_bytes());
+        // POSIX guarantees a nanoseconds-within-a-second field is always in 0..1_000_000_000,
+        // comfortably inside u32's range.
+        let mtime_nsec =
+            u32::try_from(metadata.mtime_nsec()).expect("mtime_nsec is always < 1_000_000_000");
+        out.extend_from_slice(&mtime_nsec.to_be_bytes());
 
         let inode = match inode_handling {
             InodeHandling::Real => metadata.ino(),

@@ -110,7 +110,11 @@ fn encode_entry(root: &Path, relative: &Path, out: &mut Vec<u8>) -> io::Result<(
     out.extend_from_slice(&metadata.uid().to_be_bytes());
     out.extend_from_slice(&metadata.gid().to_be_bytes());
     out.extend_from_slice(&metadata.mtime().to_be_bytes());
-    out.extend_from_slice(&(metadata.mtime_nsec() as u32).to_be_bytes());
+    // POSIX guarantees a nanoseconds-within-a-second field is always in 0..1_000_000_000,
+    // comfortably inside u32's range.
+    let mtime_nsec =
+        u32::try_from(metadata.mtime_nsec()).expect("mtime_nsec is always < 1_000_000_000");
+    out.extend_from_slice(&mtime_nsec.to_be_bytes());
     out.extend_from_slice(&metadata.ino().to_be_bytes());
 
     // Device major/minor only carries real information for the two device-file types (this
@@ -127,7 +131,11 @@ fn encode_entry(root: &Path, relative: &Path, out: &mut Vec<u8>) -> io::Result<(
     out.extend_from_slice(&dev_minor.to_be_bytes());
 
     let xattrs = read_xattrs(&full_path)?;
-    out.extend_from_slice(&(xattrs.len() as u32).to_be_bytes());
+    // The wire format's own `xattr_count` field is u32; a real filesystem's total xattr
+    // storage per file is bounded far below 2^32 entries (typically a few KiB of combined
+    // name+value bytes), so this can't actually overflow.
+    let xattr_count = u32::try_from(xattrs.len()).expect("no real file has u32::MAX xattrs");
+    out.extend_from_slice(&xattr_count.to_be_bytes());
     for (name, value) in &xattrs {
         out.extend_from_slice(&(name.len() as u64).to_be_bytes());
         out.extend_from_slice(name);
@@ -197,7 +205,9 @@ impl std::error::Error for DecodeError {}
 /// # Panics
 ///
 /// Never in practice: every `try_into().unwrap()` below converts a slice [`Cursor::take`]
-/// already sized to the exact target array length, so the conversion cannot fail.
+/// already sized to the exact target array length, so the conversion cannot fail; the
+/// `usize::try_from(..).expect(..)` calls below only guard the (never-true-on-this-project's-
+/// only-target) case of `usize` being narrower than 64 bits.
 pub fn decode(bytes: &[u8]) -> Result<datamodel::RawEvidence, DecodeError> {
     let mut cursor = Cursor { bytes, pos: 0 };
 
@@ -211,7 +221,11 @@ pub fn decode(bytes: &[u8]) -> Result<datamodel::RawEvidence, DecodeError> {
     }
     let entry_count = u64::from_be_bytes(cursor.take(8)?.try_into().unwrap());
 
-    let mut entries = Vec::with_capacity(entry_count as usize);
+    // usize is 64 bits on the only architecture this workspace builds and runs CI on
+    // (x86_64), so this never truncates in practice.
+    let entry_count_usize =
+        usize::try_from(entry_count).expect("usize is 64 bits on this project's only target");
+    let mut entries = Vec::with_capacity(entry_count_usize);
     for _ in 0..entry_count {
         entries.push(decode_entry(&mut cursor)?);
     }
@@ -232,7 +246,11 @@ impl<'a> Cursor<'a> {
 
     fn take_u64_prefixed(&mut self) -> Result<&'a [u8], DecodeError> {
         let len = u64::from_be_bytes(self.take(8)?.try_into().unwrap());
-        self.take(len as usize)
+        // usize is 64 bits on the only architecture this workspace builds and runs CI on
+        // (x86_64), so this never truncates in practice; a `len` that's actually too large
+        // for the remaining bytes is still caught by `take`'s own bounds check below.
+        let len = usize::try_from(len).expect("usize is 64 bits on this project's only target");
+        self.take(len)
     }
 }
 
@@ -295,10 +313,12 @@ fn decode_entry(cursor: &mut Cursor<'_>) -> Result<datamodel::EvidenceEntry, Dec
 /// minor number sit in the low 32 bits of `dev_t` (interleaved with each other), and the
 /// remaining high bits of each sit above bit 32. This is the standard glibc encoding used
 /// across current Linux distributions.
+#[allow(clippy::cast_possible_truncation)] // the glibc encoding above guarantees the masked result fits in u32; `u32::try_from` isn't const-stable, so a const fn can't express the check itself
 const fn device_major(rdev: u64) -> u32 {
     (((rdev >> 8) & 0xfff) | ((rdev >> 32) & !0xfff)) as u32
 }
 
+#[allow(clippy::cast_possible_truncation)] // see `device_major`'s justification above
 const fn device_minor(rdev: u64) -> u32 {
     ((rdev & 0xff) | ((rdev >> 12) & !0xff)) as u32
 }
@@ -347,7 +367,7 @@ fn llistxattr(cpath: &CString) -> io::Result<Vec<Vec<u8>>> {
             return Ok(Vec::new());
         }
 
-        let mut buf = vec![0u8; needed as usize];
+        let mut buf = vec![0u8; usize::try_from(needed).expect("checked non-negative above")];
         // SAFETY: `buf` is a live, uniquely-owned allocation of exactly `buf.len()` bytes;
         // the kernel writes at most that many bytes into it.
         let written = unsafe {
@@ -361,7 +381,7 @@ fn llistxattr(cpath: &CString) -> io::Result<Vec<Vec<u8>>> {
             }
             return Err(err);
         }
-        buf.truncate(written as usize);
+        buf.truncate(usize::try_from(written).expect("checked non-negative above"));
         return Ok(buf
             .split(|&b| b == 0)
             .filter(|name| !name.is_empty())
@@ -385,7 +405,7 @@ fn lgetxattr(cpath: &CString, cname: &CString) -> io::Result<Vec<u8>> {
             return Ok(Vec::new());
         }
 
-        let mut buf = vec![0u8; needed as usize];
+        let mut buf = vec![0u8; usize::try_from(needed).expect("checked non-negative above")];
         // SAFETY: `buf` is a live, uniquely-owned allocation of exactly `buf.len()` bytes.
         let written = unsafe {
             libc::lgetxattr(cpath.as_ptr(), cname.as_ptr(), buf.as_mut_ptr().cast(), buf.len())
@@ -397,7 +417,7 @@ fn lgetxattr(cpath: &CString, cname: &CString) -> io::Result<Vec<u8>> {
             }
             return Err(err);
         }
-        buf.truncate(written as usize);
+        buf.truncate(usize::try_from(written).expect("checked non-negative above"));
         return Ok(buf);
     }
 }
@@ -449,7 +469,10 @@ mod tests {
         assert_eq!(file.gid, file_meta.gid());
         assert_eq!(file.inode, file_meta.ino());
         assert_eq!(file.mtime_sec, file_meta.mtime());
-        assert_eq!(file.mtime_nsec, file_meta.mtime_nsec() as u32);
+        assert_eq!(
+            file.mtime_nsec,
+            u32::try_from(file_meta.mtime_nsec()).expect("mtime_nsec is always < 1_000_000_000")
+        );
         assert_eq!((file.dev_major, file.dev_minor), (0, 0));
 
         let link = by_path("sub/link");
@@ -496,6 +519,7 @@ mod tests {
 
     /// Decode just the sequence of entry paths, in the order they appear in the capture —
     /// enough to check sort order without a full entry decoder.
+    #[allow(clippy::cast_possible_truncation)] // test-only re-decode of bytes this same test module just produced, on a wire format whose real lengths never approach usize::MAX
     fn decode_paths_in_order(bytes: &[u8]) -> Vec<Vec<u8>> {
         let mut pos = MAGIC.len() + 2;
         let entry_count = u64::from_be_bytes(bytes[pos..pos + 8].try_into().unwrap());
@@ -567,6 +591,7 @@ mod tests {
         xattrs: Vec<(Vec<u8>, Vec<u8>)>,
     }
 
+    #[allow(clippy::cast_possible_truncation)] // test-only re-decode of bytes this same test module just produced, on a wire format whose real lengths never approach usize::MAX
     fn decode_first_entry(bytes: &[u8]) -> DecodedEntry {
         let mut pos = MAGIC.len() + 2; // magic + format_version
         let entry_count = u64::from_be_bytes(bytes[pos..pos + 8].try_into().unwrap());

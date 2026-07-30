@@ -168,7 +168,8 @@ mod tests {
             thread::sleep(Duration::from_millis(20));
 
             let parsed: serde_json::Value = serde_json::from_str(payload).expect("valid JSON payload");
-            let index = parsed["index"].as_u64().expect("index field") as usize;
+            let index = usize::try_from(parsed["index"].as_u64().expect("index field"))
+                .expect("usize is 64 bits on this project's only target");
             seen_clone[index].fetch_add(1, Ordering::SeqCst);
 
             concurrent_clone.fetch_sub(1, Ordering::SeqCst);

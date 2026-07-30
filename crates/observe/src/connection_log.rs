@@ -184,7 +184,9 @@ fn original_destination(stream: &std::net::TcpStream) -> io::Result<SocketAddrV4
     let fd = stream.as_raw_fd();
     // SAFETY: a zeroed `sockaddr_in` is a valid bit pattern for that type.
     let mut addr: libc::sockaddr_in = unsafe { std::mem::zeroed() };
-    let mut len = std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
+    // `sockaddr_in`'s fixed, tiny size is nowhere near `socklen_t`'s (u32) range.
+    let mut len = libc::socklen_t::try_from(std::mem::size_of::<libc::sockaddr_in>())
+        .expect("sockaddr_in's size fits in socklen_t");
     // SAFETY: `addr`/`len` are valid, uniquely-owned locals of exactly the size `getsockopt`
     // is told about; `fd` is a real, open socket owned by `stream` for the duration of this
     // call.

@@ -208,7 +208,9 @@ fn synthesize_array(
     let Some(items_schema) = object.get("items") else {
         // No `items` schema at all: synthesise the minimum-length array of `null`s rather
         // than fail outright — an untyped array is still a structurally valid JSON array.
-        return Ok(Value::Array(vec![Value::Null; min_items as usize]));
+        // usize is 64 bits on this project's only target (x86_64), so this never truncates.
+        let min_items = usize::try_from(min_items).expect("usize is 64 bits on this target");
+        return Ok(Value::Array(vec![Value::Null; min_items]));
     };
     let item_path = format!("{path}[]");
     let mut items = Vec::new();
@@ -219,7 +221,9 @@ fn synthesize_array(
 }
 
 fn synthesize_string(object: &Map<String, Value>) -> String {
-    let min_length = object.get("minLength").and_then(Value::as_u64).unwrap_or(0) as usize;
+    // usize is 64 bits on this project's only target (x86_64), so this never truncates.
+    let min_length = usize::try_from(object.get("minLength").and_then(Value::as_u64).unwrap_or(0))
+        .expect("usize is 64 bits on this target");
     let mut s = String::from("example");
     while s.len() < min_length {
         s.push('x');
