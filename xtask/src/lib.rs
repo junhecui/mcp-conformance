@@ -11,6 +11,7 @@ pub mod dump_tools;
 pub mod first_verdict;
 #[cfg(target_os = "linux")]
 pub mod fixture_generality;
+pub mod methodology;
 pub mod pin_stability;
 pub mod probe_stage1;
 pub mod purity;

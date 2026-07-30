@@ -52,6 +52,12 @@ pub use disclosure::{advance_embargo, is_valid_transition, maintainer_contact_pa
 mod aggregate_report;
 pub use aggregate_report::{build_report, AggregateReportError};
 
+/// P5-05: publishes the normalisation ruleset and design.md §8's limitations alongside the
+/// results. Genuinely cross-platform (file reads plus string parsing, nothing
+/// Linux-specific), same rationale as `queue`/`disclosure`/`aggregate_report` above.
+mod methodology;
+pub use methodology::{build_methodology_report, Limitation, MethodologyError};
+
 /// P5-01: a worker pool draining [`RunQueue`] across real OS threads. Same cross-platform
 /// rationale as `queue` above — the pool itself has no Linux-specific dependency; what a
 /// handler closure given to it *does* (e.g. drive `sandbox::spawn`) is a separate concern.

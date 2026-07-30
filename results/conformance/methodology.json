@@ -1,0 +1,42 @@
+{
+  "limitations": [
+    {
+      "name": "External state invisibility",
+      "text": "Tools that mutate a remote service produce no local changeset. Mitigation: seed mock backends inside the sandbox and redirect the tool to them. Where that is impractical, the verdict is `unverifiable` — not `holds`. Silently treating unobservable effects as absence of effects would be the worst possible failure mode for a trust signal."
+    },
+    {
+      "name": "Semantic argument validity",
+      "text": "Schema-driven generation yields structurally valid arguments that frequently fail semantically. Fixtures reduce this but do not eliminate it, and coverage will be uneven across servers."
+    },
+    {
+      "name": "Normalisation sensitivity",
+      "text": "Timestamps, UUIDs, and ordering produce spurious diffs. Over-normalising hides real mutations; under-normalising makes idempotent tools appear non-idempotent. The ruleset is a first-class, versioned artifact and a primary source of methodological criticism."
+    },
+    {
+      "name": "Caching confound",
+      "text": "A tool may show no second-call effect due to internal caching rather than idempotent design. Distinguishing these requires cache-busting or an explicit ambiguity verdict."
+    },
+    {
+      "name": "Observation evasion",
+      "text": "A sufficiently adversarial tool could detect the sandbox and behave differently. Out of scope, but worth stating."
+    }
+  ],
+  "ruleset": {
+    "ephemeral_globs": [
+      "/tmp/**",
+      "/var/tmp/**",
+      "/run/**",
+      "**/*.lock",
+      "**/*.pid",
+      "**/*.sock"
+    ],
+    "server_internal_globs": [
+      "**/.cache/**",
+      "**/.config/**",
+      "**/.local/state/**",
+      "**/__pycache__/**",
+      "**/node_modules/.cache/**"
+    ],
+    "version": "v1"
+  }
+}

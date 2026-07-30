@@ -2968,6 +2968,50 @@ Design constraints, not deferred work: external state invisibility, semantic arg
 validity, normalisation sensitivity, caching confound, observation evasion. Each must appear
 in published results.
 
+**Status: Done.** `orchestrator::build_methodology_report` (`crates/orchestrator/src/
+methodology.rs`), exposed as `cargo xtask methodology`, run for real against the actual
+`docs/design.md` and `rulesets/v1.json` — `results/conformance/methodology.json` is
+committed, real, non-synthetic output (unlike P5-04's aggregate report, this needed no
+hand-seeded data: both source files it reads already exist and are already true).
+
+**The five limitations are parsed out of `docs/design.md` §8 itself, not hand-copied into
+Rust source as a second, separately-maintained list.** design.md's own header already
+states them plainly: "These are design constraints, not deferred work." Duplicating their
+wording into this crate would create exactly the drift risk this project otherwise goes out
+of its way to avoid — the identical reasoning `orchestrator::load_ruleset` already applies
+to `rulesets/v1.json` (read the real file; don't transcribe it by hand). A small, hand-rolled
+parser (ADR-007's stated preference, at a scale where it's genuinely cheap: ~15 lines) finds
+the `## 8. Known limitations` heading, reads every `**Title.** body text` paragraph up to
+the next `## ` heading, and stops there — proven directly against a bolded-lead-in
+paragraph from `## 9. Key design decisions` (which uses the *identical* markdown shape for
+an unrelated purpose) never leaking into the parsed output. If §8 ever gains a sixth
+limitation or edits an existing one's wording, this module's published output changes with
+it automatically, with nothing to remember to keep in sync.
+
+The ruleset half reuses `orchestrator::load_ruleset` against the real `rulesets/v1.json` —
+the same parser `normalise`'s own tests already exercise, not a second one built solely for
+publication.
+
+`orchestrator` grew from 51 to 55 tests (new `methodology` module: 4, including one that
+runs the real parser against the real `docs/design.md` and asserts all five limitations
+come back in the document's own order, with real text — not a synthetic fixture standing in
+for either source file).
+
+`cargo build --workspace --all-targets`, `cargo clippy --workspace --all-targets -- -D
+warnings`, `cargo xtask purity`, and `cargo test --workspace` all pass clean; `cargo xtask
+first-verdict` and the P1-09 replay tests re-ran with no regression.
+
+**Phase 5 (Audit and publication) is now complete**, and with it the entire main roadmap
+(Phases 0 through 5): P5-01 (orchestrator scale-out) through this task together give the
+harness a real persistent job queue and worker pool, an offline batch job that regenerates
+verdicts from storage alone, a responsible-disclosure workflow with an enforced embargo
+state machine, an aggregate-reporting pipeline that never silently pools oracles or
+containability classes and reports its own no-verdict fraction, and — this task — the
+normalisation ruleset and every named design limitation published as real, committed
+output. What remains in this document (Track Q's `destructiveHint` work, and the two
+standing O- tasks) is explicitly out of the deterministic core's critical path — quarantined
+and ongoing, respectively, by their own stated design, not unfinished phases.
+
 ---
 
 ## Track Q — `destructiveHint` (quarantined)
