@@ -47,6 +47,11 @@ pub use queue::{QueueError, RunQueue};
 mod disclosure;
 pub use disclosure::{advance_embargo, is_valid_transition, maintainer_contact_path, ContactPath, DisclosureError};
 
+/// P5-04: assembles the published aggregate report from `store::db`/`store::aggregate`.
+/// Genuinely cross-platform, same rationale as `queue`/`disclosure` above.
+mod aggregate_report;
+pub use aggregate_report::{build_report, AggregateReportError};
+
 /// P5-01: a worker pool draining [`RunQueue`] across real OS threads. Same cross-platform
 /// rationale as `queue` above — the pool itself has no Linux-specific dependency; what a
 /// handler closure given to it *does* (e.g. drive `sandbox::spawn`) is a separate concern.

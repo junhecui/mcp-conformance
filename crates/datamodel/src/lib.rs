@@ -216,6 +216,39 @@ pub enum ContainabilityClass {
     Unclassifiable,
 }
 
+impl ContainabilityClass {
+    /// The exact text F-06's `SERVER.containability_class` `CHECK` constraint accepts
+    /// (`crates/store/migrations/0001_initial_schema.sql`). Same role `Oracle`/`Outcome`/
+    /// `Annotation`'s own `as_db_str` play for their columns — added for P5-04, the first
+    /// caller that needs to read a stored class back out as a typed value (every prior use
+    /// only ever wrote one, via `store::db::insert_server`).
+    #[must_use]
+    pub const fn as_db_str(self) -> &'static str {
+        match self {
+            Self::A => "A",
+            Self::B => "B",
+            Self::Unclassifiable => "unclassifiable",
+        }
+    }
+
+    /// The inverse of [`Self::as_db_str`].
+    #[must_use]
+    pub fn from_db_str(s: &str) -> Option<Self> {
+        match s {
+            "A" => Some(Self::A),
+            "B" => Some(Self::B),
+            "unclassifiable" => Some(Self::Unclassifiable),
+            _ => None,
+        }
+    }
+}
+
+impl core::fmt::Display for ContainabilityClass {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.as_db_str())
+    }
+}
+
 /// Why an [`Outcome::Unverifiable`] was reached.
 ///
 /// P2-11's closed taxonomy — *"`unverifiable` without a reason is not a finding, it is a
@@ -685,5 +718,25 @@ mod tests {
     #[test]
     fn an_unrecognised_embargo_state_string_is_not_guessed_at() {
         assert_eq!(EmbargoState::from_db_str("cleared"), None);
+    }
+
+    #[test]
+    fn every_containability_class_round_trips_through_its_db_string() {
+        let all = [ContainabilityClass::A, ContainabilityClass::B, ContainabilityClass::Unclassifiable];
+        for class in all {
+            assert_eq!(ContainabilityClass::from_db_str(class.as_db_str()), Some(class));
+        }
+    }
+
+    #[test]
+    fn containability_class_as_db_str_matches_the_schemas_check_constraint() {
+        assert_eq!(ContainabilityClass::A.as_db_str(), "A");
+        assert_eq!(ContainabilityClass::B.as_db_str(), "B");
+        assert_eq!(ContainabilityClass::Unclassifiable.as_db_str(), "unclassifiable");
+    }
+
+    #[test]
+    fn an_unrecognised_containability_class_string_is_not_guessed_at() {
+        assert_eq!(ContainabilityClass::from_db_str("C"), None);
     }
 }

@@ -2896,9 +2896,67 @@ with no regression.
 **Exit:** Rates by annotation, by containability class, and by oracle, written to
 `results/conformance/`.
 
-- [ ] Never aggregate across oracles without disclosure (ADR-002)
-- [ ] Report the no-verdict fraction as a metric in its own right — ADR-004 predicts it may
+- [x] Never aggregate across oracles without disclosure (ADR-002)
+- [x] Report the no-verdict fraction as a metric in its own right — ADR-004 predicts it may
       be large early on, and it is a useful signal about harness maturity
+
+**Status: Done.** `store::aggregate` (B-03) is extended with `containability_class` as a
+second mandatory grouping dimension alongside `oracle` — the same "no code path can produce
+a row without one" guarantee B-03 already gave `oracle`, now also given to class, for the
+identical reason: a rate "by containability class" that silently pooled Class A and Class B
+results would be exactly the mixing ADR-002 forbids, just along a different axis.
+`aggregate::rates` turns `AggregateRow` counts into this task's own literal output (a
+per-outcome rate within its `(annotation, containability_class, oracle)` bucket, carrying
+its own bucket total alongside it). `orchestrator::build_report` assembles the whole thing
+from a real metadata DB and — critically — re-runs `verify_report_matches_records` against
+its own output before returning it, so a bug in this task's own assembly code would fail
+loudly rather than silently publish an unverifiable report. Exposed as `cargo xtask
+aggregate-report <db-path>`, writing `results/conformance/aggregate_report.json`.
+
+**The two "how often can't this harness decide" numbers are kept distinct, not folded into
+one "no-verdict fraction" — a deliberate reading of the checklist item, not an oversight.**
+`datamodel::Outcome`'s own doc comment already insists `Unverifiable` "is a first-class
+verdict, not an error path"; ADR-004's own text ("a truncated... run produces `unverifiable`
+with a reason code... that fraction is itself a reported metric") is literally about the
+*rate of `Unverifiable` outcomes among verdicts that were produced* — `aggregate::
+unverifiable_rate`. A tool discovered and pinned but never assessed at all (excluded by
+containability class, never reached by a run planner, ...) has no `VERDICT` row whatsoever,
+which is a different, also-real question this report answers separately: `aggregate::
+snapshot_coverage`'s `no_verdict_fraction`, backed by two new `store::db` counters
+(`count_tool_snapshots`/`count_tool_snapshots_with_a_verdict`). Proven distinctly in
+`orchestrator::aggregate_report`'s own tests: a corpus with one `Holds` verdict and one
+wholly unassessed snapshot reports `unverifiable_rate: 0.0` (the one verdict that exists
+isn't Unverifiable) alongside `no_verdict_fraction: 0.5` (half the snapshots have no verdict
+at all) — the two numbers genuinely disagreeing is the proof they were kept separate.
+
+**A gap closed in passing:** `datamodel::ContainabilityClass` had no `as_db_str`/
+`from_db_str`/`Display` — every prior use only ever *wrote* one (`store::db::insert_server`,
+via a now-removed private `containability_class_db_str` helper); this task is the first
+caller needing to read a stored class back out as a typed value (`store::db::list_verdicts`,
+extended to join `SERVER` in via `TOOL_SNAPSHOT` for exactly this). Added matching
+`Oracle`/`Outcome`/`Annotation`/`EmbargoState`'s own existing shape exactly.
+
+**No synthetic report committed to `results/conformance/`, stated plainly rather than
+silently filled in with fake numbers:** `cargo xtask aggregate-report` was run for real
+against a hand-seeded database as part of verifying this task (five verdicts across two
+containability classes plus one unassessed snapshot; output checked field-by-field and
+matched every expected rate and fraction exactly), but that data is synthetic, not a real
+finding — nothing in this project yet accumulates a real, persistent verdict corpus across
+separate `cargo xtask` invocations (the same disclosed gap P5-02 already named: `first-
+verdict` and `derive-ruleset-v2` each still use their own ephemeral scratch directory,
+torn down when the process exits). Publishing a synthetic report under the same path a real
+one would occupy would misrepresent it as a genuine finding, so none was committed;
+producing a real one is downstream of that same not-yet-built persistence consolidation,
+not this task's own scope.
+
+`datamodel` grew from 10 to 13 tests (`ContainabilityClass` round-trip/rejection, folded
+into the existing `EmbargoState`-style pattern — exact count below already includes these).
+`store` grew from 46 to 57 (`aggregate`: 9 new tests for `rates`/`unverifiable_rate`/
+`snapshot_coverage` plus the class-mixing guard; `db`: 2 new for the snapshot-coverage
+counters). `orchestrator` grew from 48 to 51 (new `aggregate_report` module: 3 tests).
+`cargo build --workspace --all-targets`, `cargo clippy --workspace --all-targets -- -D
+warnings`, `cargo xtask purity`, and `cargo test --workspace` all pass clean; `cargo xtask
+first-verdict` and the P1-09 replay tests re-ran with no regression.
 
 ### P5-05 Publish ruleset and limitations
 

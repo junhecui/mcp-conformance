@@ -100,22 +100,14 @@ pub struct ServerRecord<'a> {
     pub spec_revision: &'a str,
 }
 
-fn containability_class_db_str(class: datamodel::ContainabilityClass) -> &'static str {
-    match class {
-        datamodel::ContainabilityClass::A => "A",
-        datamodel::ContainabilityClass::B => "B",
-        datamodel::ContainabilityClass::Unclassifiable => "unclassifiable",
-    }
-}
-
 /// Insert one `SERVER` row.
 ///
 /// # Errors
 ///
 /// Propagates any `rusqlite` error, including a `CHECK` violation on
 /// `containability_class` (which cannot actually happen here, since
-/// [`containability_class_db_str`] only ever emits one of the three values the constraint
-/// accepts) or a duplicate `server_id`.
+/// [`datamodel::ContainabilityClass::as_db_str`] only ever emits one of the three values the
+/// constraint accepts) or a duplicate `server_id`.
 pub fn insert_server(conn: &Connection, record: &ServerRecord<'_>) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT INTO server (server_id, source_uri, containability_class, spec_revision)
@@ -123,7 +115,7 @@ pub fn insert_server(conn: &Connection, record: &ServerRecord<'_>) -> rusqlite::
         rusqlite::params![
             record.server_id,
             record.source_uri,
-            containability_class_db_str(record.containability_class),
+            record.containability_class.as_db_str(),
             record.spec_revision,
         ],
     )?;
@@ -288,9 +280,14 @@ pub fn insert_verdict(conn: &Connection, record: &VerdictRecord<'_>) -> rusqlite
     Ok(())
 }
 
-/// One verdict row read back out, with `annotation`/`outcome`/`oracle` parsed back into
-/// their typed form via each enum's `from_db_str` — the inverse of [`insert_verdict`]'s
-/// `as_db_str` writes. Feeds [`crate::aggregate`] (B-03).
+/// One verdict row read back out, with `annotation`/`outcome`/`oracle`/`containability_class`
+/// parsed back into typed form via each enum's `from_db_str` — the inverse of
+/// [`insert_verdict`]'s `as_db_str` writes. Feeds [`crate::aggregate`] (B-03, extended by
+/// P5-04 to also carry `containability_class`: rates broken down "by containability class"
+/// is one of that task's own three literal grouping dimensions, alongside annotation and
+/// oracle, so every row this function returns needs one — joined in from `SERVER` via
+/// `TOOL_SNAPSHOT`, since `VERDICT` itself only keys on `snapshot_id`, architecture.md §6
+/// invariant 1).
 pub struct VerdictRow {
     /// Which annotation this verdict assesses.
     pub annotation: datamodel::Annotation,
@@ -298,22 +295,32 @@ pub struct VerdictRow {
     pub oracle: datamodel::Oracle,
     /// The outcome.
     pub outcome: datamodel::Outcome,
+    /// The containability class of the server whose tool this verdict is about.
+    pub containability_class: datamodel::ContainabilityClass,
 }
 
-/// Read back every `VERDICT` row currently stored, for reporting (B-03).
+/// Read back every `VERDICT` row currently stored, joined with its server's containability
+/// class, for reporting (B-03, P5-04).
 ///
 /// # Errors
 ///
 /// Propagates any `rusqlite` error. A stored value that doesn't round-trip through the
-/// corresponding `from_db_str` (which should be impossible — [`insert_verdict`] is the only
-/// writer, and it only ever writes `as_db_str` output) surfaces as
-/// [`rusqlite::Error::InvalidColumnType`] rather than a panic or a silently-dropped row.
+/// corresponding `from_db_str` (which should be impossible — [`insert_verdict`]/
+/// [`insert_server`] are the only writers, and both only ever write `as_db_str` output)
+/// surfaces as [`rusqlite::Error::InvalidColumnType`] rather than a panic or a
+/// silently-dropped row.
 pub fn list_verdicts(conn: &Connection) -> rusqlite::Result<Vec<VerdictRow>> {
-    let mut stmt = conn.prepare("SELECT annotation, oracle, outcome FROM verdict")?;
+    let mut stmt = conn.prepare(
+        "SELECT verdict.annotation, verdict.oracle, verdict.outcome, server.containability_class
+         FROM verdict
+         JOIN tool_snapshot ON tool_snapshot.snapshot_id = verdict.snapshot_id
+         JOIN server ON server.server_id = tool_snapshot.server_id",
+    )?;
     stmt.query_map([], |row| {
         let annotation_str: String = row.get(0)?;
         let oracle_str: String = row.get(1)?;
         let outcome_str: String = row.get(2)?;
+        let class_str: String = row.get(3)?;
         let annotation = datamodel::Annotation::from_db_str(&annotation_str).ok_or_else(|| {
             rusqlite::Error::InvalidColumnType(0, "annotation".into(), rusqlite::types::Type::Text)
         })?;
@@ -323,9 +330,46 @@ pub fn list_verdicts(conn: &Connection) -> rusqlite::Result<Vec<VerdictRow>> {
         let outcome = datamodel::Outcome::from_db_str(&outcome_str).ok_or_else(|| {
             rusqlite::Error::InvalidColumnType(2, "outcome".into(), rusqlite::types::Type::Text)
         })?;
-        Ok(VerdictRow { annotation, oracle, outcome })
+        let containability_class =
+            datamodel::ContainabilityClass::from_db_str(&class_str).ok_or_else(|| {
+                rusqlite::Error::InvalidColumnType(
+                    3,
+                    "containability_class".into(),
+                    rusqlite::types::Type::Text,
+                )
+            })?;
+        Ok(VerdictRow { annotation, oracle, outcome, containability_class })
     })?
     .collect()
+}
+
+/// How many `TOOL_SNAPSHOT` rows exist in total — the denominator P5-04's snapshot-coverage
+/// fraction needs (paired with [`count_tool_snapshots_with_a_verdict`]).
+///
+/// # Errors
+///
+/// Propagates any `rusqlite` error.
+pub fn count_tool_snapshots(conn: &Connection) -> rusqlite::Result<i64> {
+    conn.query_row("SELECT COUNT(*) FROM tool_snapshot", [], |row| row.get(0))
+}
+
+/// How many distinct `TOOL_SNAPSHOT`s have at least one `VERDICT` row of any kind — a tool
+/// the pipeline discovered and pinned but never got as far as assessing (excluded by
+/// containability class, never reached by a run planner, ...) counts against this, distinct
+/// from a tool that *was* assessed but only ever reached `Unverifiable` (that tool has a
+/// real `VERDICT` row, it just isn't decisive — see `orchestrator::aggregate_report`'s own
+/// doc comment for why this module keeps that distinction rather than folding both into one
+/// "no-verdict" number).
+///
+/// # Errors
+///
+/// Propagates any `rusqlite` error.
+pub fn count_tool_snapshots_with_a_verdict(conn: &Connection) -> rusqlite::Result<i64> {
+    conn.query_row(
+        "SELECT COUNT(DISTINCT snapshot_id) FROM verdict",
+        [],
+        |row| row.get(0),
+    )
 }
 
 /// One `VERDICT` row's disclosure state — `embargo_state` plus `disclosed_at`, read
@@ -1116,8 +1160,19 @@ mod tests {
         let probe_row = rows.iter().find(|r| r.oracle == datamodel::Oracle::ProtocolProbe).expect("probe row present");
         assert_eq!(probe_row.annotation, datamodel::Annotation::ReadOnlyHint);
         assert_eq!(probe_row.outcome, datamodel::Outcome::Holds);
+        assert_eq!(
+            probe_row.containability_class,
+            datamodel::ContainabilityClass::B,
+            "the protocol-probe verdict's server was seeded as Class B"
+        );
         let kernel_row = rows.iter().find(|r| r.oracle == datamodel::Oracle::KernelChangeset).expect("kernel row present");
         assert_eq!(kernel_row.outcome, datamodel::Outcome::Violated);
+        assert_eq!(
+            kernel_row.containability_class,
+            datamodel::ContainabilityClass::A,
+            "the kernel-changeset verdict's server was seeded as Class A — proves the join \
+             never mixes up which server a verdict's class comes from"
+        );
 
         // And directly against the raw column, since the whole point is the TEXT written
         // to disk, not just what comes back through the typed reader.
@@ -1675,5 +1730,53 @@ mod tests {
     fn get_verdict_embargo_state_for_an_unknown_verdict_is_none() {
         let conn = open_and_migrate(":memory:").expect("open_and_migrate");
         assert!(get_verdict_embargo_state(&conn, "no-such-verdict").expect("query").is_none());
+    }
+
+    /// P5-04's snapshot-coverage counters, over a real mix: one snapshot with a verdict, one
+    /// without — proving `count_tool_snapshots_with_a_verdict` genuinely excludes the
+    /// latter rather than counting every snapshot with a `RUN` (or nothing at all).
+    #[test]
+    fn snapshot_coverage_counters_distinguish_assessed_from_unassessed() {
+        let conn = open_and_migrate(":memory:").expect("open_and_migrate");
+        seed_run(&conn); // creates snap-1, with no VERDICT row of its own
+        conn.execute(
+            "INSERT INTO tool_snapshot
+             (snapshot_id, server_id, tool_name, metadata_pin, annotations_raw,
+              readonly_explicit, destructive_explicit, idempotent_explicit,
+              openworld_explicit, observed_at)
+             VALUES ('snap-2', 'srv-1', 'other_tool', 'pin-2', '{}', 0, 0, 0, 0, 'now')",
+            [],
+        )
+        .expect("seed second snapshot");
+        insert_verdict(
+            &conn,
+            &VerdictRecord {
+                verdict_id: "v-1",
+                snapshot_id: "snap-2",
+                annotation: datamodel::Annotation::ReadOnlyHint,
+                declared: "true",
+                outcome: datamodel::Outcome::Holds,
+                reason_code: None,
+                oracle: datamodel::Oracle::KernelChangeset,
+                ruleset_version: None,
+                protocol_version: "2026-06-18",
+                derived_at: "unix:0",
+            },
+        )
+        .expect("insert_verdict for snap-2 only");
+
+        assert_eq!(count_tool_snapshots(&conn).expect("count_tool_snapshots"), 2);
+        assert_eq!(
+            count_tool_snapshots_with_a_verdict(&conn).expect("count_tool_snapshots_with_a_verdict"),
+            1,
+            "only snap-2 has a VERDICT row; snap-1 (seeded by seed_run) has none"
+        );
+    }
+
+    #[test]
+    fn snapshot_coverage_counters_are_zero_on_an_empty_db() {
+        let conn = open_and_migrate(":memory:").expect("open_and_migrate");
+        assert_eq!(count_tool_snapshots(&conn).expect("count"), 0);
+        assert_eq!(count_tool_snapshots_with_a_verdict(&conn).expect("count"), 0);
     }
 }

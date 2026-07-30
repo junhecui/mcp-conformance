@@ -1,5 +1,6 @@
 //! Workspace tooling, exposed as a library so the checks are unit-testable.
 
+pub mod aggregate_report;
 pub mod census;
 pub mod census_stage1;
 pub mod class_a_stage2;

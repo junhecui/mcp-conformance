@@ -14,6 +14,7 @@ fn main() -> ExitCode {
         Some("first-verdict") => first_verdict(),
         Some("derive-ruleset-v2") => derive_ruleset_v2(),
         Some("derive-verdicts") => derive_verdicts(),
+        Some("aggregate-report") => aggregate_report(),
         Some("fixture-generality") => fixture_generality(),
         Some(other) => {
             eprintln!("unknown task `{other}`\n\n{USAGE}");
@@ -26,7 +27,18 @@ fn main() -> ExitCode {
     }
 }
 
-const USAGE: &str = "usage: cargo xtask <purity|census|census-stage1 [sample_size]|census-stage2-class-a [sample_size]|census-pin-stability <input.json>|probe-stage1 [sample_size]|dump-tools <url>|first-verdict|derive-ruleset-v2|derive-verdicts <db-path> <blob-store-root> [ruleset-path] [slots]|fixture-generality>";
+const USAGE: &str = "usage: cargo xtask <purity|census|census-stage1 [sample_size]|census-stage2-class-a [sample_size]|census-pin-stability <input.json>|probe-stage1 [sample_size]|dump-tools <url>|first-verdict|derive-ruleset-v2|derive-verdicts <db-path> <blob-store-root> [ruleset-path] [slots]|aggregate-report <db-path>|fixture-generality>";
+
+fn aggregate_report() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(2).collect();
+    match xtask::aggregate_report::run(&args) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("aggregate-report failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
 
 #[cfg(target_os = "linux")]
 fn derive_verdicts() -> ExitCode {
