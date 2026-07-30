@@ -201,7 +201,12 @@ name = "destructive"
 version = "0.1.0"
 dependencies = [
  "datamodel",
+ "normalise",
+ "observe",
+ "orchestrator",
+ "sandbox",
  "store",
+ "tempfile",
 ]
 
 [[package]]

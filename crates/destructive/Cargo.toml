@@ -7,7 +7,22 @@ publish.workspace = true
 
 [dependencies]
 datamodel.workspace = true
+normalise.workspace = true
 store.workspace = true
+
+# Only for a real end-to-end test that runs an actual sandboxed process and captures its
+# real base and upper layers via `observe::evtree::capture`, rather than only ever
+# exercising the mechanical proxy against hand-built `RawEvidence` structs. `sandbox`/
+# `observe` are Linux-only (compile to empty crates elsewhere), so this dependency and the
+# test using it both are — same reasoning `argsynth`'s own Cargo.toml already documents for
+# its own Linux-gated dev-dependency on `world`.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+sandbox.workspace = true
+observe.workspace = true
+# Only `orchestrator::load_ruleset`, to load the real `rulesets/v1.json` rather than a
+# hand-built one — same reasoning as the `sandbox`/`observe` dev-dependencies above.
+orchestrator.workspace = true
+tempfile = "3.27.0"
 
 [lints]
 workspace = true

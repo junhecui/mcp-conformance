@@ -3025,6 +3025,49 @@ ADR-006.
 **Exit:** Canonical changeset partitioned into `deletions ∪ overwrites` versus `pure
 additions`.
 
+**Status: Done.** `destructive::partition` (`crates/destructive/src/mechanical_proxy.rs`),
+the first piece landed in the `destructive` crate beyond its F-02 placeholder. A purely
+mechanical, structural signal — never a semantic judgement of what a mutation *means*
+(ADR-006's whole reason this track is quarantined; the semantic attempt is Q-03's job).
+
+**The real reason this couldn't be built as a thin wrapper around `normalise::normalise`'s
+own output, worked out rather than assumed:** `datamodel::CanonicalChangeset`/
+`ClassifiedPath` carry only a path and its ADR-008 taxonomy — deliberately not the entry's
+original `EntryKind` (so a whiteout's own structural deletion marker is already discarded
+by the time evidence reaches that type) and nothing about the base layer being diffed
+against (no verification protocol before this one has ever needed it). Reusing that type
+here would have meant either a breaking change to the one pure crate ADR-005 protects most
+carefully, for a quarantined, out-of-band consumer, or silently losing the whiteout signal.
+Instead this module works from the same two real inputs a real run actually has: the upper
+layer's own `RawEvidence` (whiteouts intact, exactly as ADR-009 encodes them — a
+`CharDevice` at `dev_major = 0, dev_minor = 0`) and the base layer's own path set (captured
+for real via `observe::evtree::capture` over the base layer root, before it is ever mounted
+into an overlay — the same real mechanism already used for the upper layer, not a second
+one built just for this). ADR-008's ephemeral/server_internal exclusion is reapplied
+independently via `normalise::pattern_matches`, already `pub` specifically for this kind of
+external reuse (P2-10 set the precedent).
+
+Proven against a real sandboxed run, not only hand-built `RawEvidence`: a real Python
+process inside a real overlay deletes one pre-existing file, overwrites another, and
+creates a brand-new one; `destructive::partition` correctly buckets the deletion and the
+overwrite together and the creation as a pure addition, run 4 times consecutively with no
+flakiness. Four further pure unit tests cover the edge cases the real-sandbox test can't
+cheaply exercise: ephemeral/server-internal exclusion, deterministic sort order, and a
+whiteout with no matching base-layer entry (the whiteout marker itself is treated as
+ground truth, not this module's own bookkeeping).
+
+**Disclosed, not silently out of scope:** an opaque directory (`trusted.overlay.opaque`,
+ADR-009's other overlayfs-specific signal alongside a whiteout) is invisible to this proxy,
+because `datamodel::EvidenceEntry` doesn't carry xattrs at all yet — a pre-existing gap from
+P1-04, not something this task introduces or was asked to close.
+
+`destructive` grew from 0 to 5 tests (4 pure unit, 1 real sandboxed integration).
+`cargo build --workspace --all-targets`, `cargo clippy --workspace --all-targets -- -D
+warnings`, `cargo xtask purity`, and `cargo test --workspace` all pass clean (purity
+specifically checked given the new `destructive -> normalise` dependency edge — still
+`OK`, since the constraint is one-directional and `destructive` was never one of the
+guarded crates); `cargo xtask first-verdict` re-ran with no regression.
+
 ### Q-02 Human-labelled held-out set
 
 **Depends on:** Q-01
