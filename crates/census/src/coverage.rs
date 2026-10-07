@@ -167,11 +167,34 @@ pub struct AnnotationTally {
     pub open_world_hint: Tally,
 }
 
+/// Tallies are plain counts, so they add: the tally of a concatenation is the sum of the
+/// tallies of its parts (proven below). This is what lets a corpus-wide rollup be built from
+/// per-server tallies one server at a time, without ever holding every tool's
+/// [`ToolCoverage`] — and every hostile server's tool names — in memory at once.
+impl core::ops::AddAssign for Tally {
+    fn add_assign(&mut self, other: Self) {
+        self.explicit += other.explicit;
+        self.defaulted += other.defaulted;
+        self.absent += other.absent;
+    }
+}
+
+impl core::ops::AddAssign for AnnotationTally {
+    fn add_assign(&mut self, other: Self) {
+        self.read_only_hint += other.read_only_hint;
+        self.destructive_hint += other.destructive_hint;
+        self.idempotent_hint += other.idempotent_hint;
+        self.open_world_hint += other.open_world_hint;
+    }
+}
+
 /// Roll up coverage across any set of tools.
 ///
 /// Pass one server's tools for a per-server rollup, or every server's tools concatenated
 /// for a corpus-wide one — the same function serves both scopes in the task list, because a
 /// tally has no notion of a server boundary; only the caller's choice of input slice does.
+/// Summing per-server tallies (`+=`) gives the same corpus-wide result as tallying the
+/// concatenation.
 #[must_use]
 pub fn tally(tools: &[ToolCoverage]) -> AnnotationTally {
     let mut result = AnnotationTally::default();
@@ -262,6 +285,29 @@ mod tests {
         let corpus_wide = tally(&corpus_wide_tools);
         assert_eq!(corpus_wide.read_only_hint.explicit, 1);
         assert_eq!(corpus_wide.read_only_hint.absent, 1);
+    }
+
+    /// The `AddAssign` impls must be exactly "tally the concatenation" — anything else and a
+    /// corpus rollup built server-by-server would silently disagree with the July numbers,
+    /// which were computed by tallying every tool at once.
+    #[test]
+    fn summing_per_server_tallies_equals_tallying_the_concatenation() {
+        let server_a = tools_list(
+            r#"{"name":"a1","inputSchema":{},"annotations":{"readOnlyHint":true,"openWorldHint":false}},
+               {"name":"a2","inputSchema":{}}"#,
+        );
+        let server_b = tools_list(
+            r#"{"name":"b1","inputSchema":{},"annotations":{"destructiveHint":true,"idempotentHint":true}}"#,
+        );
+        let tools_a = tool_coverage(&server_a).expect("parse a");
+        let tools_b = tool_coverage(&server_b).expect("parse b");
+
+        let mut summed = tally(&tools_a);
+        summed += tally(&tools_b);
+
+        let mut concatenated = tools_a;
+        concatenated.extend(tools_b);
+        assert_eq!(summed, tally(&concatenated));
     }
 
     #[test]

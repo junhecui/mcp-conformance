@@ -12,5 +12,7 @@ pub mod jsonrpc;
 mod pin;
 mod transport;
 
-pub use client::{Discovery, DiscoveryClient, DiscoveryError, DiscoveryPath};
+pub use client::{
+    Discovery, DiscoveryClient, DiscoveryError, DiscoveryPath, negotiated_spec_revision,
+};
 pub use pin::{PinError, ToolPin, pin_tools};

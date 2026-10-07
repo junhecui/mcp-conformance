@@ -5,16 +5,28 @@
 //! connects to each one exactly the way any MCP client would on first use, and no
 //! differently. Sequential requests, not concurrent: these are unrelated third-party hosts
 //! and there is no reason to hit them in a burst.
+//!
+//! P0-10: both raw responses of every discovery that returns are persisted to the evidence
+//! store, and every number in the results file is derived from those stored bytes by
+//! [`crate::census_report::build_report`] — the same function `census-rederive` runs offline.
 
-use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::path::PathBuf;
+use std::sync::Mutex;
 
-use census::coverage;
 use datamodel::ContainabilityClass;
-use discovery::{DiscoveryClient, DiscoveryError};
+use discovery::DiscoveryClient;
 use intake::catalogue::{self, IngestOutcome, ResolvedTarget};
 use intake::classify;
 use intake::registry::RegistryClient;
+use serde_json::{Map, Value, json};
+use store::BlobStore;
+
+use crate::census_report::{self, Observation, RunHeader, ServerObservation};
+use crate::cli::SweepArgs;
+use crate::sweep::{self, DiskGuard, StopFlag};
+
+const STAGE: &str = "1 — initialize+tools/list against live Class B servers";
+const DEFAULT_OUT: &str = "results/census/class_b_annotation_coverage.json";
 
 /// `pub(crate)`, not private: `probe_stage1` (Track B) reuses this exact sampling logic
 /// (the candidate shape, the classification-driven filter, and — via [`stable_hash`] — the
@@ -47,29 +59,31 @@ pub(crate) fn class_b_candidate(outcome: &IngestOutcome) -> Option<Candidate> {
     })
 }
 
-enum Attempt {
-    Success { tool_count: usize, tools: Vec<coverage::ToolCoverage> },
-    Failed { category: &'static str, detail: String },
-}
-
-fn attempt(url: &str) -> Attempt {
+/// Discover one Class B server and persist what it returned. Coverage is *not* computed
+/// here — a response that discovery accepted but coverage can't read becomes a
+/// `coverage_extraction` failure at derivation time, from the stored bytes, exactly as it
+/// would on a re-derivation.
+fn observe(url: &str, store: &Mutex<BlobStore>, stop: &StopFlag) -> Observation {
     // Shorter than the 30s default: at sample sizes in the hundreds or thousands, a
     // handful of genuinely unresponsive hosts at 30s each would dominate total run time.
     // Servers that are actually going to answer do so in low seconds at most, per the 100
     // -server sample this was tuned against.
     let mut client = DiscoveryClient::http_with_timeout(url.to_string(), std::time::Duration::from_secs(12));
     match client.discover() {
-        Ok(discovery) => match coverage::tool_coverage(&discovery.tools_list_raw) {
-            Ok(tools) => Attempt::Success { tool_count: tools.len(), tools },
-            Err(e) => Attempt::Failed { category: "coverage_extraction", detail: e.to_string() },
-        },
-        Err(DiscoveryError::Transport(msg)) => Attempt::Failed { category: "transport", detail: msg },
-        Err(DiscoveryError::Io(e)) => Attempt::Failed { category: "io", detail: e.to_string() },
-        Err(DiscoveryError::Protocol(msg)) => Attempt::Failed { category: "protocol", detail: msg },
-        Err(DiscoveryError::ServerError { code, message }) => {
-            Attempt::Failed { category: "server_error", detail: format!("{code}: {message}") }
-        }
+        Ok(discovery) => census_report::record_discovery(store, &discovery, stop),
+        Err(e) => Observation::from_discovery_error(e, "io"),
     }
+}
+
+fn identity(candidate: &Candidate) -> Map<String, Value> {
+    let Value::Object(map) = json!({
+        "name": candidate.name,
+        "url": candidate.url,
+        "transport_type": candidate.transport_type,
+    }) else {
+        unreachable!("json! of an object literal is an object")
+    };
+    map
 }
 
 /// Deterministically hash `name` into a `u64` — `DefaultHasher`'s keys are fixed (unlike
@@ -93,7 +107,12 @@ pub(crate) fn stable_hash(name: &str) -> u64 {
 /// -order is not alphabetical, unbiased with respect to namespace, and — unlike a
 /// randomised selection — reproducible: the same registry snapshot always yields the same
 /// sample, which matters for comparing across runs.
-pub fn run(sample_size: usize) -> Result<(), Box<dyn std::error::Error>> {
+///
+/// Before each attempt the free-disk floor ([`sweep::MIN_FREE_BYTES`]) is checked; if it
+/// trips, the sweep stops and writes what it has with `"complete": false` rather than filling
+/// the disk with evidence.
+pub fn run(args: &SweepArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let sample_size = args.sample_size;
     eprintln!("census-stage1: fetching the registry to find all Class B candidates...");
 
     let registry = RegistryClient::new();
@@ -115,94 +134,41 @@ pub fn run(sample_size: usize) -> Result<(), Box<dyn std::error::Error>> {
     all_class_b.sort_by_key(|c| stable_hash(&c.name));
     let candidates: Vec<Candidate> = all_class_b.into_iter().take(sample_size).collect();
 
-    eprintln!("census-stage1: attempting discovery against {} Class B servers...", candidates.len());
+    let evidence_dir =
+        census_report::resolve_evidence_dir(args.evidence_dir.as_deref(), std::env::var_os(census_report::EVIDENCE_DIR_ENV));
+    let out_path = args.out.clone().unwrap_or_else(|| PathBuf::from(DEFAULT_OUT));
+    let store = Mutex::new(BlobStore::open(&evidence_dir)?);
+    let disk = DiskGuard::new(&evidence_dir);
+    let stop = StopFlag::default();
 
-    let mut all_tools: Vec<coverage::ToolCoverage> = Vec::new();
-    let mut server_results = Vec::new();
-    let mut succeeded = 0usize;
-    let mut failure_categories: std::collections::BTreeMap<&'static str, usize> = std::collections::BTreeMap::new();
-
-    for (i, candidate) in candidates.iter().enumerate() {
-        eprintln!(
-            "census-stage1: [{}/{}] {} ({})",
-            i + 1,
-            candidates.len(),
-            candidate.name,
-            candidate.url
-        );
-        match attempt(&candidate.url) {
-            Attempt::Success { tool_count, tools } => {
-                succeeded += 1;
-                all_tools.extend(tools);
-                server_results.push(serde_json::json!({
-                    "name": candidate.name,
-                    "url": candidate.url,
-                    "transport_type": candidate.transport_type,
-                    "outcome": "success",
-                    "tool_count": tool_count,
-                }));
-            }
-            Attempt::Failed { category, detail } => {
-                *failure_categories.entry(category).or_insert(0) += 1;
-                server_results.push(serde_json::json!({
-                    "name": candidate.name,
-                    "url": candidate.url,
-                    "transport_type": candidate.transport_type,
-                    "outcome": "failed",
-                    "failure_category": category,
-                    "failure_detail": detail,
-                }));
-            }
-        }
-    }
-
-    let attempted = candidates.len();
-    let failed = attempted - succeeded;
     eprintln!(
-        "census-stage1: {attempted} attempted, {succeeded} succeeded ({:.1}%), {failed} failed",
-        pct(succeeded, attempted)
+        "census-stage1: attempting discovery against {} Class B servers (evidence -> {})...",
+        candidates.len(),
+        evidence_dir.display()
     );
-    for (category, count) in &failure_categories {
-        eprintln!("census-stage1:   {category}: {count}");
+
+    // jobs = 1, not configurable: unrelated third-party hosts, never burst (P0-07).
+    let pool = sweep::run_bounded(
+        &candidates,
+        1,
+        || stop.check().and_then(|()| disk.check()),
+        |i, candidate| {
+            eprintln!("census-stage1: [{}/{}] {} ({})", i + 1, candidates.len(), candidate.name, candidate.url);
+            ServerObservation { identity: identity(candidate), observation: observe(&candidate.url, &store, &stop) }
+        },
+    );
+
+    let header = RunHeader {
+        stage: STAGE,
+        sample_size_requested: sample_size,
+        candidates_selected: candidates.len(),
+        attempted: pool.completed.len(),
+        stop_reason: pool.stop_reason,
+        evidence_store: &evidence_dir,
     }
-
-    let tally = coverage::tally(&all_tools);
-    let generated_at_unix = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-
-    let output = serde_json::json!({
-        "generated_at_unix": generated_at_unix,
-        "stage": "1 — initialize+tools/list against live Class B servers",
-        "sample_size_requested": sample_size,
-        "attempted": attempted,
-        "succeeded": succeeded,
-        "failed": failed,
-        "failure_categories": failure_categories,
-        "tools_discovered": all_tools.len(),
-        "annotation_tally": tally_json(&tally),
-        "servers": server_results,
-    });
-
-    let out_dir = Path::new("results/census");
-    std::fs::create_dir_all(out_dir)?;
-    let out_path = out_dir.join("class_b_annotation_coverage.json");
-    std::fs::write(&out_path, serde_json::to_string_pretty(&output)?)?;
-    eprintln!("census-stage1: wrote {}", out_path.display());
-
-    Ok(())
-}
-
-/// `pub(crate)` like [`stable_hash`]: `class_a_stage2` writes the same output shape and
-/// must not drift into a subtly different one.
-pub(crate) fn tally_json(tally: &coverage::AnnotationTally) -> serde_json::Value {
-    fn one(t: coverage::Tally) -> serde_json::Value {
-        serde_json::json!({ "explicit": t.explicit, "defaulted": t.defaulted, "absent": t.absent })
-    }
-    serde_json::json!({
-        "readOnlyHint": one(tally.read_only_hint),
-        "destructiveHint": one(tally.destructive_hint),
-        "idempotentHint": one(tally.idempotent_hint),
-        "openWorldHint": one(tally.open_world_hint),
-    })
+    .into_map()?;
+    let store = store.into_inner().map_err(|_| "evidence store lock poisoned")?;
+    census_report::finish("census-stage1", header, &store, &pool.completed, &out_path)
 }
 
 pub(crate) fn pct(count: usize, total: usize) -> f64 {

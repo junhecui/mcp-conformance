@@ -8,6 +8,7 @@ fn main() -> ExitCode {
         Some("census") => census(),
         Some("census-stage1") => census_stage1(),
         Some("census-stage2-class-a") => census_stage2_class_a(),
+        Some("census-rederive") => census_rederive(),
         Some("census-pin-stability") => census_pin_stability(),
         Some("probe-stage1") => probe_stage1(),
         Some("dump-tools") => dump_tools(),
@@ -22,7 +23,16 @@ fn main() -> ExitCode {
     }
 }
 
-const USAGE: &str = "usage: cargo xtask <purity|census|census-stage1 [sample_size]|census-stage2-class-a [sample_size]|census-pin-stability <input.json>|probe-stage1 [sample_size]|dump-tools <url>>";
+const USAGE: &str = "usage: cargo xtask <purity|census\
+|census-stage1 [sample_size] [--out PATH] [--evidence-dir PATH]\
+|census-stage2-class-a [sample_size] [--jobs N] [--out PATH] [--evidence-dir PATH]\
+|census-rederive <results.json> [--evidence-dir PATH] [--out PATH]\
+|census-pin-stability <input.json>|probe-stage1 [sample_size]|dump-tools <url>>";
+
+/// Everything after the task name.
+fn task_args() -> Vec<String> {
+    std::env::args().skip(2).collect()
+}
 
 fn dump_tools() -> ExitCode {
     let Some(url) = std::env::args().nth(2) else {
@@ -76,14 +86,14 @@ fn parse_sample_size() -> Result<usize, String> {
 }
 
 fn census_stage1() -> ExitCode {
-    let sample_size = match parse_sample_size() {
-        Ok(n) => n,
+    let args = match xtask::cli::parse_sweep_args(&task_args(), false) {
+        Ok(args) => args,
         Err(e) => {
-            eprintln!("census-stage1: {e}");
+            eprintln!("census-stage1: {e}\n\n{USAGE}");
             return ExitCode::FAILURE;
         }
     };
-    match xtask::census_stage1::run(sample_size) {
+    match xtask::census_stage1::run(&args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("census-stage1 failed: {e}");
@@ -110,17 +120,35 @@ fn probe_stage1() -> ExitCode {
 }
 
 fn census_stage2_class_a() -> ExitCode {
-    let sample_size = match parse_sample_size() {
-        Ok(n) => n,
+    let args = match xtask::cli::parse_sweep_args(&task_args(), true) {
+        Ok(args) => args,
         Err(e) => {
-            eprintln!("census-stage2-class-a: {e}");
+            eprintln!("census-stage2-class-a: {e}\n\n{USAGE}");
             return ExitCode::FAILURE;
         }
     };
-    match xtask::class_a_stage2::run(sample_size) {
+    match xtask::class_a_stage2::run(&args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("census-stage2-class-a failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn census_rederive() -> ExitCode {
+    let args = match xtask::cli::parse_rederive_args(&task_args()) {
+        Ok(args) => args,
+        Err(e) => {
+            eprintln!("census-rederive: {e}\n\n{USAGE}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match xtask::census_report::run_rederive(&args) {
+        Ok(true) => ExitCode::SUCCESS,
+        Ok(false) => ExitCode::FAILURE,
+        Err(e) => {
+            eprintln!("census-rederive failed: {e}");
             ExitCode::FAILURE
         }
     }

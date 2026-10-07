@@ -15,22 +15,39 @@
 //! Every result record carries `"execution_provenance": "containerized_docker"` so Stage 2
 //! data is never silently pooled with Stage 0/1 (registry-only / Class B) results, matching
 //! the discipline ADR-002 already requires between oracles.
+//!
+//! P0-10 adds three things. Evidence: both raw responses of every discovery that returns are
+//! persisted, and the results file is derived from the stored bytes
+//! ([`crate::census_report::build_report`], shared with `census-rederive`). Bounded
+//! concurrency: `--jobs N` (default 1, max [`crate::cli::MAX_JOBS`]) runs up to N containers at
+//! once — these are local containers, not third-party hosts, so Stage 1's politeness rule does
+//! not apply — with output order fixed by candidate index, never by completion order. Disk
+//! hygiene: an OCI image this sweep pulled is removed after its attempt, and no attempt
+//! launches while the host volume is under [`crate::sweep::MIN_FREE_BYTES`] free.
 
-use std::path::Path;
+use std::path::PathBuf;
+use std::process::Command;
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use census::coverage;
 use datamodel::ContainabilityClass;
-use discovery::{DiscoveryClient, DiscoveryError};
+use discovery::DiscoveryClient;
 use intake::catalogue::{self, IngestOutcome, ResolvedTarget};
 use intake::classify;
 use intake::registry::RegistryClient;
+use serde_json::{Map, Value, json};
+use store::BlobStore;
+
+use crate::census_report::{self, Observation, RunHeader, ServerObservation};
+use crate::cli::SweepArgs;
+use crate::sweep::{self, DiskGuard, StopFlag};
 
 // Shared with the other sweeps rather than re-derived: sampling comparability across
-// Stage 1 / Stage 2 / Track B depends on all of them selecting by the *same* stable hash,
-// and the output shape staying identical is what lets the result files be read side by
-// side. One definition each, in `census_stage1`.
-use crate::census_stage1::{pct, stable_hash, tally_json};
+// Stage 1 / Stage 2 / Track B depends on all of them selecting by the *same* stable hash.
+use crate::census_stage1::stable_hash;
+
+const STAGE: &str = "2 — containerized execution (docker run) against live Class A servers";
+const DEFAULT_OUT: &str = "results/census/class_a_annotation_coverage.json";
 
 /// Pre-pulled once before the sweep, not per server — a multi-hundred-MB base image
 /// re-downloaded on every npm/pypi candidate would dominate sweep time for no reason.
@@ -60,6 +77,10 @@ struct Candidate {
     registry_type: String,
     identifier: String,
     version: String,
+    /// True only for an `oci` candidate whose image was proven absent before the sweep
+    /// began — i.e. any copy of it on the host afterwards is one this sweep pulled, and is
+    /// this sweep's to remove. See [`image_present_locally`].
+    owns_oci_image: bool,
 }
 
 /// If this ingest outcome classifies as Class A, its name and first declared package
@@ -77,6 +98,7 @@ fn class_a_candidate(outcome: &IngestOutcome) -> Option<Candidate> {
             registry_type: registry_type.clone(),
             identifier: identifier.clone(),
             version: version.clone(),
+            owns_oci_image: false, // decided after selection, by mark_owned_oci_images
         }),
         ResolvedTarget::Endpoint { .. } => None,
     })
@@ -125,11 +147,6 @@ fn docker_args(candidate: &Candidate, container_name: &str) -> Option<Vec<String
     }
 }
 
-enum Attempt {
-    Success { tool_count: usize, tools: Vec<coverage::ToolCoverage> },
-    Failed { category: &'static str, detail: String },
-}
-
 /// Force-remove a container by the name this module assigned it, ignoring the result.
 ///
 /// This is the real fix for a containment bug found running the seed sample: the
@@ -142,45 +159,91 @@ enum Attempt {
 /// attempt regardless of outcome, is independent of whatever state the CLI process or the
 /// container's own process ended up in — it is the actual teardown guarantee design.md §3
 /// requires ("containment is a correctness requirement, not a convenience"), where relying
-/// on `--rm` alone was not.
+/// on `--rm` alone was not. `-v` also removes the anonymous volumes the container created —
+/// `--rm` would have, but a SIGKILL'd CLI never got to honour it, and leaked volumes are
+/// leaked disk on a host that has little to spare.
 fn cleanup_container(name: &str) {
     // Errors are expected and fine: a container that exited/was removed cleanly via its own
     // `--rm` never existed to be force-removed. Only the removal-when-needed case matters.
-    let _ = std::process::Command::new("docker").args(["rm", "-f", name]).output();
+    let _ = Command::new("docker").args(["rm", "-f", "-v", "--", name]).output();
 }
 
-fn attempt(candidate: &Candidate, container_name: &str) -> Attempt {
+/// Whether `image` is already in the local image store.
+///
+/// "Absent" is concluded only from Docker's own `No such image` answer. Any other outcome — a
+/// daemon hiccup, a reference Docker can't parse, failing to run `docker` at all — counts as
+/// *present*, because the only thing this answer decides is whether the image is deleted
+/// after its attempt, and a sweep must never delete an image it cannot prove it pulled.
+fn image_present_locally(image: &str) -> bool {
+    match Command::new("docker").args(["image", "inspect", "--format", "{{.Id}}", "--", image]).output() {
+        Ok(output) if output.status.success() => true,
+        Ok(output) => !String::from_utf8_lossy(&output.stderr).contains("No such image"),
+        Err(_) => true,
+    }
+}
+
+/// Decide, once and before any attempt, which OCI candidates' images this sweep will own.
+/// Runs after [`prepull_base_images`], so an OCI candidate that happens to name a wrapper
+/// image counts as pre-existing and is never removed out from under the npm/pypi attempts.
+fn mark_owned_oci_images(candidates: &mut [Candidate]) {
+    for candidate in candidates.iter_mut().filter(|c| c.registry_type == "oci") {
+        candidate.owns_oci_image = !image_present_locally(&candidate.identifier);
+    }
+}
+
+/// Remove an image this sweep pulled. Best-effort: if a concurrent attempt is still running
+/// a container from the same image, Docker refuses (`image is being used`), and whichever
+/// attempt finishes last removes it instead.
+fn remove_image(image: &str) {
+    match Command::new("docker").args(["image", "rm", "--", image]).output() {
+        Ok(output) if output.status.success() => {
+            eprintln!("census-stage2-class-a:   removed image {image} (pulled by this sweep)");
+        }
+        Ok(_) | Err(_) => {}
+    }
+}
+
+/// Launch one candidate in its container, discover it, tear everything down, and persist
+/// what it returned.
+fn observe(candidate: &Candidate, container_name: &str, store: &Mutex<BlobStore>, stop: &StopFlag) -> Observation {
     let Some(args) = docker_args(candidate, container_name) else {
-        return Attempt::Failed {
-            category: "unsupported_registry_type",
-            detail: candidate.registry_type.clone(),
-        };
+        return Observation::failed("unsupported_registry_type", &candidate.registry_type);
     };
     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
 
     let mut client = match DiscoveryClient::stdio_with_timeout("docker", &arg_refs, PER_ATTEMPT_TIMEOUT) {
         Ok(c) => c,
-        Err(e) => return Attempt::Failed { category: "spawn", detail: e.to_string() },
+        Err(e) => return Observation::failed("spawn", &e.to_string()),
     };
-    let result = match client.discover() {
-        Ok(discovery) => match coverage::tool_coverage(&discovery.tools_list_raw) {
-            Ok(tools) => Attempt::Success { tool_count: tools.len(), tools },
-            Err(e) => Attempt::Failed { category: "coverage_extraction", detail: e.to_string() },
-        },
-        Err(DiscoveryError::Transport(msg)) => Attempt::Failed { category: "transport", detail: msg },
-        // A killed-at-timeout container's closed pipe surfaces here too (the watchdog
-        // kills the process; recv_line then sees EOF) — indistinguishable from an
-        // ordinary early exit at this layer, so it is reported as one category rather than
-        // guessed apart.
-        Err(DiscoveryError::Io(e)) => Attempt::Failed { category: "io_or_timeout", detail: e.to_string() },
-        Err(DiscoveryError::Protocol(msg)) => Attempt::Failed { category: "protocol", detail: msg },
-        Err(DiscoveryError::ServerError { code, message }) => {
-            Attempt::Failed { category: "server_error", detail: format!("{code}: {message}") }
-        }
-    };
+    let result = client.discover();
     // Unconditional, regardless of how discover() came out — see cleanup_container's doc.
     cleanup_container(container_name);
-    result
+    drop(client); // reap the `docker run` CLI process before touching its image
+    if candidate.owns_oci_image {
+        remove_image(&candidate.identifier);
+    }
+
+    match result {
+        Ok(discovery) => census_report::record_discovery(store, &discovery, stop),
+        // A killed-at-timeout container's closed pipe surfaces as an I/O error too (the
+        // watchdog kills the process; recv_line then sees EOF) — indistinguishable from an
+        // ordinary early exit at this layer, so it is reported as one category rather than
+        // guessed apart.
+        Err(e) => Observation::from_discovery_error(e, "io_or_timeout"),
+    }
+}
+
+fn identity(candidate: &Candidate) -> Map<String, Value> {
+    let Value::Object(map) = json!({
+        "name": candidate.name,
+        "registry_type": candidate.registry_type,
+        "identifier": candidate.identifier,
+        "version": candidate.version,
+        "execution_provenance": "containerized_docker",
+    }) else {
+        unreachable!("json! of an object literal is an object")
+    };
+    map
 }
 
 /// Best-effort pre-pull of the two wrapper base images, once, before the sweep. Failure here
@@ -200,9 +263,9 @@ fn prepull_base_images() {
 
 /// Run the Stage 2 census: sample `sample_size` Class A servers from the live registry and
 /// attempt discovery against each by actually launching its declared package in a fresh,
-/// capped Docker container. Sequential, not concurrent — same politeness posture as Stage 1,
-/// and one container at a time keeps resource accounting simple.
-pub fn run(sample_size: usize) -> Result<(), Box<dyn std::error::Error>> {
+/// capped Docker container, up to `--jobs` at a time (default 1).
+pub fn run(args: &SweepArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let sample_size = args.sample_size;
     if std::process::Command::new("docker").arg("info").output().map(|o| !o.status.success()).unwrap_or(true) {
         return Err("docker is not available or the daemon is not running (`docker info` failed) \
                      — Stage 2 needs a working container runtime; see docs/tasks.md P0-06 for the \
@@ -210,7 +273,20 @@ pub fn run(sample_size: usize) -> Result<(), Box<dyn std::error::Error>> {
             .into());
     }
 
-    prepull_base_images();
+    let evidence_dir =
+        census_report::resolve_evidence_dir(args.evidence_dir.as_deref(), std::env::var_os(census_report::EVIDENCE_DIR_ENV));
+    let out_path = args.out.clone().unwrap_or_else(|| PathBuf::from(DEFAULT_OUT));
+    let store = Mutex::new(BlobStore::open(&evidence_dir)?);
+    let disk = DiskGuard::new(&evidence_dir);
+    let stop = StopFlag::default();
+
+    // Already under the floor: no attempt will launch, so don't spend disk on wrapper images
+    // either. The pool's first preflight records the reason and the run writes an empty,
+    // `"complete": false` results file.
+    match disk.check() {
+        Ok(()) => prepull_base_images(),
+        Err(reason) => eprintln!("census-stage2-class-a: skipping base-image pre-pull — {reason}"),
+    }
 
     eprintln!("census-stage2-class-a: fetching the registry to find all Class A candidates...");
     let registry = RegistryClient::new();
@@ -230,100 +306,60 @@ pub fn run(sample_size: usize) -> Result<(), Box<dyn std::error::Error>> {
         all_class_a.len()
     );
     all_class_a.sort_by_key(|c| stable_hash(&c.name));
-    let candidates: Vec<Candidate> = all_class_a.into_iter().take(sample_size).collect();
+    let mut candidates: Vec<Candidate> = all_class_a.into_iter().take(sample_size).collect();
+    mark_owned_oci_images(&mut candidates);
 
     eprintln!(
-        "census-stage2-class-a: attempting containerized discovery against {} Class A servers...",
-        candidates.len()
+        "census-stage2-class-a: attempting containerized discovery against {} Class A servers, {} at a time \
+         (evidence -> {})...",
+        candidates.len(),
+        args.jobs,
+        evidence_dir.display()
     );
 
     // Disambiguates container names across separate invocations of this xtask (e.g. the
-    // pilot run and the full sweep both running index 0..N) so a name collision can never
-    // make cleanup_container remove the wrong run's container.
-    let sweep_id = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    // pilot run and the full sweep both running index 0..N, or two sweeps started in the
+    // same second) so a name collision can never make cleanup_container remove the wrong
+    // run's container.
+    let sweep_id = format!("{}-{}", SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(), std::process::id());
 
-    let mut all_tools: Vec<coverage::ToolCoverage> = Vec::new();
-    let mut server_results = Vec::new();
-    let mut succeeded = 0usize;
-    let mut failure_categories: std::collections::BTreeMap<&'static str, usize> = std::collections::BTreeMap::new();
-
-    for (i, candidate) in candidates.iter().enumerate() {
-        eprintln!(
-            "census-stage2-class-a: [{}/{}] {} ({}:{})",
-            i + 1,
-            candidates.len(),
-            candidate.name,
-            candidate.registry_type,
-            candidate.identifier
-        );
-        // A name this module controls (not daemon-assigned) is what makes cleanup_container
-        // able to target the right container after a watchdog kill — see its doc comment.
-        // Includes the loop index for readability and generated_at_unix for uniqueness
-        // across separate runs of this xtask that might otherwise race on stale names.
-        let container_name = format!("mcp-conf-stage2-{i}-{}", sweep_id);
-        match attempt(candidate, &container_name) {
-            Attempt::Success { tool_count, tools } => {
-                succeeded += 1;
-                all_tools.extend(tools);
-                server_results.push(serde_json::json!({
-                    "name": candidate.name,
-                    "registry_type": candidate.registry_type,
-                    "identifier": candidate.identifier,
-                    "version": candidate.version,
-                    "execution_provenance": "containerized_docker",
-                    "outcome": "success",
-                    "tool_count": tool_count,
-                }));
+    let pool = sweep::run_bounded(
+        &candidates,
+        args.jobs,
+        || stop.check().and_then(|()| disk.check()),
+        |i, candidate| {
+            eprintln!(
+                "census-stage2-class-a: [{}/{}] {} ({}:{})",
+                i + 1,
+                candidates.len(),
+                candidate.name,
+                candidate.registry_type,
+                candidate.identifier
+            );
+            // A name this module controls (not daemon-assigned) is what makes
+            // cleanup_container able to target the right container after a watchdog kill —
+            // see its doc comment. The candidate index makes it unique within this sweep
+            // however many attempts run concurrently; sweep_id makes it unique across sweeps.
+            let container_name = format!("mcp-conf-stage2-{sweep_id}-{i}");
+            ServerObservation {
+                identity: identity(candidate),
+                observation: observe(candidate, &container_name, &store, &stop),
             }
-            Attempt::Failed { category, detail } => {
-                *failure_categories.entry(category).or_insert(0) += 1;
-                server_results.push(serde_json::json!({
-                    "name": candidate.name,
-                    "registry_type": candidate.registry_type,
-                    "identifier": candidate.identifier,
-                    "version": candidate.version,
-                    "execution_provenance": "containerized_docker",
-                    "outcome": "failed",
-                    "failure_category": category,
-                    "failure_detail": detail,
-                }));
-            }
-        }
-    }
-
-    let attempted = candidates.len();
-    let failed = attempted - succeeded;
-    eprintln!(
-        "census-stage2-class-a: {attempted} attempted, {succeeded} succeeded ({:.1}%), {failed} failed",
-        pct(succeeded, attempted)
+        },
     );
-    for (category, count) in &failure_categories {
-        eprintln!("census-stage2-class-a:   {category}: {count}");
+
+    let mut header = RunHeader {
+        stage: STAGE,
+        sample_size_requested: sample_size,
+        candidates_selected: candidates.len(),
+        attempted: pool.completed.len(),
+        stop_reason: pool.stop_reason,
+        evidence_store: &evidence_dir,
     }
-
-    let tally = coverage::tally(&all_tools);
-    let generated_at_unix = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-
-    let output = serde_json::json!({
-        "generated_at_unix": generated_at_unix,
-        "stage": "2 — containerized execution (docker run) against live Class A servers",
-        "execution_provenance": "containerized_docker",
-        "sample_size_requested": sample_size,
-        "attempted": attempted,
-        "succeeded": succeeded,
-        "failed": failed,
-        "failure_categories": failure_categories,
-        "tools_discovered": all_tools.len(),
-        "annotation_tally": tally_json(&tally),
-        "servers": server_results,
-    });
-
-    let out_dir = Path::new("results/census");
-    std::fs::create_dir_all(out_dir)?;
-    let out_path = out_dir.join("class_a_annotation_coverage.json");
-    std::fs::write(&out_path, serde_json::to_string_pretty(&output)?)?;
-    eprintln!("census-stage2-class-a: wrote {}", out_path.display());
-
-    Ok(())
+    .into_map()?;
+    header.insert("execution_provenance".into(), "containerized_docker".into());
+    header.insert("jobs".into(), args.jobs.into());
+    let store = store.into_inner().map_err(|_| "evidence store lock poisoned")?;
+    census_report::finish("census-stage2-class-a", header, &store, &pool.completed, &out_path)
 }
 

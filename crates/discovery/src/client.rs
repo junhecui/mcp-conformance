@@ -98,6 +98,17 @@ impl DiscoveryPath {
             Self::ServerDiscover => "server_discover",
         }
     }
+
+    /// The inverse of [`Self::as_str`], for reading provenance back out of a published
+    /// result (P0-10's offline re-derivation). `None` for any other string.
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "initialize" => Some(Self::Initialize),
+            "server_discover" => Some(Self::ServerDiscover),
+            _ => None,
+        }
+    }
 }
 
 impl std::fmt::Display for DiscoveryPath {
@@ -282,6 +293,16 @@ fn is_initialize_unavailable(err: &DiscoveryError) -> bool {
         DiscoveryError::ServerError { code, .. } => *code == -32601,
         DiscoveryError::Protocol(_) | DiscoveryError::Transport(_) => false,
     }
+}
+
+/// The `protocolVersion` a raw handshake response negotiated — the exact function
+/// [`DiscoveryClient::discover`] uses to fill [`Discovery::negotiated_spec_revision`],
+/// exposed so a consumer re-deriving from stored [`Discovery::initialize_raw`] bytes (P0-10's
+/// census replay) reads the revision through the same code path the live run did, rather
+/// than a second parser that could drift from it. Accepts either handshake's response
+/// (`initialize` or `server/discover`); both carry `result.protocolVersion`.
+pub fn negotiated_spec_revision(handshake_raw: &[u8]) -> Result<String, DiscoveryError> {
+    extract_negotiated_version(handshake_raw)
 }
 
 fn extract_negotiated_version(bytes: &[u8]) -> Result<String, DiscoveryError> {
