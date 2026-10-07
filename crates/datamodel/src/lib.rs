@@ -223,6 +223,34 @@ impl Digest {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
+
+    /// The inverse of this type's `Display`: exactly 64 lowercase hex characters, nothing
+    /// else. `None` for anything that isn't — including uppercase, surrounding whitespace,
+    /// or a `0x` prefix.
+    ///
+    /// Strict on purpose. A digest read back out of a results file becomes a path inside the
+    /// evidence store (F-05 addresses blobs by `Display` form), so accepting exactly the
+    /// alphabet `Display` emits is what makes "a digest string can never name a path outside
+    /// the store" a property of the type rather than of every caller's validation.
+    #[must_use]
+    pub fn from_hex(s: &str) -> Option<Self> {
+        fn nibble(c: u8) -> Option<u8> {
+            match c {
+                b'0'..=b'9' => Some(c - b'0'),
+                b'a'..=b'f' => Some(c - b'a' + 10),
+                _ => None,
+            }
+        }
+        let bytes = s.as_bytes();
+        if bytes.len() != 64 {
+            return None;
+        }
+        let mut out = [0u8; 32];
+        for (i, pair) in bytes.chunks_exact(2).enumerate() {
+            out[i] = (nibble(pair[0])? << 4) | nibble(pair[1])?;
+        }
+        Some(Self(out))
+    }
 }
 
 impl core::fmt::Display for Digest {
@@ -231,5 +259,33 @@ impl core::fmt::Display for Digest {
             write!(f, "{byte:02x}")?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Digest;
+    use alloc::string::ToString;
+
+    #[test]
+    fn from_hex_inverts_display() {
+        let mut bytes = [0u8; 32];
+        for (i, b) in bytes.iter_mut().enumerate() {
+            *b = (i as u8).wrapping_mul(37);
+        }
+        let digest = Digest::from_bytes(bytes);
+        assert_eq!(Digest::from_hex(&digest.to_string()), Some(digest));
+    }
+
+    #[test]
+    fn from_hex_rejects_anything_display_would_not_emit() {
+        let valid = "ab".repeat(32);
+        assert!(Digest::from_hex(&valid).is_some());
+        assert_eq!(Digest::from_hex(&valid.to_uppercase()), None, "uppercase");
+        assert_eq!(Digest::from_hex(&valid[..62]), None, "short");
+        assert_eq!(Digest::from_hex(&alloc::format!("{valid}00")), None, "long");
+        assert_eq!(Digest::from_hex(&alloc::format!("../{}", &valid[3..])), None, "path");
+        assert_eq!(Digest::from_hex(&alloc::format!(" {}", &valid[1..])), None, "whitespace");
+        assert_eq!(Digest::from_hex(""), None, "empty");
     }
 }

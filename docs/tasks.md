@@ -749,6 +749,143 @@ unattempted rather than checked off on faith.
       hand-built fixture, before trusting this at census scale — blocked on such a server
       existing; none does yet as of this writing
 
+### P0-10 Census evidence persistence, server-weighted metrics, offline re-derivation
+
+**Depends on:** P0-06, P0-07, P0-09, F-05
+**Exit:** Census runs persist raw evidence, report server-weighted metrics and spec-revision
+provenance, and every number can be re-derived offline from stored bytes.
+**Status:** Done — both mandated review passes came back clean (nothing blocking), the five
+fixes they agreed on are applied, and the smoke runs were performed by the manager rather
+than an implementer subagent, per the rule that anything contacting live third-party
+infrastructure is the manager's to run.
+
+Why: the July census (P0-06/P0-07) kept corpus tallies and a per-server `tool_count` only —
+no raw `tools/list` bytes. It is tool-weighted, a few large servers dominate it, and design.md
+open question 1 asks about *servers*; none of that could be re-sliced without re-contacting
+every server. It also predates MCP `2026-07-28`, so it records no handshake provenance.
+
+- [x] Both raw responses (`initialize_raw` — which may hold `server/discover` bytes, see
+      `discovery_path` — and `tools_list_raw`) of every successful discovery written to F-05's
+      `BlobStore`; each server record carries both digests and byte counts. Store root
+      `results/census/evidence/`, overridable by `--evidence-dir` or
+      `MCPCONF_CENSUS_EVIDENCE_DIR`. The JSON stays useful without the blobs: per-server
+      tally, tool count, pin, revision and path are all inline (`xtask/src/census_report.rs`)
+- [x] One derivation path: `census_report::build_report` computes every number from bytes
+      read back out of the store, reusing `census::coverage::tally` (summed per server via new
+      `AddAssign` impls, proven equal to tallying the concatenation). `cargo xtask
+      census-rederive <results.json>` reruns it offline and compares byte-for-byte; tests
+      prove a live run — including one through real `DiscoveryClient`s over stdio, the
+      bounded pool at `jobs = 3`, and the sweep's own `finish` — reproduces exactly, and that
+      an edited number, a missing blob, or a pre-P0-10 file is caught loudly
+- [x] Per-server tallies; top-level `server_weighted` block (% of servers declaring tools
+      whose tools carry an `annotations` object on none / some / all; per annotation, % with
+      ≥1 tool explicit and with every tool explicit). Tool-weighted `tools_discovered` /
+      `annotation_tally` unchanged in meaning, so July and October compare directly
+- [x] Per-server `negotiated_spec_revision` (parsed by the same function the live client
+      uses) and `discovery_path`, with top-level distributions under `provenance`
+- [x] Stage 2 only: `--jobs N` (default 1, capped at 8; Stage 1 rejects the flag — it stays
+      sequential per P0-07). Unique `--name` per container (sweep id includes the PID) and
+      unconditional `docker rm -f -v`, 45 s watchdog unchanged, output in candidate order
+      regardless of completion order
+- [x] Stage 2 disk hygiene (`xtask/src/image_hygiene.rs`): an `oci` candidate's image is
+      removed only if its reference was absent before the sweep and it resolves to an image
+      ID outside a pre-sweep `docker image ls` snapshot (plus the wrapper images); removal
+      happens when the last in-flight attempt on that reference finishes, under a lock, with a
+      final pass for removals Docker refused or late pulls; failures are non-fatal and
+      reported in the results header's `image_hygiene` block. Wrapper images are kept by
+      design. Free-space floor of 3 GiB guards the repo, evidence, and Docker-storage volumes
+      (on Docker Desktop under WSL, `/mnt/c`; override `MCPCONF_DOCKER_DATA_PATH`); below it
+      no attempt launches and the file says `"complete": false` with the reason.
+      containerd-snapshotter caveat documented in-module; multi-platform removal is verified
+      by re-inspection, not assumed
+- [x] Hostile-input protections unchanged (10 MiB recv cap, timeouts, watchdog, pin failures
+      non-fatal, no bare-host execution, `execution_provenance`), hash-based sampling
+      unchanged; server-controlled text in results is now length-bounded, and digests read
+      back from a results file are parsed strictly (`Digest::from_hex`) before becoming paths
+- [x] Smoke runs (manager) and two independent reviews (code + security) — `census-stage1 5`
+      reached 3 of 5 sampled servers and `census-stage2-class-a 3 --jobs 2` reached 2 of 3;
+      `census-rederive` then reproduced **both** live results byte-for-byte from stored
+      evidence (`cmp` clean), which is this task's central claim. Both sweeps ran with
+      `--out`/`--evidence-dir` pointed outside the repo, so `results/` was never written and
+      the July data stands untouched — which also exercised item 1's override paths rather
+      than leaving them untested. Image hygiene was validated against real pre-existing host
+      state: `postgres:latest` and `pgvector/pgvector:pg17` both survived, no container
+      leaked, and the two wrapper images were pulled and kept by design. Evidence volume,
+      measured for the still-open commit decision: ~15.6 KB/server (Class B), ~9.4 KB/server
+      (Class A)
+
+**Review outcome and carry-forward findings.** Both mandated review passes ran as separate
+subagents (a pure code review and a security specialist, per CLAUDE.md's orchestration
+model) and neither found anything blocking. Five fixes they agreed on were applied:
+
+1. **`docker run` flag parsing is now terminated with `--`** before the image operand in all
+   three `docker_args` arms (`xtask/src/class_a_stage2.rs`). Containment previously rested on
+   an accident of *ordering* — a registry-supplied `identifier` is the last argv element, so a
+   flag-shaped value like `--privileged` left `docker run` with no image operand and merely
+   errored. That margin was one token wide, and the obvious next feature closes it: the
+   dominant Stage 2 failure cause recorded in P0-06 is a missing required env var, so the
+   registry's `environmentVariables`/`runtimeArguments` are the natural thing to forward, and
+   appended in the natural place (with the other `docker` flags, ahead of the image) an entry
+   named `--privileged`, or `-v` plus `/:/host`, would have been immediate and total
+   containment loss. Regression test:
+   `a_flag_shaped_oci_identifier_lands_after_the_flag_parsing_terminator`.
+2. **The evidence store is genuinely git-ignored** (`/results/**/evidence/`). None of
+   `.gitignore`'s three prior patterns reached it — `/evidence/` is root-anchored, `raw/` is
+   the wrong leaf name, and a blob is addressed by a bare 64-hex digest with no extension — so
+   verbatim third-party bytes sat untracked-but-un-ignored in a public repo's working tree, one
+   `git add -A` from being committed. That is not tidiness: those bytes include `instructions`
+   prose written imperatively at a model (a separate research pass found three of five probed
+   public servers returning exactly that on the first connect-level request), which committed
+   would become a live prompt-injection payload sitting where a future agent session reads the
+   tree as project content. `results/census/README.md` now fences the directory in prose as
+   evidence-never-instruction.
+3. The watchdog doc comment in `crates/discovery/src/transport.rs` no longer claims a liveness
+   check that does not exist (see below).
+4. A `private_intra_doc_links` rustdoc warning (links to `pub(crate)` items in private
+   modules) removed by dropping the link brackets. Promoting the modules would not have
+   cleared it — the linked items are themselves `pub(crate)` — and widening that API surface
+   is out of this task's scope.
+
+Deliberately **deferred**, recorded here rather than left in a review nobody reads again:
+
+- **The stdio watchdog can fire after the child is reaped** (`crates/discovery/src/transport.rs`).
+  The detached thread sleeps the full timeout and then runs `kill -9` unconditionally — no
+  liveness check, no cancellation — which is why the smoke run printed
+  `kill: (14571): No such process` twice (the benign branch: `Drop` had already reaped the
+  child). PID reuse is possible in principle; quantified on this host as needing ~2,200
+  process creations/second sustained against `pid_max` 99999 inside the 45 s window, roughly
+  three orders of magnitude beyond what a sweep generates — so remote, but real, and `--jobs`
+  raises exposure up to 8×. Blast radius if it ever fired: a SIGKILL'd sibling `docker run`
+  producing a spurious `io_or_timeout` **attributed to the wrong server**, which is a
+  data-quality failure this project treats seriously. Fix shape: a shared "reaped" flag taken
+  under one lock across {check, kill} and {set, wait}.
+- **No panic safety around container cleanup** (`xtask/src/class_a_stage2.rs`).
+  `cleanup_container` and `hygiene.release` are plain statements, not `Drop` guards, so an
+  unwind leaks a container (P0-06's bug, returning) and leaves a reference `in_flight`
+  forever; and a worker panic propagates out of `thread::scope`, discarding the whole results
+  file. No panic reachable from server-controlled input was found, so this is an unconfirmed
+  robustness gap, not a live bug.
+- **Container hardening not applied.** Containers join the default bridge with unrestricted
+  egress (reaching the LAN and host-published ports), and there is no `--cap-drop=ALL`,
+  `--security-opt=no-new-privileges`, `--user`, or `--read-only`. Phase 0 deliberately accepts
+  stock-container containment (see this phase's Staging note), but each of these is one argv
+  element.
+- **`--out`'s volume is not disk-guarded**, unlike `--evidence-dir` and the Docker volume.
+- **`bounded()` limits characters, not bytes**, so a 2,048-character multi-byte value can
+  reach ~8 KB. The bound still holds; the test's tolerance only passes because its flood is
+  ASCII.
+- **`docker image rm` for a multi-platform image under Docker Desktop's containerd
+  snapshotter is unexercised.** The code mitigates by verifying removal via re-inspection
+  rather than trusting exit status.
+- **Docker Desktop's WSL CLI injection is fragile across Docker restarts.** `/usr/bin/docker`
+  survives as a symlink while its target mount (`/mnt/wsl/docker-desktop/cli-tools/...`) does
+  not, so every invocation fails with "could not be found in this WSL 2 distro" rather than a
+  connection error; repairing it needs the distro restarted. Worth knowing precisely because
+  a sweep that loses Docker mid-run would surface as a wave of per-server `io_or_timeout`
+  failures — a host problem misread as an ecosystem finding, which is the exact misattribution
+  this task's provenance work exists to prevent. A sweep interrupted this way should be
+  discarded, not published.
+
 ---
 
 ## Track B — Class B protocol-probe oracle

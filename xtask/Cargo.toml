@@ -19,5 +19,9 @@ serde_json = "1.0.151"
 # repeat `store`'s `bundled` feature to get it.
 rusqlite = "0.32"
 
+[dev-dependencies]
+# Same version `store` already uses for its own tests — no new crate in the lockfile.
+tempfile = "3.27.0"
+
 [lints]
 workspace = true

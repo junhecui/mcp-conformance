@@ -170,10 +170,17 @@ impl ChildProcessTransport {
     /// Exists for Stage 2 census (`docker run` wrapping a locally-launchable Class A
     /// package): a hostile or merely broken tool under `initialize`/`tools/list` can hang
     /// indefinitely, and `StdioTransport::recv_line` blocks with no timeout of its own. A
-    /// watcher thread sleeps `timeout` and then sends the child a kill signal if it is still
-    /// running; the killed process's stdout closing is what unblocks a pending
-    /// `recv_line` (it surfaces as the ordinary "peer closed" `DiscoveryError::Io`, the same
-    /// path an early-exiting server already takes).
+    /// detached watcher thread sleeps `timeout` and then sends the child a kill signal
+    /// *unconditionally* — there is no liveness check and no way to cancel it, so it also
+    /// fires long after a child that answered promptly has been reaped by `Drop`, where it
+    /// harmlessly reports no such process. The killed process's stdout closing is what
+    /// unblocks a pending `recv_line` (it surfaces as the ordinary "peer closed"
+    /// `DiscoveryError::Io`, the same path an early-exiting server already takes).
+    ///
+    /// That unconditional kill is a known gap, not an oversight: the real fix is a shared
+    /// "reaped" flag taken under one lock across {check, kill} and {set, wait}, so the kill
+    /// cannot fire after `wait()`. It is deliberately deferred to a follow-up task and
+    /// recorded under P0-10's deferred findings in `docs/tasks.md`.
     ///
     /// Best-effort by construction, not a containment mechanism: this is a watchdog for a
     /// hung *discovery* call, not the sandbox. If the child already exited before the

@@ -3,6 +3,13 @@
 /results/**/raw/
 /evidence/
 *.blob
+# P0-10's census evidence store (default `results/census/evidence/`). None of the three
+# patterns above reach it: `/evidence/` is root-anchored, `raw/` is the wrong leaf name, and
+# a blob is addressed by a bare 64-hex digest with no extension at all. Left untracked but
+# un-ignored, verbatim third-party response bytes sat one `git add -A` from being committed
+# to a public repo — including `instructions` prose written imperatively at a model. See
+# results/census/README.md.
+/results/**/evidence/
 
 # Sandbox scratch
 /sandbox-scratch/
