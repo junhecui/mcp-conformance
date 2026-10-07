@@ -70,6 +70,60 @@ The workspace does **not** build natively on Windows (`discovery`, `store` and `
 - **Before P1-03 — the pinned VM (new task F-08, §4.1).** WSL2 runs Microsoft's kernel, not
   ADR-010's pinned Ubuntu 6.8 GA kernel, so it must not be used for sandbox/observation work.
 
+### 3.1 Windows provisioning record (2026-10-06)
+
+Tier 1 (WSL2) is **provisioned and verified**; §3's plan above is what was followed, and this
+records what actually exists so a later session need not re-derive it.
+
+Host: Windows 11 **Home** 10.0.26200, WSL 2.6.3.0 (Microsoft kernel 6.6.87.2-1), 150 GiB free
+on `C:`.
+
+- **Distro.** `Ubuntu-24.04.5 LTS`, installed with
+  `wsl --install -d Ubuntu-24.04 --no-launch` — **no elevation needed**, because the WSL
+  platform was already enabled by a pre-existing Docker Desktop install. It is now the default
+  distro (previously `docker-desktop`). `/etc/wsl.conf` sets `default=cjunh` and `systemd=true`.
+- **User.** `cjunh` (uid 1000, `sudo` group) with NOPASSWD sudo via `/etc/sudoers.d/90-cjunh`.
+  This removes no security boundary: the Windows user can already run `wsl -u root`
+  unauthenticated in their own distro.
+- **Clone.** `/home/cjunh/mcp-conformance` on ext4 (953 GiB free), `origin` over SSH using the
+  key already present in the Windows profile (copied to `~/.ssh/id_ed25519`, mode 600;
+  authenticates as `junhecui`, push dry-run clean). `core.autocrlf=false` set globally.
+- **Toolchain.** Distro `rustup` 1.26.0 (preferred over a piped installer, per §4.1's standing
+  preference) to **1.85.1** per `rust-toolchain.toml`, with `clippy` and `rustfmt`;
+  `build-essential` 13.3.0 for rusqlite's bundled SQLite.
+- **Verified on `main` (f1da15e):** `cargo build`, `cargo test --workspace` **156 passed**,
+  `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo purity` all clean. The
+  156 figure matches §1's macOS count exactly, so the suite is confirmed reproducible across
+  macOS/arm64 and Linux/amd64.
+- **Verified on `wip/p0-10-census-evidence` (0a4f4d6)**, in worktree `~/wt/p0-10`: **185
+  passed**, clippy and purity clean — §1's claim about that branch confirmed on this host.
+- **Docker.** Desktop 29.2.1; WSL integration enabled by adding `IntegratedWslDistros` and
+  `EnableIntegrationWithDefaultWslDistro` to Docker Desktop's `settings-store.json` under
+  `%APPDATA%` (a `.bak-preclaude` backup is kept alongside it). `docker run` from inside WSL
+  works. Two caveats for Stage 2: Docker Desktop's `AutoStart` is **false**, so it must be
+  started manually before a census sweep; and it runs the **containerd snapshotter**
+  (`UseContainerdSnapshotter: true`), whose image listing/removal semantics differ from the
+  classic graph driver for multi-platform images — relevant to P0-10 scope item 6, where
+  `docker image rm` of a single-platform image is confirmed working but multi-platform removal
+  is not yet exercised.
+- **Claude Code** 2.1.292 at `~/.local/bin/claude`. Run it from inside WSL.
+
+Two consequences for the queue, not yet reflected in §4:
+
+- **§4.1 (F-08) cannot use Hyper-V.** Windows 11 Home has no Hyper-V, so the pinned-VM
+  hypervisor choice resolves to QEMU or VirtualBox. ADR-010's amd64, dated-serial and
+  checksum-verification requirements are unaffected.
+- **§4's shared `CARGO_TARGET_DIR` suggestion is deliberately not followed.** It existed to
+  relieve the macOS host's disk pressure; with 953 GiB free, separate per-worktree target
+  directories are preferable, since cargo locks a target directory and a shared one would
+  serialise the parallel worktree builds §4 asks for.
+
+**Do not use the Windows-side clone** on the Desktop under `OneDrive`. It has
+`core.autocrlf=true` (the Git-for-Windows system default) and the repo has no
+`.gitattributes`, so its working tree genuinely holds CRLF text files — precisely the hazard
+§3 warns about for byte-exact fixtures — and it additionally sits inside OneDrive. It is
+redundant with the WSL clone; the committed bytes are unaffected.
+
 ## 4. Queue, in order
 
 Parallelise where independent (each in its own git worktree). On a disk-constrained host,
