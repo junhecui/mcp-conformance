@@ -631,6 +631,23 @@ The `absent` bucket is identical (1,548) across all four annotations at this sca
 the 100-server sample — 48.6% of discovered tools never engage with the annotation system
 at all, which is itself the strongest signal toward *absence* over *mismatch* so far.
 
+**⚑ Before the Class A half is run, or either half re-run, read O-01's and O-02's
+2026-10-07 updates.** Three things changed under those tasks after the July data was
+collected. (1) Spec `2026-07-28` shipped with the `initialize` handshake removed, and the
+discovery client cannot reach a server that has upgraded — on HTTP it fails *silently*, into
+the same failure bucket as a dead host, so a re-run would under-count exactly the upgraded
+population it exists to measure. (2) `tools/list` pagination has never been followed, in
+either era, so any tool past page one is silently absent from these counts — that the
+cursor is never followed is confirmed in the code; that it actually bit a sampled server is
+**UNVERIFIED and unmeasured**, so the size of the loss is unknown rather than known to be
+zero. (3) Two
+ecosystem-wide coverage censuses were published in September 2026, so this result is now a
+replication carrying two numeric disagreements that have to be explained (48.6% vs 26.0% for
+Class B; 41.7% vs 58.8% for Class A), not a first measurement. Fix (1) and (2) before
+producing numbers that will be compared against those papers — and read O-01's carry-forward
+block on sweep pacing, 429 categorisation and `failure_detail` before the sweep is launched,
+not after.
+
 - [x] Throughput profile suitable for the corpus size — sequential requests (never
       concurrent — unrelated third-party hosts, no reason to burst them), 12s per-request
       timeout tuned down from the 30s default after the 100-server sample showed responsive
@@ -738,7 +755,10 @@ request/response pair was available. The new spec's
 post-handshake requests like `tools/list` — only the existing HTTP header mechanism is used.
 A real `2026-07-28` server that requires the `_meta` field would currently fail after a
 successful `server/discover`. This is exactly why the last checklist item below is left
-unattempted rather than checked off on faith.
+unattempted rather than checked off on faith. **Confirmed wrong 2026-10-07:** the spec shipped
+with official example request/response pairs (`schema/2026-07-28/examples/DiscoverRequest/`
+and `.../DiscoverResultResponse/`), the extrapolated shape does not match them, and the gap is
+wider than this caveat anticipated — see the re-scoped checklist item below, and O-01.
 
 - [x] Attempt `server/discover` when `initialize` gets no response, or an error indicating
       an unrecognized method, instead of treating that as a bare discovery failure
@@ -746,8 +766,16 @@ unattempted rather than checked off on faith.
 - [x] `TOOL_SNAPSHOT.spec_revision` (already captured per P0-01) reflects whichever revision
       was actually negotiated, regardless of which handshake produced it
 - [ ] Re-run against a real `2026-07-28` server once one exists in the wild, not just a
-      hand-built fixture, before trusting this at census scale — blocked on such a server
-      existing; none does yet as of this writing
+      hand-built fixture, before trusting this at census scale — **re-scoped 2026-10-07 by
+      O-01's spec re-check** (see that section, and
+      [`prior-art-resurvey-2026-10.md`](prior-art-resurvey-2026-10.md) §1.4). The blocker
+      recorded here no longer holds: three of five well-known public endpoints answered
+      `server/discover` correctly on 2026-10-07, so a test target exists today. The box stays
+      unchecked for a harder reason — the fallback's request shape, response parsing,
+      post-handshake `tools/list` params and HTTP headers are each wrong against the shipped
+      spec, and on the HTTP transport the fallback branch is never reached at all. Running it
+      against a real server now would simply fail, so the fix comes first; this item then
+      becomes real verification rather than a smoke test.
 
 ### P0-10 Census evidence persistence, server-weighted metrics, offline re-derivation
 
@@ -1781,10 +1809,18 @@ additions`.
 **Depends on:** Q-02
 **Exit:** Classifier runs out-of-band over stored evidence.
 
-This is **the one place in the system exposed to tool poisoning** — it reads tool
-descriptions, an established prompt-injection vector, and feeds them to a model.
+This is **the one place in the harness's *runtime* exposed to tool poisoning** — it reads
+server-authored free text, an established prompt-injection vector, and feeds it to a model.
+Scope corrected by ADR-006's 2026-10-07 amendment (architecture.md §9): the text is a tool's
+`description` **and** the connect-level `instructions` string, and the "one place" claim holds
+for the *runtime* only — the development/review loop is a second exposed path, covered by
+`CLAUDE.md`'s rule rather than by this task.
 
-- [ ] Descriptions treated as untrusted data, never as instruction
+- [ ] Tool `description` **and** `DiscoverResult`/`InitializeResult` `instructions` treated as
+      untrusted data, never as instruction. `instructions` is not a future concern: it
+      predates `2026-07-28`, it arrives on the connect-level response rather than per tool,
+      and the `initialize_raw` bytes P0-10 persists already contain it for every reachable
+      server in the corpus this classifier reads
 - [ ] Runs offline over stored evidence; never in the run loop
 - [ ] **Cannot write into the deterministic verdict path.** Enforce structurally.
 
@@ -1872,9 +1908,352 @@ explicitly asks "should runtime annotations... be added to the protocol?", confi
 architecture.md's "actively debating runtime evaluation" is still accurate today, unresolved
 either way.
 
+**Checked 2026-10-07.** Full working — pinned commit/tag, file paths with line ranges,
+GitHub API results, and verbatim live-probe transcripts — is in
+[`prior-art-resurvey-2026-10.md`](prior-art-resurvey-2026-10.md) §1 and its Appendix A. This
+is a summary; that document is the evidence. It carries explicit **UNVERIFIED** marks and
+unpreserved-evidence marks that a summary cannot usefully repeat at every mention — where a
+claim below reads flatter than its counterpart there, **the research note is authoritative and
+its hedge stands.**
+
+**`2026-07-28` shipped final on 2026-07-28, with the handshake removed. The 2026-07-27 check
+above was right, not alarmist.** Verified against the spec repository itself rather than a
+blog post: tag `2026-07-28` (`5f5440bb26a62e2cf3440b92da5a667efa03b267`),
+`schema/2026-07-28/schema.ts` L30 `LATEST_PROTOCOL_VERSION = "2026-07-28"`, and no
+`InitializeRequest`/`InitializedNotification` type anywhere in that schema — the only
+remaining match for "initializ" is a comment noting capabilities are no longer declared once
+at initialization. The `2026-07-28` changelog's major changes remove the
+`initialize`/`notifications/initialized` handshake (SEP-2575) and the `Mcp-Session-Id` header,
+and add `server/discover`. Protocol version and client capabilities now travel in `_meta` on
+**every** request; `server/discover` (servers MUST implement it, clients MAY call it) replaces
+the upfront capability exchange.
+
+**The four annotations this project verifies are unchanged — design.md §1's table still
+holds.** `ToolAnnotations`' interface body is byte-identical across `schema/2025-11-25`
+(L1168–1222), `schema/2026-07-28` (L1900–1954) and current `draft`; the only diff is three
+doc-comment lines gaining backticks and a `{@link}`. Names, semantics and all four defaults
+(`readOnlyHint` false, `destructiveHint` true, `idempotentHint` false, `openWorldHint` true)
+are exactly as design.md §1 states, and the schema still says plainly that these are hints on
+which clients "should never make tool use decisions ... received from untrusted servers" —
+this project's premise, restated by the spec. P1-07 can be implemented against that table.
+Quoted verbatim in the research note §1.5.
+
+**⚑ Flagged for P0-09 — and it is worse than P0-09's own disclosed caveat: the shipped
+`server/discover` fallback cannot succeed against a spec-compliant `2026-07-28` server, and
+on the HTTP transport the fallback branch is never even reached.** Five independent defects,
+each with its fix spelled out in the research note §1.4:
+
+1. **Request shape.** P0-09 reuses `initialize`'s top-level
+   `{protocolVersion, capabilities, clientInfo}` and sends no `_meta`.
+   `DiscoverRequest.params` is `RequestParams`, i.e. `{ _meta }` and nothing else, with
+   `io.modelcontextprotocol/protocolVersion` and
+   `io.modelcontextprotocol/clientCapabilities` both required. Confirmed live, not just read
+   off the schema: P0-09's exact payload was sent once each to two servers that *do* speak
+   `2026-07-28`, and both routed it to their legacy handler — Cloudflare docs with
+   `-32601 Method not found`, whose transcript is preserved verbatim (research note A.1), and
+   Hugging Face with `-32600 Session ID required`, whose transcript is **not preserved**: the
+   re-probe was rate-limited, and the research note records that half as unpreserved rather
+   than re-asserting it (§1.6, A.3). The Cloudflare transcript carries the point on its own.
+   Dispatch is on the presence of modern `_meta`/headers — without them, `server/discover` is
+   just an unknown legacy method.
+2. **Response parsing.** `extract_negotiated_version` reads `result.protocolVersion`.
+   `DiscoverResult` has no such field; it has `supportedVersions: string[]`, from which the
+   *client* picks. So even a successful `server/discover` ends in
+   `DiscoveryError::Protocol("handshake result missing protocolVersion")`.
+3. **Post-handshake `tools/list`.** Sent with `params: {}`. Every `2026-07-28` request
+   requires the `_meta` block, so this fails even after a successful discover.
+4. **HTTP headers.** `MCP-Protocol-Version` is required on every POST *including the first
+   `server/discover`* and must equal the `_meta` value, and `Mcp-Method` (required on all
+   requests, must equal the body's `method`) is never sent at all. Mismatch or omission is
+   400 / `HeaderMismatch` `-32020`. Error codes were renumbered in this revision:
+   `-32020` / `-32021` / `-32022`.
+5. **The trigger is inverted, and dead on HTTP.** The spec's dual-era algorithm is
+   modern-first (`server/discover` is the probe; `initialize` is the fallback on a non-modern
+   error or a timeout), and it explicitly forbids keying the fallback on one error code
+   because legacy servers answer "commonly `-32601` or `-32602` ... or not at all". P0-09 is
+   initialize-first keyed on `-32601`. On stdio that mostly works by luck. **On HTTP it
+   cannot work:** per the spec's own compatibility matrix a modern-only server rejects a
+   legacy `initialize` with **HTTP 400** (required headers missing); `HttpTransport` builds
+   its `ureq::Agent` without overriding `http_status_as_error`, which defaults to `true`
+   (verified in the vendored `ureq-3.3.0/src/config.rs:867`), so every 4xx becomes
+   `DiscoveryError::Transport` *with the body discarded*; and `is_initialize_unavailable`
+   (`crates/discovery/src/client.rs:274–285`) returns `false` for `Transport` **by design**
+   — P0-09's own review fix, which was right for connection failures and is exactly what
+   makes the modern path unreachable. P0-09's HTTP fallback test passes only because its fake
+   server returns `-32601` with HTTP **200**, which a `2026-07-28` server must not do. The
+   fix needs `.http_status_as_error(false)` (or matching `ureq::Error::StatusCode`), a
+   size-capped read of 400/404 bodies, and classification of the JSON-RPC error body as
+   modern (`-32020`/`-32021`/`-32022`, or a 404 carrying `-32601`) versus non-modern — while
+   keeping connection-level failures non-fallback, so P0-09's cost fix survives.
+
+**⚑ Implementation hazards inside that fix, for whoever writes it.** Established by the
+2026-10-07 security-relevance review of the research note; line-level citations in its
+§1.4.2. Hazard 1 is a correction — the change set as first written gets it wrong.
+
+1. **`.http_status_as_error(false)` is mandatory, not optional.** The alternative originally
+   offered alongside it — "or match `ureq::Error::StatusCode`" — cannot work: that variant
+   carries **only the status code**, no response and no body
+   (`ureq-3.3.0/src/error.rs:14`), so matching it cannot satisfy the same item's own
+   requirement to read and size-cap the 400/404 body.
+2. **That flag is agent-wide, so flipping it changes every request, `tools/list` included.**
+   Today a 403 or 500 on `tools/list` short-circuits as
+   `DiscoveryError::Transport("http status: NNN")`; afterwards the HTML body reaches
+   `decode_and_validate` and surfaces as `Protocol(…)` — silently pooling HTTP-level
+   failures into the `protocol` bucket and breaking comparability with the July split (435
+   `transport` against 312 `protocol`). Capture the status explicitly and keep the failure
+   category keyed on it.
+3. **The era classifier must be a separate read-only function, and `decode_and_validate`'s
+   id check must not be relaxed to accommodate it.** That function requires `id.as_u64()`,
+   and *both* real 4xx error bodies in the research note's Appendix A would be rejected by it
+   before classification — DeepWiki substitutes the string id `"server-error"` (A.4), GitMCP
+   returns `"id":null` (A.5). The id check is a deliberate anti-hostile-server measure per
+   its own doc comment; classify the body alongside it, never by loosening it.
+4. **Size-capping needs an explicit limit.** `ureq`'s 10 MiB cap is a property of
+   `read_to_vec()` specifically. `with_config().reader()` and `read_json()` are
+   **unbounded** without an explicit `.limit()`, per ureq's own documentation.
+
+Two smaller findings from the same reading. `DiscoverResult.instructions` is
+server-controlled free text whose stated purpose is inclusion in an LLM system prompt — a
+prompt-injection vector that must be stored as evidence only and never fed to a model, so
+ADR-006's `destructive` classifier has to treat it exactly like a tool description (three of
+the five probed servers returned substantial `instructions` prose, one of them directing the
+reader to set an API token). **The field is not new, and the exposure is not pending.**
+`InitializeResult.instructions` predates this revision, and the *legacy* `initialize`
+transcripts in the research note's Appendix A carry the identical imperative prose (Context7
+A.2, DeepWiki A.4); what `2026-07-28` changes is only that the field now rides a response
+every server **MUST** implement, with no version negotiation gating the way to it. So the
+exposure is **retroactive**: it was already present in every Class A and Class B census sweep
+run, and the `initialize_raw` bytes P0-10 persists hold it for every reachable server in the
+corpus — which, now that P1-06 has landed the normaliser, is genuinely the corpus Q-03's
+classifier will read out-of-band. Calling the field "new" would sequence the mitigation
+behind the spec migration, which is backwards. **ADR-006 and architecture.md §4.5 were
+amended 2026-10-07 accordingly** (scope only — the decision is unchanged), and Q-03's own
+checklist now names `instructions` alongside `description`. And `serverInfo` is now
+explicitly self-reported, with the spec itself saying it "SHOULD NOT" be relied on for
+security decisions. Nothing in `2026-07-28` requires discovery to call a tool, so P0-01's
+structural guarantee is unaffected — the method set becomes `{server/discover, tools/list}`
+on the modern path.
+
+**⚑ Flagged for the census re-run and for P0-10: do not re-run the census before the
+discovery client is fixed.** The re-run is currently sequenced to follow P0-10 immediately,
+which would produce numbers that are stale on arrival:
+
+- A server that has upgraded to `2026-07-28` is not merely mis-recorded, it is
+  **undiscoverable** — and on HTTP silently so, landing in the same `transport` failure
+  bucket as a dead host or a refused connection. The re-run would therefore under-count
+  exactly the population whose upgrade it exists to measure. Not hypothetical: three of five
+  well-known public endpoints already answered `server/discover` correctly on 2026-10-07
+  (research note §1.6 and Appendix A).
+- `ListToolsResult` is a `PaginatedResult` and the client has never followed `nextCursor`, in
+  **either** era (pagination predates `2026-07-28`). Any tool past page one has been silently
+  absent from the P0-06/P0-07 counts and would be again. How many servers paginate is
+  unmeasured.
+
+Correct order: fix the five defects above and pagination, *then* re-run. O-02's two published
+censuses make this sharper — a re-run that silently drops upgraded servers and later pages is
+not comparable against them.
+
+**⚑ Flagged for the census re-run, P0-02, P5-01 and P5-04 — carry-forward findings from the
+same 2026-10-07 review. Recorded here, not implemented.** Each needs its own change when the
+relevant work is picked up; none is a defect in anything already landed except where stated.
+
+- **Pacing is count-based, not rate-based — and the same shape is structural in the
+  harness.** All three Hugging Face probes in the research note landed inside one second,
+  which is what an edge WAF reads as abuse (it answered HTTP 429, costing that row its
+  evidence). `DiscoveryClient::discover` fires its own sequence back-to-back with no delay;
+  modern-first adds a request; pagination adds unbounded ones. **It is already happening at
+  census scale**: `results/census/class_b_annotation_coverage.json` contains two
+  `http status: 429` responses pooled into the 435-strong `transport` bucket, so politeness
+  failures in the July sweep are currently unmeasurable. Rules for the larger sweeps: a
+  minimum intra-host inter-request delay (≥250–500 ms); **429 as its own failure category,
+  never pooled into `transport`**; honour `Retry-After` and skip rather than retry; and a
+  request budget keyed on **eTLD+1 rather than host** — at 1,000 servers one vendor behind
+  many registry entries can absorb hundreds of requests while every per-host budget stays
+  satisfied.
+- **`ttlMs`/`cacheScope` are a new rug-pull surface, and the harness is immune only by
+  accident.** A server can declare a long TTL with `cacheScope: "public"` so caches hold one
+  tool list while a revalidating client sees another — cache divergence as a rug-pull
+  vector, exactly what P0-02's pin exists to detect. Today no production code reads `ttlMs`,
+  `cacheScope`, `resultType`, `capabilities`, `supportedVersions` or `serverInfo`, so there
+  is no cache to diverge. Write the rule down before someone reaches for caching to speed a
+  1,000-server sweep: **the harness never honours a server-declared TTL.** It re-fetches and
+  re-pins at test time, because "as observed at test time" is the pin's entire meaning.
+  Separately: `DiscoverResult.capabilities` is **not** covered by the pin and must not be
+  published as a fact about a server until it is.
+- **`supportedVersions[]` is a downgrade-*provenance* issue, not a security hole.** §1.4(b)'s
+  rule is correct and must be kept: the client picks from a closed allowlist of revisions it
+  implements, and a list offering nothing it speaks is a discovery **failure**, not a
+  fallback. But §1.4(e)'s branches let a hostile server **choose which era the harness
+  records about it**, by stalling or returning garbage to `server/discover`. No security
+  check is disabled — the four annotations are byte-identical across revisions and the pin
+  is revision-independent — but P0-10 publishes `discovery_path` **distributions**, which a
+  server could then skew about itself. Mitigations: record *offered* versus *chosen* versions
+  plus the reason any fallback was taken; type- and length-bound `data.supported` before use;
+  and never let a server-supplied string become a `MCP-Protocol-Version` header or a `_meta`
+  value.
+- **`failure_detail` is a committed channel for server-controlled text.**
+  `xtask/src/census_stage1.rs` and `xtask/src/class_a_stage2.rs` write
+  `format!("{code}: {message}")` into `results/census/*.json`. Benign today — a single
+  `-32603: Internal error` is the only server-authored string in the committed census data —
+  but the discovery fix widens it, since 400/404 bodies then get read and classified. Cap
+  the recorded detail to a fixed length and label the field in `results/census/README.md`
+  the way P0-10 labelled the evidence directory.
+- **Redirects are followed by default.** `ureq`'s `max_redirects` is non-zero and only
+  `timeout_global` is overridden; `failure_detail: "redirect failed"` in the committed data
+  confirms redirects are in play. So a registry-listed endpoint can steer a sweep at an
+  arbitrary host, including a link-local metadata address. Nothing leaks — no credentials
+  are ever sent — and this is pre-existing, not new. Consider `max_redirects(0)` for
+  discovery, or an allowlist on the redirect target.
+- **A charset allowlist on the registry-supplied `identifier`/`version` at ingest** is still
+  worth adding before Stage 2 scales. For accuracy: P0-10 landed the *structural* half of
+  this on `main` (`b57e34b` terminates `docker run`'s flag parsing with `--` before the image
+  operand), so the containment hazard is closed and what remains is input validation at
+  ingest — narrower than it was when first raised.
+- **A derivation abort has no `unverifiable` path.** P1-06's own review passes recorded that
+  an aborted derivation produces **no `VERDICT` row at all**, unlike a `NormaliseError`,
+  which has a reason code and lands as `unverifiable`. A silently missing row is not a
+  finding and not a shrug — it is an absence. It must be counted in **P5-04's no-verdict
+  fraction**, which ADR-004 already requires be reported as a metric in its own right.
+
+**SEP and IG status (GitHub REST API, 2026-10-06).** SEP-1913 "Trust and Sensitivity
+Annotations" is still **open** (last activity 2026-10-01; its sponsor was pinged for
+inactivity on 2026-09-28). The other three this backlog has tracked are now **closed and
+unmerged**: SEP-1984 (2026-09-23 — author closing it to sync with the Tool Annotations IG),
+SEP-1862 Tool Resolution (2026-09-02, no closing comment), SEP-2417 Model Preferences
+(2026-09-22 — maintainers now require every new SEP to go through a Working Group). Two new
+annotation-adjacent proposals are open: **SEP-2793** Tool Risk Metadata (purely additive
+`ToolAnnotations` fields — `riskLevel`, `category`, `blastRadius`, `reversibility`,
+`sideEffects`, `approvalRecommendation`, `minTrustLevel`; the four existing hints untouched)
+and **SEP-2809** Attested Tool-Server Admission. **SEP-3140** (signed capability declarations
+with a content hash per declaration — the server-side parallel of P0-02's pin) closed
+2026-09-22. Nothing touching the four hints has merged, and the repo's `seps/` directory contains none of
+these — **43** numbered SEP files at `0a11bf68` (46 entries counting `.keep`, `README.md` and
+`TEMPLATE.md`).
+
+**The IG has moved its trust work out of the core spec and into experimental extensions.**
+`modelcontextprotocol/experimental-ext-tool-annotations` is active (latest commit 2026-08-12)
+and drafts `io.modelcontextprotocol/trust-annotations` — `sensitive`/`untrusted` labels on
+*result* `_meta`, plus an **`evidenceRef`** pointer — and
+`io.modelcontextprotocol/action-metadata`. Its `docs/sep-disposition.md` records the IG
+aligning on 2026-05-28 to pursue this as an experimental extension first. The charter (last
+changed 2026-08-06) still lists meeting cadence as "TBD" and still carries the open question
+"should runtime annotations ... be added to the protocol?"; the 2026-08-22 roadmap post does
+not mention annotations at all. Net for this project: the hints are stable and nothing is
+close to changing them, and the ecosystem's direction is additive, out-of-band trust
+*evidence*. A behavioural conformance record bound to a metadata pin is plausibly the kind of
+thing an `evidenceRef` slot would point at — an observation, not something the IG has said.
+
 ### O-02 Prior-art re-survey before publication
 
 **Exit:** Re-run before each publishable milestone (P0-07, P2-10, P5-04).
 
 design.md §11: if an ecosystem-wide conformance audit already exists, this work reframes as
 an extension or a replication with a different containment approach.
+
+**Checked 2026-10-07.** Full survey — per item: citation, date, what and how it measured,
+corpus size, and overlap — is in
+[`prior-art-resurvey-2026-10.md`](prior-art-resurvey-2026-10.md) §2. Search method: the arXiv
+API across MCP × {annotations, readOnlyHint, census, conformance, sandbox, measurement}, two
+seeding web searches, then reference-chasing through the bibliographies of what turned up;
+every row checked against the arXiv abstract page or full text; SEO and content-farm
+restatements deliberately not cited. This satisfies the "re-run before P0-07" half of the exit
+condition above. Next re-survey due before P2-10. As with O-01: the research note marks what it
+could not verify, this summary does not repeat every such mark inline, and the note's hedge
+wins wherever the two differ.
+
+**⚑ Flagged for P0-05 / P0-06 / P0-07: the census is no longer a first measurement. Two
+ecosystem-wide annotation-coverage censuses were published in September 2026.**
+
+- **[A] Trofimov & Novikov, "When Tool Calls Succeed but Workflows Fail",
+  [arXiv:2609.15397](https://arxiv.org/abs/2609.15397) (v1, 2026-09-14), §5.** Full official
+  registry snapshot on **2026-07-27** (59,625 entries, 18,688 distinct servers at latest
+  version); anonymous `tools/list` to all 9,234 remote targets, 4,838 answered → **98,291
+  tools**, median 11 per server. No tool called. Records all four hints and keeps an explicit
+  `false` distinct from an omitted field. **26.0% of tools carry no annotation at all**;
+  61.7% serialize all four; `destructiveHint` is *applicable* on only 12.9%. Same population,
+  same instrument class and the same no-execution rule as our Stage 1 — at ~19× our
+  reachable-server count (4,838 vs 250) and ~31× our tool count (98,291 vs 3,183), from a
+  snapshot taken the **same day** as ours.
+- **[B] Haseeb Mohammed Afsar, "What a Random Draw from the MCP Registry Contains",
+  [arXiv:2609.10962](https://arxiv.org/abs/2609.10962) (v1, 2026-09-10).** Registry census
+  tier (16,548 servers on 2026-07-14; 24,135 on 2026-08-22), plus a **seeded** probability
+  draw (frame pinned by SHA-256) of 400 npm/stdio servers, each launched once via `npx` with
+  no repair and no credentials. 195 ran, advertising 2,766 tools; **58.8% of those tools
+  carry no annotations** (41.5% on a hand-curated frame). Server level: of 194 servers with
+  ≥1 tool, **72 annotate every tool and 122 annotate none, with zero partial servers**. The
+  closest analogue to our Stage 2 (Class A).
+
+**The conclusion design.md §11 demands, stated explicitly:**
+
+1. **The census (P0-05/06/07) must be reframed as replication-and-extension.** A "first
+   measurement of annotation coverage" claim is no longer available. The extension axes that
+   survive, and that neither paper covers: both containability classes measured by one
+   instrument under one taxonomy; P0-05's three-way **explicit / defaulted / absent** split
+   (neither paper separates "annotations object present, key missing" from "no object at
+   all"); containerised Class A execution spanning pypi and oci as well as npm, with
+   `execution_provenance` on every record; and the metadata pin, with stability measured.
+2. **The conformance plan does *not* need reframing. Nothing found verifies any of the four
+   annotations against observed behaviour — at any scale, under any containment.** The
+   nearest neighbours are description-vs-code static work, already orthogonal per
+   architecture.md §0 (DCIChecker [arXiv:2606.04769](https://arxiv.org/abs/2606.04769);
+   MCPDiFF [arXiv:2602.03580](https://arxiv.org/abs/2602.03580)), and security-oriented
+   dynamic audits that never compare against annotations (mcp-sec-audit
+   [arXiv:2603.21641](https://arxiv.org/abs/2603.21641) — Docker + eBPF syscall, file-I/O and
+   network observation, the closest *mechanism* to ours and now a citation obligation for the
+   paper's mechanism section; MCPZoo [arXiv:2607.11086](https://arxiv.org/abs/2607.11086);
+   Corvus [arXiv:2608.00150](https://arxiv.org/abs/2608.00150); Zhou et al.
+   [arXiv:2605.22333](https://arxiv.org/abs/2605.22333)). Every differentiator in
+   architecture.md holds: kernel-boundary evidence, the multi-arm idempotency protocol with a
+   *measured* noise floor, the integrity gate, and `unverifiable` as a first-class verdict.
+
+**⚑ Two numeric disagreements must be explained before P0-07 is published**, or the census is
+not credible standing next to [A] and [B]:
+
+- **Class B: our 48.6% of tools with no `annotations` object against [A]'s 26.0%.** Our
+  reachability disagrees too — 25% of 1,000 hash-sampled targets answered, against [A]'s 52%
+  of 9,234.
+- **Class A: our 41.7% against [B]'s 58.8%** random draw. Note that [B]'s *curated*-frame
+  rate (41.5%) matches ours almost exactly, which **suggests** our hash sample **may** skew
+  toward servers that both start and annotate — **UNVERIFIED**, and our Class A sample is
+  small (100 attempted, 57 ran).
+- Candidate causes, **none yet tested**: sampling (1,000 of ~8,300 versus the full
+  population); our transport's rejection of SSE responses; a definitional difference ("no
+  `annotations` object" versus "no annotation at all"); tool- versus server-weighting across
+  different large servers; and unfollowed `tools/list` pagination (see O-01's census flag
+  above). Explaining these disagreements *is* the replication contribution — it is the
+  interesting half of the result, not an errata section.
+
+Four further consequences for the backlog:
+
+- **Server-weighted results are table stakes, not polish.** [B]'s 72/122 all-or-nothing split
+  is the server-level answer to open question 1, and our stored results cannot produce it —
+  only corpus tallies and a per-server `tool_count` were saved, and no raw `tools/list` bytes.
+  Persisting those bytes per server is a prerequisite for comparability, not a refinement.
+- **P0-08's class ratio is stale.** [B] reports remote-only overtaking package-only between
+  2026-07-14 (42.6%) and 2026-08-22 (49.7%), with package-only falling 50.4% → 43.6%. Our
+  2026-07-26 figures (Class A 51.0% / Class B 44.4%) are consistent with [B]'s July snapshot,
+  so the ratio has probably moved since. Re-measure before citing them — and note that
+  architecture.md §2's design note ("if most public servers are remote-only, the honest
+  headline is that most of the ecosystem is unauditable by any third party") may apply after
+  all, contrary to what P0-08 concluded in July.
+- **Track Q denominator.** [A] finds `destructiveHint` applicable (`readOnlyHint != true`) on
+  only 12.9% of tools and asserted destructive on 3.1%. Q-01/Q-04 must report the
+  *applicable* denominator, or the agreement statistic is dominated by `readOnlyHint: true`
+  tools where the hint is meaningless by spec. [A] also warns that emitted values "may
+  originate in SDK defaults or server templates rather than deliberate declaration", so
+  violation rates should be stratified by whether a value is plausibly template-emitted — a
+  reporting concern, not a verdict-engine change.
+- **P5-03 precedents, and independent support for the pin.** Two precedents, but not the same
+  one — an earlier draft of this bullet collapsed them into "both ran 90-day coordinated
+  disclosure and obtained CVEs", which is wrong. **Corvus** applies "a 90-day embargo … from
+  the date of maintainer notification" and files **GitHub Security Advisories — 68 of them,
+  not CVEs** (confirmed from that paper's full text, 2026-10-07). **Zhou et al.** obtained
+  **9 CVE IDs** through responsible disclosure (confirmed in its abstract) but states no
+  embargo window there, so its disclosure cadence is **UNVERIFIED**. Both inform the embargo
+  state machine; the GHSA-versus-CVE route is a real choice between them, not a detail. Two registry-drift papers independently support architecture.md §0's case for the
+  metadata pin: Bharti [arXiv:2608.00997](https://arxiv.org/abs/2608.00997) (8.6% of 19,099
+  servers ever rewrite a registry description; recommends revalidating "the moment a
+  description's hash moves") and Kraishan
+  [arXiv:2609.14119](https://arxiv.org/abs/2609.14119) (51.1% of multi-version servers
+  changed what they advertise, 40.6% of them silently; 4.2% redirected their remote endpoint
+  to a different host). Neither pins `tools/list` bytes per tool, which P0-02 does.
