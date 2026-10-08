@@ -904,11 +904,22 @@ Deliberately **deferred**, recorded here rather than left in a review nobody rea
   ASCII.
 - **`docker image rm` for a multi-platform image under Docker Desktop's containerd
   snapshotter is unexercised.** The code mitigates by verifying removal via re-inspection
-  rather than trusting exit status.
+  rather than trusting exit status. Narrowed 2026-10-07: the *ID-equality* assumption this
+  module's protection rests on — that `docker image ls --all --no-trunc` and
+  `docker image inspect --format {{.Id}}` report the same digest under the containerd
+  snapshotter — **is now confirmed** on the pinned host, checked against all four images in
+  the local store (`postgres:latest`, `pgvector/pgvector:pg17`, `node:22-alpine`, the `uv`
+  wrapper), all four matching. What remains unexercised is specifically *removal* of a
+  multi-platform image: every image in that store reported `len .Manifests == 0`, i.e. a
+  single platform, so the multi-manifest path still has never run.
 - **Docker Desktop's WSL CLI injection is fragile across Docker restarts.** `/usr/bin/docker`
   survives as a symlink while its target mount (`/mnt/wsl/docker-desktop/cli-tools/...`) does
   not, so every invocation fails with "could not be found in this WSL 2 distro" rather than a
-  connection error; repairing it needs the distro restarted. Worth knowing precisely because
+  connection error. Repairing it needs **Docker Desktop itself** restarted: verified
+  2026-10-07 that terminating and restarting the WSL distro alone does *not* restore the
+  mount, because the mount is published by Docker Desktop's own backend into the shared
+  `/mnt/wsl` namespace. After restarting Docker Desktop the engine was reachable from
+  inside the distro again within ten seconds. Worth knowing precisely because
   a sweep that loses Docker mid-run would surface as a wave of per-server `io_or_timeout`
   failures — a host problem misread as an ecosystem finding, which is the exact misattribution
   this task's provenance work exists to prevent. A sweep interrupted this way should be
