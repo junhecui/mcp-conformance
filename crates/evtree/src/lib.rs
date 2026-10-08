@@ -40,8 +40,23 @@
 //!   generically ([`Entry::xattrs`]); no xattr name is special-cased by the codec. An opaque
 //!   directory is simply a [`Payload::Directory`] entry whose xattr list happens to contain
 //!   that name/value pair.
+//!
+//! # `no_std`
+//!
+//! `#![no_std]` + `alloc`, because `normalise` decodes `evtree1` inside the ADR-005 pure
+//! closure (ADR-011) and this crate is therefore on `cargo purity`'s `PURE_ALLOWLIST`. A
+//! `no_std` pure crate linking a `std` dependency would quietly defeat F-04's Layer 3 (the
+//! clock/filesystem would be linked again, just one edge away), so this crate is held to the
+//! same build-level guarantee as `normalise` itself.
 
-use std::fmt;
+#![no_std]
+
+extern crate alloc;
+#[cfg(test)]
+extern crate std;
+
+use alloc::vec::Vec;
+use core::fmt;
 
 /// `b"EVTREE1\0"` — the fixed 8-byte magic that opens every capture.
 pub const MAGIC: [u8; 8] = *b"EVTREE1\0";
@@ -192,7 +207,7 @@ impl fmt::Display for DecodeError {
     }
 }
 
-impl std::error::Error for DecodeError {}
+impl core::error::Error for DecodeError {}
 
 // ---------------------------------------------------------------------------------------
 // Encode
@@ -409,6 +424,8 @@ impl<'a> Reader<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::format;
+    use alloc::vec;
 
     fn dir(path: &str) -> Entry {
         Entry {

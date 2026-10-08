@@ -27,8 +27,8 @@ pub struct Assessment {
 /// Decide `readOnlyHint` from a single-invocation changeset.
 ///
 /// A non-empty canonical changeset over `user_state` contradicts a `true` declaration.
-/// The `user_state` / `server_internal` / `ephemeral` split is ADR-008, which is why this
-/// cannot be written yet.
+/// The `user_state` / `server_internal` / `ephemeral` split is ADR-008, applied by
+/// `normalise` (P1-06, ADR-011); the decision itself is P1-07.
 pub fn read_only_hint(_declared: bool, _d1: &CanonicalChangeset) -> Assessment {
-    todo!("P1-07 — blocked on ADR-008 (path taxonomy)")
+    todo!("P1-07 — not yet implemented (inputs settled: ADR-008 taxonomy, ADR-011 changeset)")
 }

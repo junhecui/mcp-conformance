@@ -32,7 +32,14 @@ pub const PURE_CRATES: &[&str] = &["normalise", "verdict"];
 /// Additions require an ADR-005 justification. The bar: the dependency must be a pure data
 /// transformation with no access to a clock, a filesystem, the network, or a model. `serde`
 /// core would qualify; `serde_yaml` would not, because parsing belongs to the caller.
-pub const PURE_ALLOWLIST: &[&str] = &["datamodel"];
+///
+/// - `datamodel` — shared vocabulary, `no_std`, no dependencies.
+/// - `evtree` — the `evtree1` codec (ADR-009). Added by P1-06 (ADR-011): `normalise`
+///   decodes the stored evidence bytes itself, so replay is literally
+///   `normalise(blob bytes, ruleset)`. `evtree` is `#![no_std]` + `alloc`, has an empty
+///   `[dependencies]` table, and its `decode` is a total function of a byte slice — a pure
+///   data transformation by the bar above.
+pub const PURE_ALLOWLIST: &[&str] = &["datamodel", "evtree"];
 
 /// A dependency edge that breaches the firewall.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]

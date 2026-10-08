@@ -1,0 +1,33 @@
+# Normalisation ruleset v1 — ADR-008's seeded allowlists and nothing else (P1-06, ADR-011).
+#
+# Format: a strict subset of YAML, parsed by `store::ruleset` (not by a YAML library).
+# Every string is double-quoted; no escapes; two-space list indent; `#` comments on their
+# own lines only. Glob syntax is `normalise::glob` (ADR-011): anchored at `/` or `**/`,
+# `**` = zero or more whole components, `*`/`?` within one component.
+#
+# Matching order: `ephemeral` first, then `server_internal`; anything unmatched is
+# `user_state` (ADR-008's conservative default).
+#
+# PUBLISHED AND IMMUTABLE. `store::ruleset::PUBLISHED` pins the SHA-256 of these exact
+# bytes, and loading refuses a `v1` that no longer hashes to it. Changing a rule means a
+# new version (v2 is derived from measured noise in P2-10), never an edit to this file.
+
+version: "v1"
+
+# Noise intrinsic to process execution on Linux; never diagnostic of this tool's behaviour.
+ephemeral:
+  - "/tmp/**"
+  - "/var/tmp/**"
+  - "/run/**"
+  - "**/*.lock"
+  - "**/*.pid"
+  - "**/*.sock"
+
+# Conventional tool-owned state directories, by externally specified name (XDG Base
+# Directory spec, CPython's __pycache__, npm's cache layout).
+server_internal:
+  - "**/.cache/**"
+  - "**/.config/**"
+  - "**/.local/state/**"
+  - "**/__pycache__/**"
+  - "**/node_modules/.cache/**"

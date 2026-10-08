@@ -6,12 +6,15 @@
 //! store. F-06 lands the metadata half: [`db`], the `SERVER`/`TOOL_SNAPSHOT`/`RUN`/...
 //! `VERDICT` schema and its migration runner. The two are deliberately independent modules
 //! — a `VERDICT` row and an `EVIDENCE` blob are both "storage", but they have opposite
-//! mutability contracts, and nothing in this crate blurs that line.
+//! mutability contracts, and nothing in this crate blurs that line. P1-06 adds [`ruleset`],
+//! the loader for the versioned normalisation rulesets in `rulesets/` — parsing lives here
+//! so the pure `normalise` crate only ever sees an already-parsed ruleset (ADR-005).
 //!
 //! Contract: [architecture.md §3.1].
 
 pub mod aggregate;
 pub mod db;
+pub mod ruleset;
 
 use std::fs;
 use std::io;

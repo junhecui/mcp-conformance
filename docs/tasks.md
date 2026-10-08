@@ -1261,10 +1261,260 @@ an empty changeset is not `readOnlyHint: holds`; that is the worst available fai
 
 **Depends on:** P1-01, P1-05
 **Exit:** `(raw_evidence, ruleset_version) → canonical_changeset`, pure and deterministic.
+**Status:** Done — semantics recorded in
+[ADR-011](adr/011-normaliser-semantics.md). `crates/normalise` is now a real pure function:
+`normalise(&RawEvidence, &Ruleset) -> Result<CanonicalChangeset, NormaliseError>`, plus
+`CompiledRuleset`/`normalise_compiled` so one ruleset compiles once and serves a whole replay
+batch. New `crates/normalise/src/glob.rs` (a small `no_std` matcher) and
+`crates/normalise/src/tests.rs`; new `crates/store/src/ruleset.rs` (the loader, on the std
+side); `rulesets/v1.yaml` carrying exactly ADR-008's two allowlists and nothing else;
+`datamodel`'s three placeholder types (`RawEvidence`, `Ruleset`, `CanonicalChangeset`) filled
+in along with the `PathClass`/`FileType`/`Node`/`ChangeKind`/`Change` vocabulary they needed.
 
-- [ ] Rulesets are versioned data in `rulesets/`, not code
-- [ ] Reads nothing outside its inputs — no clock, no filesystem, no network
-- [ ] Ruleset v1 kept deliberately thin; v2 gets derived from measured noise in P2-10
+**Built ahead of its own stated dependency, deliberately.** P1-06 lists P1-05 (integrity gate
+v1), which does not exist — nor do P1-03/P1-04. Per `docs/HANDOFF.md` §4.5 this is a pure
+function over inputs that are already settled (ADR-008's taxonomy, ADR-009's `evtree1`
+format), so it needs neither Linux nor the gate to exist, and building it first shortens the
+critical path to P1-08. The gate was **not** built or stubbed, per that same note. The
+consequence, stated rather than buried: ADR-004's "only gate-passed evidence may reach the
+verdict engine" is not yet expressible anywhere, because neither the gate nor the verdict
+engine exists. That remains P1-05's and P1-07's to make a type-level guarantee.
+
+**Decisions ADR-011 records**, each of which was only a code comment before it existed (and
+which the code and `rulesets/v1.yaml` cite in 21 places across 9 files): the **base layer is a required second
+input**, resolving the question HANDOFF §4.5(b) left open — upper-layer-alone would have been
+sufficient for `readOnlyHint` but cannot separate a structural copy-up from a mutation, which
+would make P2-08's noise floor an artefact of the missing input rather than a measurement of
+the tool; **`RawEvidence` carries raw `evtree1` bytes and `normalise` decodes them itself**,
+inverting ADR-009's own assumption that decoding would happen upstream, so that P1-09's replay
+is literally `normalise(stored bytes, ruleset)` and totality over hostile bytes lives inside
+the pure boundary; the overlay-convention mapping (whiteout → `Deleted`, opaque xattr of **any**
+value → `DirectoryReplaced` with the base hidden beneath it, same-type → `Modified` with
+`content_changed`/`metadata_changed` flags); the **structural-omission rule** — the only entry
+ever dropped is an unchanged base directory with ≥1 upper descendant, with the invariant that
+every omission is backed by at least one *reported* descendant; `mtime`/`inode` excluded from
+the comparison and overlay-private xattrs stripped (capture stays lossless per ADR-009 — this
+is the pure derivation step, re-runnable over the same stored bytes); **full content bytes
+retained rather than a digest**, deviating from §4.5(c)'s wording because a weak hash is
+attacker-collidable into a false `holds` and a strong one means a cryptographic dependency
+inside the pure closure; and ruleset identity bound to the SHA-256 of the exact file bytes.
+
+**Glob `**` matches zero-or-more path segments in every position, including trailing** — a
+deliberate divergence from gitignore/`globset`, and **ADR-008 does not specify it** (it lists
+only the eleven glob strings), so ADR-011 §7 is the only place that semantic is written down.
+Without it, `**/__pycache__/**` would classify the `__pycache__` directory CPython creates on
+first import as `user_state` while classifying every file inside it as `server_internal`.
+Flagged in ADR-011 rather than slipped past: this is one of the few decisions in the project
+that resolves *away* from ADR-008's conservative direction, justified by ADR-008's own
+membership bar (a pattern's presence is a claim that matching it is *never* diagnostic, which
+entails the same claim about the named directory itself), and revisable by P2-10 against
+measured noise.
+
+**Ruleset identity is tamper-evident.** `Ruleset::identity()` is `"v1+sha256:<hex>"`;
+`store::ruleset::PUBLISHED` pins `rulesets/v1.yaml`'s exact SHA-256
+(`48e55850…b63c1128`, verified against `sha256sum` on the file as committed), `load` refuses a
+file claiming a published label whose bytes hash differently, `load_draft` refuses any file
+claiming a published label, and the identity is carried onto every `CanonicalChangeset` — so a
+label can never be reused over edited rules. Parsing is a hand-written strict-YAML-subset
+parser on the std side, deliberately not a YAML library: the shape is fixed and tiny, and
+flexibility in a file whose bytes are digest-pinned (anchors, flow style, implicit typing,
+multi-document streams) is a liability rather than a feature. Anything outside the subset is
+rejected with a line number instead of half-understood.
+
+**`cargo purity`'s `PURE_ALLOWLIST` widened from `["datamodel"]` to
+`["datamodel", "evtree"]`**, which is the trap HANDOFF §4.5(a) warned about, handled the way
+it asked: `evtree` was converted to `#![no_std]` + `extern crate alloc` with `extern crate std`
+gated to `#[cfg(test)]`, and its `[dependencies]` table is empty. F-04 is not weakened,
+because the check is a transitive-closure *subset* test rather than a per-crate exemption —
+allowlisting `evtree` permits that one package, not anything it might later acquire.
+Demonstrated rather than asserted, in F-04's own style: adding `sha2 = "0.11.0"` to
+`crates/evtree/Cargo.toml` makes `cargo purity` exit 1 with eight violations
+(`normalise depends on cfg-if / const-oid / cpufeatures / crypto-common / digest /
+hybrid-array / sha2 / typenum`), each named against `normalise`, not `evtree`. Reverted
+byte-for-byte (checksums re-verified) and the check is green.
+
+**`.gitattributes` added** (and broadened beyond the `rulesets/**` line P1-06 itself needed):
+`-text` on `rulesets/**`, `fixtures/**` and `results/census/evidence/**`. All three are
+byte-exact paths where a CRLF checkout silently changes a hash — the published ruleset digest
+above, P1-02's byte-reproducibility property that P2-05's seed data will depend on, and
+P0-10's content-addressed evidence blobs whose address *is* their content hash. The ruleset
+parser also refuses `\r` loudly (`crlf_checkout_is_refused_loudly`) rather than mis-parsing, so
+that one failure is visible even without the attribute.
+
+**Verification:** `cargo build --workspace` clean; `cargo test --workspace` → **212 passed, 0
+failed** (up from 156 on `main` at f1da15e, so **56 new**: 48 in `normalise` — 9 glob-dialect
+tests plus 39 semantics/property tests — and 8 in `store::ruleset`; `evtree`'s 20 are unchanged
+by the `no_std` conversion); `cargo clippy --workspace --all-targets -- -D warnings` clean;
+`cargo purity` clean (`["normalise", "verdict"] depend only on ["datamodel", "evtree"]`).
+Hostile input is covered by tests rather than argument: every truncation offset of a valid
+capture is rejected (`every_truncation_of_valid_evidence_is_rejected_cleanly`), 6,000
+bit-flipped and random byte strings never panic (`random_bytes_and_bit_flips_never_panic`), a
+1,000-deep chain and 20,000 siblings complete quickly (`large_and_deep_trees_are_handled`), and
+`no_exponential_blowup_on_hostile_inputs` pins the glob matcher's non-backtracking bound. The
+structural-omission invariant is a property test over 2,000 random base/upper pairs
+(`random_trees_satisfy_the_structural_omission_invariant`) with a floor on how many omissions
+the generator must actually produce, so a generator that stopped exercising the branch fails
+rather than passes quietly.
+
+**Caveats, disclosed rather than hidden:**
+
+- **Never run against a real overlay upper layer.** Every piece of evidence in these tests is
+  synthetic `evtree::encode` output. Real whiteout device nodes, real `trusted.overlay.*`
+  xattrs and a real copied-up directory tree first reach this code at P1-04/P1-08 — the same
+  boundary P1-02 drew for its own synthetic whiteout/opaque handling. Expect the first real
+  capture to find something.
+- **Reproducibility is `(evidence, ruleset_identity)` *plus the `normalise` version*.** The
+  `mtime`/`inode` exclusions, the glob dialect and the structural-omission rule are code, not
+  ruleset data, and nothing in the schema records which `normalise` produced a verdict —
+  `VERDICT` has `ruleset_version` and `protocol_version`; only `RUN` has `harness_version`.
+  Raised as an open question in ADR-011 for P1-07/P5-02 to close while it is still cheap, in
+  the same spirit as F-06 adding `embargo_state` early.
+- **A copy-up with no observable difference reads as a mutation.** overlayfs copies a file up on
+  a write-intent open even if nothing is written, so `Modified { content_changed: false,
+  metadata_changed: false }` is reachable and is reported, not suppressed. That is the
+  conservative direction and it is intended, but it is the likeliest source of a `violated`
+  verdict a maintainer would dispute; P2-08 will quantify how often it happens.
+- **Memory is `O(evidence bytes)` with file contents held more than once** — the price of
+  retaining exact bytes instead of a digest. A tool that writes a 2 GiB file produces a capture
+  that large and a derivation holding it roughly twice over, plus the decoded base. A size cap
+  (yielding `unverifiable`, never a silent truncation) is a P1-04/P5-02 decision, not made here.
+- **`evtree` has no per-crate `clippy.toml`** (F-04 Layer 2) the way `normalise` and `verdict`
+  do. Under `#![no_std]` the banned types are not nameable outside `cfg(test)`, so Layer 3
+  covers it today; if `evtree` ever relaxes to `std`, Layer 2 must be added in the same change.
+- **P1-07 is untouched** — `verdict::read_only_hint` is still `todo!()`, with only its stale
+  "blocked on ADR-008" message corrected. (Both mandated review passes have now run; see
+  "Review outcome and carry-forward findings" below.)
+
+- [x] Rulesets are versioned data in `rulesets/`, not code — `rulesets/v1.yaml`; `normalise`
+      contains no path pattern of its own, only the matcher. The glob *dialect* is code, which
+      ADR-011 §7 records explicitly as a divergence from this item's spirit rather than
+      leaving implicit.
+- [x] Reads nothing outside its inputs — no clock, no filesystem, no network — three layers,
+      all green: `#![no_std]` (nothing to call), the per-crate `clippy.toml` bans, and
+      `cargo purity`'s closure subset test, now re-demonstrated against the widened allowlist
+- [x] Ruleset v1 kept deliberately thin; v2 gets derived from measured noise in P2-10 —
+      exactly ADR-008's six `ephemeral` and five `server_internal` patterns, no speculative
+      additions; `v1_loads_with_exactly_adr_008s_allowlists` asserts the lists verbatim so a
+      speculative rule cannot be slipped in without a failing test and a new digest
+- [x] Semantics written down where a reader can find them, not only in code comments —
+      [ADR-011](adr/011-normaliser-semantics.md), covering all eleven decisions, the three
+      rejected alternatives a reader would most likely have expected, and the open questions
+      it deliberately does not close
+
+**Review outcome and carry-forward findings.** Both mandated review passes ran as separate
+subagents (a pure code review and a security specialist, per CLAUDE.md's orchestration model).
+The code review found **nothing blocking**, and independently spot-checked ADR-011 against the
+code at ~25 line citations, finding them accurate. The security review found **one blocking
+issue**, since fixed.
+
+**The blocking issue: overlay-private xattrs were stripped by *prefix*, not by name.**
+`is_overlay_private` matched anything under `user.overlay.` or `trusted.overlay.`, and ADR-011
+decision 5 justified that as removing kernel bookkeeping — which assumes every name under
+those prefixes is kernel-written. `user.*` is not: POSIX gives that namespace to the file's
+owner, and the tool under test owns everything it creates in its own upper layer. Confirmed by
+mounting a real overlay with ADR-010's pinned options **in trusted mode — not `userxattr`**,
+the mode the ADR had assumed safe: an unprivileged process writing through the merged mount
+set `user.overlay.stolen` and `user.overlay.opaque` successfully, and the bytes reached the
+upper layer verbatim. `normalise` then deleted them from `Node.xattrs` *and* ignored them in
+`same_metadata`, so a copied-up directory carried `metadata_changed == false` and became
+eligible for the structural-omission rule. Demonstrated end to end: a tool declaring
+`readOnlyHint: true` stashes 448 bytes on a user-state directory and creates one
+`scratch.lock`, giving `user_state = []`, `server_internal = []`,
+`ephemeral = [/home/u/scratch.lock]` — **`readOnlyHint` reads as `holds` with the payload in
+no partition at all**, which is strictly worse than the name-laundering gap recorded below,
+where the change is at least still reported somewhere a reviewer can see it. The same
+mechanism is a covert equality channel for `idempotentHint`: two runs differing only in a
+`user.overlay.*` value normalise to equal changesets. **Fixed** by matching the finite set of
+leaf names the kernel actually writes — `opaque`, `impure`, `origin`, `uuid`, `redirect`,
+`nlink`, `upper`, `metacopy`, `protattr` — in either namespace and nowhere else, so an
+unrecognised name is an ordinary xattr whose change is reported. The useful asymmetry is
+preserved deliberately: *adding* `user.overlay.opaque` still gains an attacker nothing
+(`classify_change` returns `DirectoryReplaced` before any omission branch and hidden
+descendants become `Created`, both always reported, so it only makes a tool look *less*
+read-only), while *removing* a real marker is the attack — and on the same live mount an
+unprivileged tool could not remove the kernel's own `trusted.overlay.opaque` (`EPERM` through
+the merged mount and directly on the upperdir), so that direction is closed by the kernel in
+trusted mode and stays live only under `userxattr`. Three new tests pin it, and all three fail
+against the old prefix behaviour: `every_real_overlay_private_name_is_stripped`,
+`an_unrecognised_overlay_namespace_xattr_is_reported_not_stripped`, and
+`an_unknown_overlay_xattr_cannot_launder_a_user_state_directory_out_of_the_changeset` (the
+exploit shape above, asserted as `user_state == ["/home/u"]` rather than empty).
+
+Three further fixes applied:
+
+1. **The forged-component guard moved into the matcher.** Both reviews flagged it
+   independently: `Glob::matches_path("/tmp/**", "/tmp/../home/secret")` returned `true` while
+   `CompiledRuleset::classify` correctly returned `UserState`, because the guard existed only
+   at `classify`'s own entry point — and ADR-011 decision 8 advertises it as a property of
+   classification generally. Nothing was exploitable (nothing outside `glob`'s own tests called
+   `matches_path`), but a `pub` API on the crate whose output *is* the verdict should not
+   disagree with itself about a security property, and no test pinned the difference. The guard
+   now lives in `Glob::matches_components`, which both public entry points go through — chosen
+   over making `matches_path` `#[cfg(test)]` because `matches_components` is the function
+   `classify` actually calls, so test-gating the other one would have left the hazard on the
+   live path. The same change closes the related footgun the code review noted: a component
+   containing a `/` is also refused, so `matches_components(&["a", "b/c/d"])` no longer matches
+   `/a/*`. Pinned by `forged_path_components_never_match` and
+   `classify_and_the_matcher_agree_on_forged_components`.
+2. **ADR-011 corrected where the review proved it wrong** — decision 5's open question no
+   longer presents the `user.overlay.*` risk as contingent on P1-03 choosing `userxattr` (it is
+   not; see above), restates the dangerous direction as xattr *removal* rather than addition,
+   records the live-mount evidence including the `EPERM` negative result, and notes the
+   consequence for P1-03 (prefer the privileged mount; assert the upperdir is unreachable from
+   inside the sandbox). The memory consequence's "roughly twice over" is corrected to a
+   measured **~20×** worst case — 3.0× for one 16 MB file, 7.3× for 100k small entries, 4.0×
+   for a 10,000-deep chain, 21× for a 1 MB path of nothing but `/` separators, because
+   `classify` builds a per-entry `Vec<&[u8]>` of 16-byte fat pointers — still bounded and
+   linear with no superlinear term, but the size cap deferred to P1-04/P5-02 must budget ~20×
+   of input bytes, not 2×.
+3. **`RulesetError::Syntax` no longer prints "ruleset line 0:"** against a field documented as
+   1-based (`crates/store/src/ruleset.rs`). `line: 0` is the whole-file fault (not UTF-8, or a
+   missing top-level key); the doc comment now says so and `Display` renders it as `ruleset:
+   <message>`. Cosmetic, fixed because it was in reach.
+
+Recorded rather than implemented, each with its argument so whoever picks it up does not have
+to rediscover it:
+
+- **⚑ Proposed amendment to ADR-008: classify on `(path, ChangeKind)`, not on path alone.**
+  The name-based allowlists launder **destructive** changes, not only additive ones. A tool
+  that *deletes* a base-layer file whose name matches an allowlist yields `user_state = []`,
+  `ephemeral = [/srv/app.lock]` → `readOnlyHint: holds`. ADR-008's membership bar ("matching it
+  is never diagnostic of a read-only violation") was argued with the example of a tool
+  *touching* a lock file at startup; that the *creation* of a lock file is non-diagnostic does
+  not entail that its *deletion* is. The hardening: let an allowlist suppress `Created` and
+  `Modified` only, and send `Deleted`, `Replaced` and `DirectoryReplaced` always to
+  `user_state`. It needs no change to the eleven glob strings and no new ruleset version.
+  **Deliberately not implemented in P1-06** — it is a semantic change to ADR-008's taxonomy and
+  deserves its own task and its own two review passes rather than being slipped into the
+  normaliser. Also recorded in ADR-011's open questions.
+- **A fixture-authoring constraint for P2-05.** Until that amendment lands, fixture
+  *user-state* files must never be named `*.lock`, `*.pid` or `*.sock`, nor nested under
+  `.cache`, `.config`, `.local/state`, `__pycache__` or `node_modules/.cache` — otherwise a
+  tool can delete real fixture state and still be read as `holds`.
+- **A category correction for P5-05.** ADR-008 files name-based laundering under design.md
+  §8's "observation evasion", which §8 declares out of scope. That is a category error: §8's
+  evasion requires the tool to *detect* the sandbox and change behaviour, whereas choosing a
+  filename suffix is always-on, costs the tool nothing, needs no detection, and works on first
+  contact against a harness behaving exactly as designed. It belongs in the published
+  limitations as its own named limitation, not folded into evasion.
+- **`VERDICT` records no normaliser version.** A verdict is reproducible from
+  `(evidence, ruleset_identity, normalise version)` and only the first two are recordable
+  today — `VERDICT` has `ruleset_version` and `protocol_version`, and only `RUN` has
+  `harness_version`. The `mtime`/`inode` exclusions, the overlay-private name set, the glob
+  dialect and the structural-omission rule are all code, not ruleset data. P1-07/P5-02 should
+  close this while it is still cheap, in the F-06 spirit of adding `embargo_state` early.
+- **`VERDICT.ruleset_version`: label or full identity? — and note it is a *two-table*
+  decision.** The tamper-evident value is `Ruleset::identity()` (`"v1+sha256:…"`), not `"v1"`,
+  and `CanonicalChangeset` already carries the identity. But `VerdictRecord::ruleset_version`
+  is an FK to `RULESET.ruleset_version`, so storing the identity means the `RULESET` primary
+  key must become the identity string too — not a one-column change. P1-07's to make, with the
+  insertion path in front of it.
+- **An abort during derivation produces no `VERDICT` row at all.** A `NormaliseError` has an
+  `unverifiable`-with-a-reason-code path; a derivation job that dies (OOM against the ~20×
+  multiplier above, a killed batch, a crash) does not — it simply leaves the row absent, which
+  is indistinguishable from "not yet derived". P5-04 already reports the no-verdict fraction as
+  a metric in its own right (ADR-004 predicts it may be large early); these aborts must be
+  counted in it rather than silently dropping out of both the numerator and the denominator.
 
 ### P1-07 Verdict engine + `readOnlyHint`
 

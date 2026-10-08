@@ -1,0 +1,23 @@
+# Byte-exact paths. Git must never rewrite line endings (or apply any other text filter)
+# anywhere a file's *bytes* are load-bearing, because every one of these is addressed or
+# verified by a hash of its own content: a CRLF checkout silently changes that hash.
+#
+#   rulesets/**                    `store::ruleset::PUBLISHED` pins the SHA-256 of each
+#                                  published ruleset file, and the parser refuses `\r`
+#                                  outright (ADR-011 §9, `crlf_checkout_is_refused_loudly`),
+#                                  so a converted checkout makes `v1` unloadable.
+#   results/census/evidence/**     Content-addressed evidence blobs (P0-10): the address
+#                                  *is* the content hash, so any rewrite breaks lookup.
+#   fixtures/**                    Byte-exact seed data (P2-05) feeding P1-02's base-layer
+#                                  byte-reproducibility property — the one thing
+#                                  architecture.md §12 item 5 says silently poisons every
+#                                  diff when it drifts.
+#
+# A repo-wide `* text=auto eol=lf` rule was considered and deliberately not added: it would
+# be a no-op on today's tree but would start normalising future files implicitly, which is
+# the opposite of the explicit, per-path reasoning above. `core.autocrlf=false` on the
+# development clones (docs/HANDOFF.md §3) covers ordinary source files.
+
+rulesets/** -text
+results/census/evidence/** -text
+fixtures/** -text

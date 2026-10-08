@@ -5,6 +5,9 @@
 **Author:** Jun Cui
 **Closes:** [F-07](../tasks.md#f-07-canonical-evidence-tree-serialisation--adr-009)
 **Blocks:** P1-04 (Observation collector)
+**Superseded in part by:** [ADR-011](011-normaliser-semantics.md) — Decisions 1-2 revise
+the "How this fits the data model" section below. The `evtree1` format itself, which is
+the substance of this ADR, stands unchanged.
 **Related:** F-05 (`store::BlobStore`), `datamodel::RawEvidence`, design.md §9, architecture.md
 §12 item 5 (P1-02 base-layer byte-reproducibility), ADR-005 (pure, offline derivation)
 
@@ -218,6 +221,13 @@ measured storage-cost problem (a P5-01 concern, not a Phase 1 one).
   from the store. Deserialisation is I/O-adjacent (it runs wherever the blob was fetched
   from) and is not itself part of the pure `normalise`/`verdict` closure; `RawEvidence` is
   handed to `normalise` already parsed, exactly as `Ruleset` already is (ADR-007 §"Layer 3").
+
+  > **Superseded by [ADR-011](011-normaliser-semantics.md) (2026-10-07).** Both halves of this
+  > bullet have changed. `RawEvidence` now carries the capture *bytes*, and `normalise` decodes
+  > them itself inside the pure closure (ADR-011 Decision 2); and one normalisation consumes
+  > *two* captures — the overlay upper layer plus the base layer — rather than one (ADR-011
+  > Decision 1). The serialisation format described above is unaffected: only this paragraph's
+  > account of who decodes a capture, and of how many captures a derivation takes, is stale.
 - Two independent `EVIDENCE` rows (e.g. `D1` and `D2` in the idempotency protocol) are two
   independently-addressed blobs; nothing in this format merges or diffs them — diffing is
   `normalise`'s job over two decoded `RawEvidence` values, not a property of storage.

@@ -7,6 +7,7 @@ publish.workspace = true
 
 [dependencies]
 datamodel.workspace = true
+normalise.workspace = true
 rusqlite = { version = "0.32", features = ["bundled"] }
 sha2 = "0.11.0"
 
@@ -14,4 +15,5 @@ sha2 = "0.11.0"
 workspace = true
 
 [dev-dependencies]
+evtree.workspace = true
 tempfile = "3.27.0"

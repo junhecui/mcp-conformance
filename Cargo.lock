@@ -333,6 +333,7 @@ name = "normalise"
 version = "0.1.0"
 dependencies = [
  "datamodel",
+ "evtree",
 ]
 
 [[package]]
@@ -583,6 +584,8 @@ name = "store"
 version = "0.1.0"
 dependencies = [
  "datamodel",
+ "evtree",
+ "normalise",
  "rusqlite",
  "sha2",
  "tempfile",
