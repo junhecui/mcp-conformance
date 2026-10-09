@@ -106,6 +106,67 @@ impl core::fmt::Display for Outcome {
     }
 }
 
+/// What a tool's `tools/call` produced during the run a verdict was derived from.
+///
+/// MCP routes *tool-level* failures through a successful JSON-RPC envelope carrying
+/// `isError: true`, reserving JSON-RPC error objects for protocol-level problems. Both mean
+/// the tool did not run its effectful path to completion, and both are named here so that
+/// classifying a call is a decision the caller has to make rather than one it can skip —
+/// the gap commit `832d990` closed in Track B.
+///
+/// Lives in `datamodel` rather than in `verdict` for the same reason [`Oracle`], [`Outcome`]
+/// and [`Annotation`] do: it is written to a `VERDICT` column, so the one place the TEXT
+/// mapping is allowed to live is next to the enum, not at each call site. `verdict`
+/// re-exports it, so `verdict::InvocationResult` is still its name for the engine's callers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum InvocationResult {
+    /// A `tools/call` result whose `isError` was absent or `false`.
+    Completed,
+    /// MCP's tool-level failure channel: a successful JSON-RPC envelope whose result
+    /// carries `isError: true` — most often a tool rejecting its arguments (design.md §8's
+    /// semantic-argument-validity limitation).
+    ToolReportedError,
+    /// No usable result at all: a JSON-RPC error object, a transport failure, a crash, or
+    /// the supervisor killing the process. Distinct from a gate failure — a run that timed
+    /// out or hit a resource cap never reaches the verdict engine (ADR-004).
+    NoResult,
+}
+
+impl InvocationResult {
+    /// Whether the tool ran its effectful path to completion.
+    #[must_use]
+    pub const fn is_complete(self) -> bool {
+        matches!(self, Self::Completed)
+    }
+
+    /// The exact text written to `VERDICT.invocation_result`.
+    #[must_use]
+    pub const fn as_db_str(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::ToolReportedError => "tool_reported_error",
+            Self::NoResult => "no_result",
+        }
+    }
+
+    /// The inverse of [`Self::as_db_str`].
+    #[must_use]
+    pub fn from_db_str(s: &str) -> Option<Self> {
+        match s {
+            "completed" => Some(Self::Completed),
+            "tool_reported_error" => Some(Self::ToolReportedError),
+            "no_result" => Some(Self::NoResult),
+            _ => None,
+        }
+    }
+}
+
+impl core::fmt::Display for InvocationResult {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.as_db_str())
+    }
+}
+
 /// Which of the four MCP behavioural annotations a verdict assesses.
 ///
 /// Shared vocabulary for the same reason [`Oracle`] and [`Outcome`] are: `VERDICT.annotation`
@@ -176,6 +237,107 @@ pub enum ContainabilityClass {
 /// codes the paper reports.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ReasonCode(pub String);
+
+/// Why a pure derivation step could not produce a changeset — the classification a verdict
+/// reports as `unverifiable` rather than as `holds`.
+///
+/// Shared vocabulary rather than a `normalise`-private type, for the same reason [`Outcome`]
+/// and [`Oracle`] live here: `normalise` owns the failure (`normalise::NormaliseError`,
+/// which maps onto this via its own `From` impl — the one place that mapping lives) and
+/// `verdict` must name it to emit a reason code, and ADR-005 forbids an edge between the
+/// two pure crates in either direction.
+///
+/// Every variant describes a failure that is **inside** the pure closure: a function of
+/// `(evidence, ruleset)` and nothing else, so re-running the derivation reaches the same
+/// classification. That is what makes them reportable as a verdict at all. A derivation job
+/// that *aborts* — killed, out of memory — is not in the closure, is not reproducible from
+/// the stored inputs, and has no representation here; it leaves no verdict row and belongs
+/// in P5-04's no-verdict fraction (ADR-012 decision 5).
+///
+/// The variants are split along **whose fault the failure is**, because the reason code
+/// reaches publication: `MalformedEvidence` is a finding about the server under test, while
+/// `MalformedBaseLayer` and `InvalidRuleset` are harness faults that say nothing about it.
+/// Collapsing any two of them would publish an operator-side bug as a finding — and, read
+/// the other way, hand a server deniability for a real one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DerivationFailure {
+    /// The **upper-layer** capture is not valid canonical `evtree1`. The tool under test
+    /// wrote the tree this was captured from and is hostile by assumption (design.md §3),
+    /// so this is a finding about the evidence, not an internal error.
+    MalformedEvidence,
+    /// The **base-layer** capture is not valid canonical `evtree1`. Operator-side: the base
+    /// layer is built by the harness (`world::base_layer`, P1-02) and is mounted read-only
+    /// beneath the tool, so a base layer that will not decode is a harness fault of exactly
+    /// the kind [`Self::InvalidRuleset`] was split out to avoid publishing against a server.
+    MalformedBaseLayer,
+    /// A ruleset pattern did not compile. Operator-side: the harness was handed a ruleset
+    /// it cannot apply, which says nothing about the tool.
+    InvalidRuleset,
+}
+
+/// An attestation that one run passed the integrity gate (ADR-004).
+///
+/// The gate is a **hard precondition**: *"No evidence proceeds to the verdict engine until
+/// the gate passes"* (architecture.md §5.1), and it *"is not configurable off"* (ADR-004).
+/// This type is how that precondition is expressed in the type system rather than as a
+/// check somewhere in a call chain that someone has to remember to write: every entry point
+/// of the verdict engine takes evidence wrapped in a `verdict::GatedRun`, and a `GatedRun`
+/// cannot be built without one of these.
+///
+/// **It carries no gate logic and must not acquire any.** Which runs pass, which branch
+/// produced which reason code, and what facts the gate inspects are P1-05's and P2-03's to
+/// decide against real runs (architecture.md §5.1's four branches); guessing at them here —
+/// before `sandbox`, `observe` or `integrity` exist — would be writing that task's
+/// decisions with no evidence in front of it. What this type does is make the *shape* of
+/// the dependency unavoidable while the gate is still absent.
+///
+/// It identifies the run it attests (`RUN.run_id`, architecture.md §6 — the same key
+/// `INTEGRITY` is itself keyed on, because a gate decision is per-run) so a verdict can be
+/// traced back to the gate decision that licensed it. Deliberately **not** `Clone`: an
+/// attestation is minted once per run by the gate and passed by reference, so there is no
+/// ergonomic reason to duplicate one, and "this token is hard to spread around" is worth
+/// keeping for free.
+///
+/// **Residual gap, disclosed rather than overstated** (ADR-012 decision 2): Rust cannot
+/// restrict construction to one crate — a Cargo feature unifies across the graph, and there
+/// is no `friend` visibility. What the [`IntegrityGate`] trait buys is that minting one
+/// requires *declaring yourself the integrity gate*, which is a conspicuous, greppable act
+/// at a named call site, rather than something reachable from any `&CanonicalChangeset` a
+/// caller happens to be holding.
+#[derive(Debug, PartialEq, Eq)]
+pub struct GateAttestation {
+    run_id: String,
+}
+
+impl GateAttestation {
+    /// The `RUN.run_id` this attestation covers.
+    #[must_use]
+    pub fn run_id(&self) -> &str {
+        &self.run_id
+    }
+}
+
+/// Implemented by the integrity gate, and by nothing else.
+///
+/// `crates/integrity` (P1-05, P2-03) is the only intended implementor. Test code that needs
+/// to drive the verdict engine must implement it too, which is the point: a test that mints
+/// an attestation says so in its own source, where a reviewer can see it.
+///
+/// See [`GateAttestation`] for why this exists and what it does and does not guarantee.
+pub trait IntegrityGate {
+    /// Mint an attestation for `run_id`.
+    ///
+    /// Calling this asserts that **every** branch of architecture.md §5.1 passed for that
+    /// run: clean teardown with no orphan PIDs, no resource cap hit, no timeout. A failing
+    /// branch must instead produce `unverifiable` with its own reason code and must never
+    /// reach the verdict engine at all. An escape-class denied syscall is *not* a failing
+    /// branch — ADR-004 accepts that evidence and sets `adversarial_flag` — so a run may be
+    /// attested and flagged at the same time.
+    #[must_use]
+    fn attest_gate_passed(&self, run_id: &str) -> GateAttestation {
+        GateAttestation { run_id: String::from(run_id) }
+    }
+}
 
 /// Evidence exactly as harvested, before any normalisation — the input to `normalise`.
 ///
@@ -377,6 +539,48 @@ impl CanonicalChangeset {
     }
 }
 
+/// How many changes landed in each ADR-008 partition of a [`CanonicalChangeset`].
+///
+/// architecture.md §4.3: *"emit the verdict against `user_state` while reporting the other
+/// two. This gives critics something to argue with that isn't the verdict itself."* These
+/// counts are that report, and they are only a report if they survive to the stored row:
+/// without them a tool that laundered three user-facing writes into `server_internal` and
+/// `ephemeral` stores a `VERDICT` row identical in every column to a tool that touched
+/// nothing. `VERDICT.{user_state,server_internal,ephemeral}_count` (migration `0002`) is
+/// where they land, which is why this type lives in `datamodel`: `verdict` produces it,
+/// `store` writes it, and ADR-005 forbids an edge between them in either direction.
+///
+/// Counts rather than the changes themselves: the full partitions are recoverable from the
+/// evidence blobs by re-deriving, and what belongs *beside the outcome* in a published row
+/// is the summary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PartitionCounts {
+    /// Changes the verdict was decided against.
+    pub user_state: usize,
+    /// Conventional tool-owned state. Reported, never decisive.
+    pub server_internal: usize,
+    /// Execution noise. Reported, never decisive.
+    pub ephemeral: usize,
+}
+
+impl PartitionCounts {
+    /// Count each partition of `changeset`.
+    #[must_use]
+    pub fn of(changeset: &CanonicalChangeset) -> Self {
+        Self {
+            user_state: changeset.user_state.len(),
+            server_internal: changeset.server_internal.len(),
+            ephemeral: changeset.ephemeral.len(),
+        }
+    }
+
+    /// Total changes across all three partitions — reported for context, never decisive.
+    #[must_use]
+    pub const fn total(&self) -> usize {
+        self.user_state + self.server_internal + self.ephemeral
+    }
+}
+
 /// A SHA-256 content digest identifying a blob in the evidence store (F-05).
 ///
 /// Pure value type: hashing needs an algorithm implementation, which is [`store`]'s job,
@@ -441,8 +645,42 @@ impl core::fmt::Display for Digest {
 
 #[cfg(test)]
 mod tests {
-    use super::Digest;
+    use super::{Digest, GateAttestation, IntegrityGate};
     use alloc::string::ToString;
+
+    /// Stands in for `crates/integrity`, which does not exist yet. Written out in full
+    /// rather than hidden behind a helper: the whole point of [`IntegrityGate`] is that
+    /// minting an attestation requires this declaration at a visible call site.
+    struct FakeGate;
+    impl IntegrityGate for FakeGate {}
+
+    #[test]
+    fn an_attestation_identifies_the_run_it_covers() {
+        let a = FakeGate.attest_gate_passed("run-7");
+        assert_eq!(a.run_id(), "run-7");
+        // Distinct runs produce distinct attestations, so an attestation is not a global
+        // "the gate is happy" flag that any run can be waved through with.
+        assert_ne!(a, FakeGate.attest_gate_passed("run-8"));
+    }
+
+    /// An attestation's identity is the **run**, not the gate: two different implementors
+    /// attesting the same run produce equal attestations.
+    ///
+    /// Asserted because it is a real limitation rather than an accident — the attestation
+    /// records no gate identity, so a verdict cannot say *which* gate licensed it. That is
+    /// deliberate for now (nothing of P1-05's shape is being guessed at here) and is carried
+    /// as an open question in ADR-012. If a gate version is ever added, this test is where
+    /// the change becomes visible.
+    #[test]
+    fn an_attestation_identifies_the_run_not_the_gate_that_minted_it() {
+        struct AnotherGate;
+        impl IntegrityGate for AnotherGate {}
+
+        let from_one: GateAttestation = FakeGate.attest_gate_passed("run-9");
+        let from_other = AnotherGate.attest_gate_passed("run-9");
+        assert_eq!(from_one, from_other);
+        assert_eq!(from_one.run_id(), "run-9");
+    }
 
     #[test]
     fn from_hex_inverts_display() {

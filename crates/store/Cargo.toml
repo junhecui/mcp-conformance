@@ -17,3 +17,8 @@ workspace = true
 [dev-dependencies]
 evtree.workspace = true
 tempfile = "3.27.0"
+# Integration tests only: `crates/store/tests/verdict_derivation.rs` exercises the whole
+# std-side chain (stored bytes -> normalise -> verdict -> VERDICT row). `cargo purity`
+# excludes dev-dependencies by policy (`xtask/src/purity.rs`), and this is not a runtime
+# edge — `store` does not depend on `verdict`.
+verdict.workspace = true

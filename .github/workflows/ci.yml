@@ -16,6 +16,20 @@ jobs:
     # sandbox crate depends on (F-00).
     runs-on: ubuntu-24.04
 
+    # ADR-012 decision 6 / F4. `store::db::derivation_version()` reads this at compile time
+    # and writes it to `VERDICT.derivation_version`, so that a verdict names the build of the
+    # derivation code that produced it — ADR-011's disclosed cost is that `normalise`'s
+    # semantics live in its source rather than in ruleset data, which makes a verdict a
+    # function of `(evidence, ruleset)` *plus that code*. Nothing set it until now, so the
+    # column was permanently `0.1.0+unpinned`: the mechanism was sound and simply never fed.
+    #
+    # Job-level rather than per-step, so build, test and clippy all see the same value and
+    # no step recompiles against a different one. The cache key does not include the SHA, so
+    # `store` and its dependents do recompile each run — `option_env!` is a tracked
+    # dependency, which is exactly the property that makes the value trustworthy.
+    env:
+      MCP_CONFORMANCE_BUILD_ID: ${{ github.sha }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4

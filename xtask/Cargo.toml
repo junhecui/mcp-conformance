@@ -22,6 +22,13 @@ rusqlite = "0.32"
 [dev-dependencies]
 # Same version `store` already uses for its own tests — no new crate in the lockfile.
 tempfile = "3.27.0"
+# Integration tests only (`tests/reason_codes.rs`). `verdict::reason` and `probe::protocol`
+# each spell `invocation_failed` separately, because ADR-005 forbids an edge between those
+# two crates in either direction, and `xtask` is the one crate that can see both at once to
+# assert the spellings still agree. A dev-dependency, so no runtime edge is added and
+# `cargo purity` (which excludes dev-dependencies by documented policy) is unaffected —
+# `verdict`'s own closure is untouched either way, since this edge points at it.
+verdict.workspace = true
 
 [lints]
 workspace = true

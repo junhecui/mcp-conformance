@@ -23,14 +23,14 @@
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use datamodel::{Annotation, ContainabilityClass, Oracle};
+use datamodel::{Annotation, ContainabilityClass};
 use discovery::{DiscoveryClient, DiscoveryError};
 use intake::catalogue;
 use intake::registry::RegistryClient;
 use probe::{ProbeError, ProbeTarget};
 use serde_json::Value;
 use store::aggregate::{self, VerdictSummary};
-use store::db::{self, ServerRecord, ToolSnapshotRecord, VerdictRecord};
+use store::db::{self, ServerRecord, ToolSnapshotRecord, VerdictProvenance, VerdictRecord};
 
 use crate::census_stage1::{Candidate, class_b_candidate, stable_hash};
 
@@ -139,8 +139,14 @@ fn run_and_record(
                     declared: if declared { "true" } else { "false" },
                     outcome: assessment.outcome,
                     reason_code: reason_code.as_deref(),
-                    oracle: Oracle::ProtocolProbe,
-                    ruleset_version: None,
+                    // Track B's weak oracle has no changeset, so no ruleset, no derivation
+                    // build and no partition counts (ADR-012 decision 6) — the enum has no
+                    // variant that could claim otherwise.
+                    provenance: VerdictProvenance::ProtocolProbe,
+                    // Track B probes a live remote server over the protocol; there is no
+                    // `RUN` row for it, because there was no contained run. `None` is the
+                    // honest value, not a placeholder.
+                    run_id: None,
                     protocol_version,
                     derived_at: &now_iso(),
                 },
@@ -352,8 +358,8 @@ pub fn run(sample_size: usize) -> Result<(), Box<dyn std::error::Error>> {
     }
     for row in &aggregate_rows {
         eprintln!(
-            "probe-stage1:   {} / {} / {}: {}",
-            row.annotation, row.oracle, row.outcome, row.count
+            "probe-stage1:   {} / {} / declared={} / {}: {}",
+            row.annotation, row.oracle, row.declared, row.outcome, row.count
         );
     }
 
@@ -369,9 +375,14 @@ pub fn run(sample_size: usize) -> Result<(), Box<dyn std::error::Error>> {
         "servers_with_zero_tools": servers_with_zero_tools,
         "servers_probed": servers_probed,
         "probe_protocols_run": invocations_attempted,
+        // Every axis the aggregation guard groups on is disclosed in the published row,
+        // `declared` included: a `holds` count that does not say what was declared pools a
+        // verified read-only tool with one that merely admitted it writes (B-03's invariant,
+        // one axis over from the oracle).
         "aggregate": aggregate_rows.iter().map(|r| serde_json::json!({
             "annotation": r.annotation.to_string(),
             "oracle": r.oracle.to_string(),
+            "declared": r.declared,
             "outcome": r.outcome.to_string(),
             "count": r.count,
         })).collect::<Vec<_>>(),

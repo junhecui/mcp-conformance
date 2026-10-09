@@ -1525,7 +1525,11 @@ to rediscover it:
   `user_state`. It needs no change to the eleven glob strings and no new ruleset version.
   **Deliberately not implemented in P1-06** — it is a semantic change to ADR-008's taxonomy and
   deserves its own task and its own two review passes rather than being slipped into the
-  normaliser. Also recorded in ADR-011's open questions.
+  normaliser. Also recorded in ADR-011's open questions. **Now pinned where it happens**, by
+  P1-07's review passes: `deleting_an_allowlisted_path_lands_in_ephemeral_today_not_user_state`
+  (`crates/normalise/src/tests.rs`) puts a real whiteout of `/srv/app.lock` through
+  `normalise`, so the amendment lands as a visible test change. No test did that before — see
+  P1-07's corrected disclosure.
 - **A fixture-authoring constraint for P2-05.** Until that amendment lands, fixture
   *user-state* files must never be named `*.lock`, `*.pid` or `*.sock`, nor nested under
   `.cache`, `.config`, `.local/state`, `__pycache__` or `node_modules/.cache` — otherwise a
@@ -1536,32 +1540,573 @@ to rediscover it:
   filename suffix is always-on, costs the tool nothing, needs no detection, and works on first
   contact against a harness behaving exactly as designed. It belongs in the published
   limitations as its own named limitation, not folded into evasion.
-- **`VERDICT` records no normaliser version.** A verdict is reproducible from
+- **`VERDICT` records no normaliser version.** ~~Open.~~ **Closed by P1-07**
+  ([ADR-012](adr/012-verdict-engine-and-readonlyhint.md) decision 6): migration `0002` adds
+  `VERDICT.derivation_version`, supplied by `store::db::derivation_version()`. The argument
+  as it stood is kept below, since it is what the decision answers. A verdict is reproducible
+  from
   `(evidence, ruleset_identity, normalise version)` and only the first two are recordable
   today — `VERDICT` has `ruleset_version` and `protocol_version`, and only `RUN` has
   `harness_version`. The `mtime`/`inode` exclusions, the overlay-private name set, the glob
   dialect and the structural-omission rule are all code, not ruleset data. P1-07/P5-02 should
   close this while it is still cheap, in the F-06 spirit of adding `embargo_state` early.
 - **`VERDICT.ruleset_version`: label or full identity? — and note it is a *two-table*
-  decision.** The tamper-evident value is `Ruleset::identity()` (`"v1+sha256:…"`), not `"v1"`,
+  decision.** ~~Open.~~ **Closed by P1-07** ([ADR-012](adr/012-verdict-engine-and-readonlyhint.md)
+  decision 7): the identity, with both columns renamed to `ruleset_identity` so the `RULESET`
+  primary key carries it too. The reasoning as it stood: the tamper-evident value is `Ruleset::identity()` (`"v1+sha256:…"`), not `"v1"`,
   and `CanonicalChangeset` already carries the identity. But `VerdictRecord::ruleset_version`
   is an FK to `RULESET.ruleset_version`, so storing the identity means the `RULESET` primary
   key must become the identity string too — not a one-column change. P1-07's to make, with the
   insertion path in front of it.
-- **An abort during derivation produces no `VERDICT` row at all.** A `NormaliseError` has an
+- **An abort during derivation produces no `VERDICT` row at all.** ~~Open.~~ **Closed by
+  P1-07** ([ADR-012](adr/012-verdict-engine-and-readonlyhint.md) decision 5): a
+  `NormaliseError` becomes an `unverifiable` verdict with its own reason code, because it is
+  a failure *inside* the pure closure and therefore a reproducible fact; an abort is not, has
+  no representation, and stays P5-04's metric. The original note: a `NormaliseError` has an
   `unverifiable`-with-a-reason-code path; a derivation job that dies (OOM against the ~20×
   multiplier above, a killed batch, a crash) does not — it simply leaves the row absent, which
   is indistinguishable from "not yet derived". P5-04 already reports the no-verdict fraction as
   a metric in its own right (ADR-004 predicts it may be large early); these aborts must be
   counted in it rather than silently dropping out of both the numerator and the denominator.
+  **P1-07's review passes sharpened the half that stays open** — an abort launders into
+  *absence*, which is strictly better for an attacker than `unverifiable`, and P5-04 cannot
+  compute its own metric from stored data because no derivation-attempt entity exists. Two
+  concrete options and the way a tool reaches it deliberately are recorded under P1-07.
 
 ### P1-07 Verdict engine + `readOnlyHint`
 
 **Depends on:** P1-06
 **Exit:** `canonical(D1)` non-empty over `user_state` contradicts a `true` declaration.
+**Status:** Done — decisions recorded in
+[ADR-012](adr/012-verdict-engine-and-readonlyhint.md). `crates/verdict` is a real pure
+function: `read_only_hint(declared: Declared, run: &GatedRun<'_>) -> Assessment`, split
+across new `src/observation.rs` (the inputs), `src/assessment.rs` (the output) and
+`src/tests.rs`. `datamodel` gained the five types ADR-005 forces to live there
+(`DerivationFailure`, `GateAttestation`, `IntegrityGate`, and — after the review passes —
+`PartitionCounts` and `InvocationResult`, which `store` must also name); `normalise` gained
+one `From` impl; `store` gained migration `0002_verdict_derivation_provenance.sql`, a
+`VerdictProvenance` enum, `insert_ruleset`, `derivation_version()`, `ruleset::to_json`, a
+`declared`-aware `aggregate`, and a new integration test holding the whole std-side chain.
 
-- [ ] Pure: cannot take a model, network client, or clock as a dependency (F-04 enforces)
-- [ ] Emits `holds` / `violated` / `unverifiable` with `reason_code` and `oracle`
+**Built ahead of its own dependencies too, deliberately** — the same reasoning P1-06
+recorded, and per `docs/HANDOFF.md` §4.5. P1-03/P1-04/P1-05 do not exist; this is a pure
+function over inputs already settled by ADR-008 and ADR-011, so it needs neither Linux nor
+the gate. **The gate was not built or stubbed**, per that note. What changed since P1-06 is
+that ADR-004's *"only gate-passed evidence may reach the verdict engine"* is no longer
+unexpressible: it is now a type (see below), designed so that constructing it required none
+of P1-05's logic and pre-empted none of its decisions.
+
+**The three invariants are properties of the types, not branches in the function body.**
+This is the substance of the task, and it is a direct response to commit `832d990`, which
+fixed a false-`holds` in Track B caused by a dropped `isError` check — a branch someone had
+to think to write, in a signature that permitted its absence.
+
+1. **Gate-passed only.** Every entry point takes a `GatedRun`, which borrows a
+   `datamodel::GateAttestation` — private field, not `Clone`, no public constructor. The
+   only way to mint one is the default body of `datamodel::IntegrityGate`, i.e. by
+   *declaring yourself the integrity gate*. `crates/integrity` will add one `impl` on its
+   pass branch and change no signature here. The attestation identifies one `RUN.run_id`,
+   which is the key `INTEGRITY` is itself keyed on (architecture.md §6), and carries no gate
+   logic — which runs pass and which of §5.1's four branches produced which reason code stay
+   P1-05's and P2-03's to decide against real runs.
+2. **`holds` is unreachable through this engine for a failed invocation.**
+   `Observation::new` is the only constructor and takes the changeset *and* the
+   `InvocationResult` together, so a caller cannot supply one while omitting the other. On
+   top of that, `Assessment::holds` takes a `Completion` witness by value — zero-sized,
+   private field, minted only by `Observation::completion()` in the same module, so no other
+   module in the crate can build one — and `completion()` returns `None` for anything but
+   `InvocationResult::Completed`. `Outcome::Holds` from a tool-level error, a crash or a
+   killed process is a type error. **Not "unconstructible"**, which is how this entry and
+   ADR-012 first put it: a review pass falsified that by compiling an external crate that
+   forged a `holds` three ways (a bare struct literal, a fake `impl IntegrityGate`, and —
+   disclosed nowhere, and the most plausible of the three — mutating an engine-produced
+   `Assessment`). `Assessment`'s fields are private with accessors now, which closes all
+   three for any crate but `verdict`; see the caveats below for what that does *not* buy.
+3. **`unverifiable` always carries a reason** (architecture.md §6 invariant 3). The only
+   constructor that produces it requires one, and the five codes it can emit are named
+   constants in `verdict::reason`. Enforced at construction and, since the fields went
+   private, maintained against outside mutation — but the database's own `CHECK` still only
+   catches a *cleared* reason at insert time, not an `Unverifiable → Holds` flip on a
+   hand-built row, which is internally consistent and so invisible to it.
+
+**The decision table**, with the one row that is not obvious called out. `mutated` is
+`!changeset.user_state.is_empty()`:
+
+| derivation | invocation | declared | mutated | outcome | reason |
+|---|---|---|---|---|---|
+| failed | any | any | — | `unverifiable` | `malformed_evidence` / `malformed_base_layer` / `invalid_ruleset` |
+| ok | any | `true` | yes | **`violated`** | — |
+| ok | completed | `true` | no | `holds` | — |
+| ok | completed | `false` | yes | `holds` | — |
+| ok | completed | `false` | no | `unverifiable` | `no_user_state_change` |
+| ok | failed | `true` | no | `unverifiable` | `invocation_failed` |
+| ok | failed | `false` | any | `unverifiable` | `invocation_failed` |
+
+**A contradiction survives a failed invocation; a confirmation does not.** This is the
+sharper form of the brief's "an empty changeset from a failed invocation is `unverifiable`,
+never `holds`", and it is deliberate rather than a liberty taken: a change *present* in
+`user_state` is a write the kernel recorded, so a tool declaring `readOnlyHint: true` that
+wrote there has contradicted itself whether or not its call then errored. Suppressing that
+would discard a real finding to be tidy. Reading an *absence*, or confirming a declaration,
+are the conclusions a failed invocation cannot license — hence `Assessment::violated` takes
+no `Completion` and `Assessment::holds` does.
+
+**Reconciled with `probe::protocol::assess_read_only` row for row.** All four
+completed-invocation rows match Track B's outcomes exactly, including the awkward fourth
+(declared `false`, nothing observed → `unverifiable`). Only the *code* differs, and
+deliberately: Track B's `probe_surface_incomplete` names a weakness of its own oracle (it
+sees only what the server chose to expose as a resource), whereas here the kernel oracle is
+strong for local writes and what fails is the declaration's falsifiability — a `false`
+declaration has nothing for an absence of writes to contradict. `invocation_failed` is the
+**same spelling** Track B uses, so the two oracles' records read the same way where they mean
+the same thing; it is not yet single-sourced (ADR-005 forbids an edge between `verdict` and
+`probe` in either direction) and P2-11 is where the taxonomy should become one artefact.
+Calling that fourth row `holds` was rejected with reasons in ADR-012: `false` is the
+conservative spec default, 48.6% of census-era tools declare nothing at all, and it is
+exactly where design.md §8's external-state invisibility bites hardest — Phase 1 has no
+network observation, so a remote-API wrapper writes nothing locally and a `holds` there would
+be *"silently treating unobservable effects as absence of effects"*.
+
+**The three decisions P1-06's review passes assigned to P1-07, all settled, two with schema
+changes:**
+
+1. **`VERDICT` now records the normaliser's code version.** Migration `0002` adds
+   `derivation_version`, and `store::db::derivation_version()` supplies it:
+   `MCP_CONFORMANCE_BUILD_ID` (a commit SHA, set by CI or the orchestrator) read at compile
+   time, falling back to `"0.1.0+unpinned"`. The fallback suffix is the point — the
+   workspace version is static and would look authoritative while identifying nothing, so an
+   unidentified build says so in every row it writes
+   (`derivation_version_admits_when_the_build_is_unpinned`). `RUN.harness_version` was
+   considered and rejected: it records the binary that *executed* the tool, and ADR-005
+   exists precisely so derivation can happen later, elsewhere, under different code.
+2. **`VERDICT.ruleset_identity` holds the full tamper-evident identity**
+   (`"v1+sha256:48e55850…"`), not the bare label — and, as P1-06 flagged, that forced the
+   two-table change: the column is an FK into `RULESET`, so `RULESET`'s primary key became
+   the identity too, and migration `0002` renames **both** columns from `ruleset_version` to
+   `ruleset_identity` rather than leaving a column called `_version` holding a digest.
+   `ALTER TABLE … RENAME COLUMN` (which since SQLite 3.25 rewrites references in other
+   tables' FK clauses) rather than a 12-step rebuild, proven rather than assumed against
+   real 0001-era data by `migration_0002_preserves_rows_and_keeps_the_fk` — rows survive,
+   the pre-existing row's `derivation_version` is honestly `NULL`, and a dangling
+   `ruleset_identity` is still rejected by the FK after the rename.
+3. **A `NormaliseError` becomes an `unverifiable` verdict; a derivation *abort* does not.**
+   The distinction is whether the failure is inside the pure closure: a `NormaliseError` is a
+   function of `(evidence, ruleset)` alone, so re-running reaches the same classification and
+   there is a stable fact to record. An abort (killed, OOM against ADR-011's measured ~20×
+   multiplier) is not reproducible from the stored inputs, has no representation, and stays
+   P5-04's no-verdict-fraction concern — written into `DerivationFailure`'s own doc comment
+   rather than left as folklore. The classification lives in `datamodel` because ADR-005
+   leaves no other home (neither pure crate may depend on the other), and the single
+   `From<&NormaliseError>` impl lives in `normalise` next to the error it maps, so two
+   drivers cannot classify the same error differently. The three variants keep **distinct**
+   codes, split by *whose fault the failure is* rather than by where it surfaced:
+   `malformed_evidence` is a finding about a hostile tool's own writes, while
+   `malformed_base_layer` and `invalid_ruleset` are harness faults that say nothing about the
+   server. `MalformedBaseLayer` was **added during review**: the first implementation mapped
+   both `NormaliseError::MalformedUpperLayer` and `::MalformedBaseLayer` to
+   `MalformedEvidence`, but the base layer is built by `world::base_layer` (P1-02) and
+   mounted read-only beneath the tool, so an undecodable base layer is a harness bug — and
+   publishing it as `malformed_evidence` both blamed a server for a harness fault and, read
+   the other way, handed any server deniability for a real malformed capture.
+
+**One further structural change, not asked for but falling out of decisions 1 and 2:**
+`VerdictRecord`'s `oracle`, `ruleset_identity` and `derivation_version` are now a single
+`VerdictProvenance` enum. The three are not independent — a `kernel_changeset` verdict *is*
+the output of normalising evidence under a named ruleset with a particular build of the
+derivation code, and a `protocol_probe` verdict has no changeset and therefore neither — so
+as separate fields "kernel changeset, ruleset unknown" was a representable row nobody could
+reproduce. It no longer typechecks. SQLite cannot express the same constraint (a conditional
+`CHECK` cannot be added by `ALTER TABLE`), which is why the type carries it; this is B-02's
+own move (*"these functions are the one place that mapping is allowed to live"*) one level
+up. `insert_ruleset`/`RulesetRecord` were added alongside, since without a registered
+`RULESET` row no kernel-changeset verdict can satisfy the FK at all
+(`a_kernel_changeset_verdict_needs_a_registered_ruleset` proves both directions).
+
+**Review-pass fixes, landed before this was considered done.** Both mandated passes ran; the
+three blocking findings all had **one shape** — a distinction that exists correctly in the
+*types* and is destroyed at the *storage boundary*, so the published artefact cannot support
+a claim the design makes. Migration `0002` was open in this change and will not be again,
+which is why the schema work belongs here rather than in P1-08. Full accounts in
+[ADR-012](adr/012-verdict-engine-and-readonlyhint.md) decisions 4, 5, 8 and 8a.
+
+1. **The partition counts are persisted.** `read_only_hint` computed
+   `PartitionCounts::of(changeset)` for every outcome and nothing stored them. Demonstrated
+   consequence: a tool declaring `readOnlyHint: true` that wrote `~/.cache/stolen-notes.md`,
+   `~/.config/ssh-key-copy` and `~/invoice-2026.pdf.lock` (overwriting a real document via an
+   allowlisted suffix) stored a row **identical in every column** to a tool that touched
+   nothing — both `holds`, both with no reason. architecture.md §4.3's promise, *report the
+   other two partitions so critics have something to argue with that isn't the verdict
+   itself*, was true of the type and false of the artefact, and every known ADR-008
+   laundering route went from visible and arguable to invisible. Migration `0002` now adds
+   `user_state_count`, `server_internal_count`, `ephemeral_count` (nullable; `NULL` for
+   `protocol_probe` rows, which have no partitions), `counts` is a **required** field on
+   `VerdictProvenance::KernelChangeset` so a kernel-changeset row cannot be written without
+   them, `VerdictRow` reads them back, and the driver test stores them instead of asserting
+   on them and dropping them. `PartitionCounts` moved to `datamodel` to make that possible —
+   `store` must name it and ADR-005 forbids a `store`↔`verdict` edge in either direction, the
+   same forced move `DerivationFailure` already made.
+2. **`declared` is part of the aggregation key.** `store::aggregate` dropped it from
+   `VerdictSummary` and grouped by `(annotation, oracle, outcome)`. ADR-012 decision 3 is
+   right that declared-`false` plus an observed mutation is `holds` — but the published
+   aggregate then pools that with a genuinely verified read-only tool, and the attack needs
+   no effort: declare `readOnlyHint: false`, **or declare nothing at all**
+   (`Declared::Defaulted` reaches the same arm, and 48.6% of census-era tools declare
+   nothing), touch one `user_state` path, return successfully. Four different realities —
+   one quiet tool, one that laundered three user-facing writes, two that merely admitted they
+   write — published as the single number `Holds = 4`, and B-03's guard passed it because
+   oracle disclosure is a different axis. `declared` is now in `VerdictSummary`,
+   `AggregateRow`, `aggregate()`'s grouping key and `verify_report_matches_records`'s check,
+   following B-03's pattern exactly: an `Option` on `ReportRow` so an undisclosed declaration
+   is representable and then rejected (`AggregationError::DeclaredNotDisclosed`, beside
+   `OracleNotDisclosed`). **Not hypothetical on data already published** — re-aggregating
+   Track B's committed sweep splits its `readOnlyHint / holds = 5` into **4 declared-`true`
+   and 1 declared-`false`**, and `idempotentHint / holds = 7` into **5 and 2**. The pooled
+   form overstates "verified read-only" by one row and "verified idempotent" by two; the
+   point is that B-01's published table could not have told you. ⚑ **Flagged for P5-04:**
+   report both axes split, and prefer re-deriving B-01's table over citing the pooled form.
+3. **The invocation result behind a verdict is recorded.** `Assessment` carried no
+   `InvocationResult` and neither `VERDICT`, `INTEGRITY` nor `RUN` had a column for one, so a
+   `violated` resting on a *failed* invocation — which ADR-012 decision 4 deliberately allows
+   and this project intends to keep — was byte-identical in storage to a `violated` from a
+   clean successful call. P5-03 could not triage a disclosure, P5-04 could not report the
+   populations separately, and the exact objection decision 4 predicts (*"your harness called
+   my tool a violation when the call errored"*) could not be answered from the record.
+   `Assessment::call()` carries it, `VERDICT.invocation_result` stores it, and it is required
+   on both kernel-changeset provenance variants. `InvocationResult` moved to `datamodel`
+   alongside `PartitionCounts`, with `verdict` re-exporting it so its public name is
+   unchanged.
+
+Smaller fixes from the same passes:
+
+- **A derivation-failure verdict is now storable with a truthful oracle.**
+  `read_only_hint` returns no ruleset identity on a derivation failure — correctly, since
+  ADR-012 decision 7's point is that the identity comes *off the changeset* — but
+  `VerdictProvenance::KernelChangeset` required one, so a driver holding a
+  `malformed_evidence` assessment could only write a false `protocol_probe` oracle (what
+  ADR-002 and B-03 exist to prevent), restate the loader's identity, or drop the row and
+  defeat decision 5. New variant `KernelChangesetDerivationFailed { derivation_version,
+  call }`: oracle stays `kernel_changeset`, both absences are structural. It deliberately
+  carries the derivation build and the invocation result and nothing else — there is nothing
+  to count and no identity to name, while *which build* decided the bytes were malformed is
+  the most useful fact about such a row. That row shape had no storage test anywhere in the
+  tree; it has two now.
+- **`derivation_version` is actually fed.** `MCP_CONFORMANCE_BUILD_ID` was read at
+  `store::db::derivation_version()` and set by nothing — no workflow, no `xtask`, no
+  `build.rs` — so the column was permanently `0.1.0+unpinned`. `.github/workflows/ci.yml`
+  now sets it job-wide to `${{ github.sha }}`. The mechanism itself was sound (`option_env!`
+  is a tracked dependency, so a changed value recompiles); it was simply never fed.
+- **`RULESET.rules` stores the rules.** The driver test seeded a *pointer*
+  (`{"source":"rulesets/v1.yaml"}`), and ADR-005's "hand a reviewer the evidence and the
+  ruleset" breaks if the database stores a filename — `ruleset_identity`'s digest then pins
+  bytes that are nowhere in the bundle. Low severity in a test, except that P1-08's driver
+  will be written by copying that test. New `store::ruleset::to_json` renders a loaded
+  ruleset as the JSON the column's own doc comment promises, the driver test and both
+  `store::db` stubs use real v1 rules, and two tests check the output against SQLite's own
+  JSON parser (the one `json_valid` uses) rather than by eye.
+- **The `invocation_failed` double-spelling is guarded.** The caveat below named the rename
+  hazard and left it unguarded, but "unguardable" and "unguarded" are different claims:
+  `verdict::reason::INVOCATION_FAILED` and `probe`'s own spelling cannot be single-sourced
+  (ADR-005 forbids the edge) but `xtask` can see both crates without either seeing the other.
+  `xtask/tests/reason_codes.rs` is one assert that fails the build on exactly the mistake the
+  caveat predicts. `probe` re-exports its two reason-code constructors from its crate root
+  for it — they were `pub` inside a *private* module, which is the one thing that genuinely
+  made this unwritable before.
+- **`VERDICT` names its evidence.** architecture.md §6 declares
+  `EVIDENCE ||--o{ VERDICT : supports` and no migration implemented it: `VERDICT` had neither
+  `run_id` nor an evidence digest, so there was no path from a verdict row to the two blobs
+  that produced it, and a tampered verdict row could not be caught by re-derivation because
+  nothing said which evidence it claimed. ADR-012's "names everything it depends on" was two
+  of three. Added as a nullable FK `VERDICT.run_id` (plus an index), which was clean —
+  SQLite allows `ALTER TABLE ADD COLUMN` with a `REFERENCES` clause as long as the default is
+  `NULL`, which is what a pre-`0002` row and a `protocol_probe` row both want anyway. The
+  join goes through `RUN` rather than a digest column on `VERDICT` because a
+  kernel-changeset verdict rests on **two** blobs (base and upper layer) and `EVIDENCE` is
+  already keyed by `run_id`; a single `evidence_digest` column could only ever name one of
+  them. `GatedRun::run_id()` supplies it, and it is a field of its own rather than part of
+  `provenance`, because both oracles can have runs while only one has a derivation.
+
+**Migration `0002` re-verified against a copy of the real 0001-era database** (the committed
+`results/conformance/track_b_probe.sqlite3`, copied to `/tmp` and never modified in place), as
+the previous pass did, through the real `open_and_migrate` runner: 207 rows preserved, Track
+B's per-annotation tallies reproduced exactly through the typed reader (`readOnlyHint` 5/96/2,
+`idempotentHint` 7/96/1), `ruleset_version` gone and all six new columns present, every new
+column honestly `NULL` on those rows, the renamed-column FK still rejecting a dangling
+`ruleset_identity`, the new `run_id` FK rejecting a dangling run, invariant 3's `CHECK` still
+firing, both `EVIDENCE` immutability triggers surviving, re-opening not re-applying `0002`,
+and the real 207 records passing `verify_report_matches_records` through the new
+`declared`-aware aggregator.
+
+**Verification:** `cargo build --workspace --all-targets` clean; `cargo test --workspace` →
+**292 passed, 0 failed** (up from 253 on `origin/main` at f839388, so **39 new**: 20 in
+`verdict`, 9 in `store`'s unit tests, 4 in `crates/store/tests/verdict_derivation.rs`, 2 in
+`datamodel`, 3 in `normalise`, 1 in `xtask/tests/reason_codes.rs`);
+`cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo purity` clean —
+`verdict`'s dependency closure is still `{datamodel}` alone (it does not even need `evtree`),
+and `#![no_std]` is kept on all three pure crates. The integration test reaches `normalise`
+and `verdict` as **dev**-dependencies of `store`, which `cargo purity` excludes by documented
+policy (`xtask/src/purity.rs`) and which is not a runtime edge: `store` does not depend on
+`verdict`. The same applies to the new `xtask` → `verdict` dev-dependency added for the
+reason-code guard.
+
+The 12 tests the review passes added on top of the original 280: 2 in `verdict`
+(`a_malformed_base_layer_is_not_published_as_a_finding_about_the_tool`,
+`every_assessment_records_how_the_invocation_went`), 1 in `normalise`
+(`deleting_an_allowlisted_path_lands_in_ephemeral_today_not_user_state`), 3 in
+`store::aggregate` (the `declared` axis, below), 2 in `store::db`
+(`a_derivation_failure_row_keeps_the_kernel_oracle_with_no_ruleset`,
+`a_verdict_names_the_run_it_came_from_and_the_fk_bites`), 2 in `store::ruleset`
+(`to_json_emits_the_rules_themselves_not_a_pointer_at_the_file`,
+`rules_json_round_trips_through_a_json_parser`), 1 integration
+(`a_derivation_failure_is_stored_with_a_truthful_oracle_and_no_ruleset`), and 1 in `xtask`
+(`both_oracles_still_spell_invocation_failed_the_same_way`).
+
+Named tests and what they pin, beyond the per-row table tests:
+
+- `a_user_state_change_contradicts_a_declared_true_read_only_hint` — the literal exit
+  criterion.
+- `holds_is_unreachable_for_every_invocation_result_but_completed` — the false-`holds`
+  guarantee, over the whole reachable table (3 declarations × 3 invocation results × 3
+  changesets), with a floor asserting the loop actually reaches `holds` so a generator that
+  stopped exercising the branch fails rather than passes quietly.
+- `a_tool_level_error_with_an_empty_changeset_is_unverifiable_not_holds` — `832d990`'s exact
+  bug shape, transplanted to Track A.
+- `a_failed_invocation_still_reports_a_contradiction_as_violated` and
+  `a_failed_invocation_never_confirms_a_declared_false` — the asymmetry, both directions.
+- `only_user_state_can_change_the_outcome` — architecture.md §4.3's actual requirement:
+  arbitrary `server_internal`/`ephemeral` content (creations *and* deletions) leaves the
+  outcome identical across all 18 combinations. If this fails, ADR-008's allowlists have
+  become load-bearing for the verdict itself.
+- `partition_counts_are_reported_even_when_the_outcome_is_undecided` — the other half of
+  §4.3: the counts are emitted alongside every outcome including the undecided ones, which is
+  where a reader most needs them, and they agree with `CanonicalChangeset::class`.
+- `every_unverifiable_carries_a_known_reason_and_no_decisive_outcome_does` — invariant 3 and
+  its converse, over the whole table, against the closed set of documented codes, with floors
+  on both branches.
+- `the_ruleset_identity_is_carried_off_the_changeset` — the verdict names the exact ruleset
+  bytes, taken off the changeset rather than restated by a caller.
+- `every_assessment_from_this_crate_is_tagged_kernel_changeset` — mirrors
+  `probe::protocol`'s own oracle test; `Assessment::ORACLE` is a `const`, so no call site can
+  mislabel one oracle's result as the other's (ADR-002's no-pooling rule needs the tag to be
+  trustworthy; B-03 tests the other half).
+- `hostile_changeset_content_cannot_panic_or_change_the_decision` and
+  `hostile_content_outside_user_state_still_reads_as_holds_and_is_reported` — totality over
+  attacker-chosen bytes: non-UTF-8 paths, embedded NULs and newlines, a 1 MiB file body, a
+  path of 4,096 `/` separators, a 100,000-entry partition, and an empty `ruleset_identity`.
+  Note what the second one does **not** do: it hand-places changes into partitions and never
+  calls `normalise`, so it pins how the *engine* treats a partition it was handed, not how
+  classification fills one — see the corrected disclosure below.
+- `every_assessment_records_how_the_invocation_went` — the invocation result reaches every
+  assessment for every outcome, with a floor asserting that the disputable row ADR-012
+  decision 4 allows (`violated` from a failed call) is actually reachable, so the test pins
+  the case that needs pinning rather than a vacuous loop.
+- `a_malformed_base_layer_is_not_published_as_a_finding_about_the_tool` — the three
+  derivation-failure causes keep three mutually distinct codes, and the operator-side one
+  (harness-built base layer) is not reported as a finding about a server.
+- `every_normalise_error_classifies_into_a_derivation_failure` (`normalise`) — all three
+  error variants classify, and all three classifications stay mutually distinct.
+- `deleting_an_allowlisted_path_lands_in_ephemeral_today_not_user_state` (`normalise`) — a
+  real whiteout of `/srv/app.lock`, present in the base and matched by v1's `**/*.lock`, put
+  through `normalise`: today it lands in `ephemeral` and `user_state` stays empty, so a
+  destructive change to an allowlisted name decides nothing. Written to be **expected to
+  change** when ADR-008's `(path, ChangeKind)` amendment lands, with the creation case
+  asserted alongside so that amendment's diff shows one line moving and not two.
+- `verify_report_matches_records_rejects_a_report_with_no_declaration_disclosed`,
+  `verify_report_matches_records_rejects_a_pooled_count_mislabelled_under_one_declaration`
+  and `aggregate_never_merges_counts_across_declared_values` (`store::aggregate`) — B-03's
+  own pattern on the `declared` axis: a deliberately pooled report (2 declared-`true` +
+  3 declared-`false` `holds` reported as one count of 5) is rejected both when the
+  declaration is undisclosed and when the count is mislabelled under the flattering one, and
+  `verify_report_matches_records_accepts_aggregates_own_output` now covers both record sets
+  so the guard still has teeth in both directions.
+- `a_derivation_failure_row_keeps_the_kernel_oracle_with_no_ruleset` (`store::db`) and
+  `a_derivation_failure_is_stored_with_a_truthful_oracle_and_no_ruleset` (integration) — the
+  one row shape ADR-012 decision 5 invented and which had no storage test anywhere in the
+  tree: `oracle = 'kernel_changeset'` with a `NULL` ruleset identity and `NULL` counts,
+  storable without a registered `RULESET` row, so the FK is not what accepts it.
+- `a_verdict_names_the_run_it_came_from_and_the_fk_bites` (`store::db`) — a dangling
+  `run_id` is rejected, and the `verdict → run → evidence` join architecture.md §6 declares
+  actually returns the blob digest.
+- `to_json_emits_the_rules_themselves_not_a_pointer_at_the_file` and
+  `rules_json_round_trips_through_a_json_parser` (`store::ruleset`) — the stored rules are
+  v1's actual patterns, contain no filename, and are valid JSON by SQLite's own parser (the
+  one `RULESET.rules`'s `json_valid` `CHECK` uses) including for a pattern carrying every
+  character the escaper handles.
+- `both_oracles_still_spell_invocation_failed_the_same_way` (`xtask`) — the one reason code
+  spelled independently on both sides of the ADR-005 boundary still matches, so a rename in
+  one crate and not the other fails the build instead of silently splitting a published
+  category.
+- `an_attestation_identifies_the_run_it_covers` and
+  `an_attestation_identifies_the_run_not_the_gate_that_minted_it` (`datamodel`) — the second
+  pins a real limitation rather than a feature: the attestation records no gate identity, so
+  two implementors attesting one run produce equal attestations and a verdict cannot say
+  *which* gate licensed it. Deliberate for now, carried as an ADR-012 open question.
+- `a_user_state_write_becomes_a_stored_violated_verdict` (integration) — the whole std-side
+  chain against the **real published `rulesets/v1.yaml` on disk**: load → `normalise` →
+  `read_only_hint` → `BlobStore` → `VERDICT` row → read back, then re-derive from the stored
+  blob bytes and assert the assessment is identical. Also asserts ADR-008 is doing its job
+  (the rewritten `/home/u/doc.txt` decides; the `.cache` write and the `.lock` file are
+  reported and cannot).
+- `a_failed_invocation_over_a_quiet_changeset_is_unverifiable` and
+  `hostile_evidence_bytes_can_only_ever_reach_unverifiable` (integration) — the false-`holds`
+  gap and hostile-byte totality through the real decoder, every truncation offset of a valid
+  capture, with the completed-invocation counterpart alongside for contrast.
+
+**Caveats, disclosed rather than hidden:**
+
+- **"Only the gate can mint an attestation" is backed by conspicuousness, not by the
+  compiler.** Rust cannot restrict construction to one crate: a Cargo feature unifies across
+  the graph, there is no `friend` visibility, and abusing `unsafe fn` for a non-memory
+  invariant would be worse than the problem. Any crate can `impl IntegrityGate`. What the
+  trait buys over a free function is that minting requires a visible, greppable declaration
+  at a named call site rather than being reachable from any `&CanonicalChangeset` a caller
+  holds. An `xtask` check in `cargo purity`'s style was considered and **deferred, not
+  rejected**: it would have to exempt test code (which legitimately mints), and a grep that
+  must tell `#[cfg(test)]` modules from live code is the kind of approximate rule that passes
+  while being wrong. Revisit once a real implementor exists to compare against.
+- **Private fields on `Assessment` close three forgery routes and not the one that matters
+  most.** `store::db::insert_verdict` can write any row a driver likes without going near an
+  `Assessment`, and no signature in `verdict` can guard that; the harness operator is trusted
+  (design.md §3), so what these types defend against is a *buggy* driver, which is also what
+  the `Completion` token defends against. Two related limits: invariant 3 is enforced at
+  construction and now maintained against outside mutation, but the database's `CHECK` only
+  catches an `unverifiable` row with a *cleared* reason — it cannot catch a hand-built row
+  that was flipped to `Holds` **and** had the reason dropped, since that row is internally
+  consistent. And `probe::protocol::ProbeAssessment` still has public fields; left alone
+  deliberately (it has no witness to bypass), but a decision to revisit rather than inherit
+  when P2-11 converges the two assessment types.
+- **Nothing binds an attestation to the evidence it attests.** The engine cannot check that
+  the changeset it was handed came from the attested `run_id`; verifying that would mean
+  hashing inside the pure closure, which ADR-011 decision 6 ruled out. A buggy driver could
+  pair run A's attestation with run B's changeset. Mitigation is P1-08's and P5-02's: one
+  derivation step per run, `run_id` flowing from the same record that produced the digests.
+- **`violated` is reachable from a failed invocation, and maintainers will dispute it.**
+  Combined with ADR-011's copy-up consequence (overlayfs copies a file up on a write-intent
+  open even if nothing is written), the most disputable verdict this engine can produce is
+  "your tool errored out and we called it a read-only violation". It is the correct reading of
+  the evidence; P5-03's disclosure workflow should expect the objection, and Arm 0 (base only,
+  no invocation — P1-03's to build) is what separates server-startup writes from tool writes.
+- **One reason code for three invocation failures.** `invocation_failed` covers a tool-level
+  `isError`, a JSON-RPC error, a crash and a kill. The `InvocationResult` variants exist so
+  the *caller* has to classify the call and so P2-11 can split the code with no API change;
+  minting `invocation_no_result` before a single real run has produced one would be guessing
+  at a code, which is ADR-003's discipline applied to the taxonomy.
+- **Two spellings of `invocation_failed` in the tree** (`verdict::reason` and
+  `probe::protocol`), unavoidable under ADR-005 and a real hazard: renaming one and not the
+  other would silently split a published category. P2-11 must single-source it. **Now
+  guarded** rather than merely disclosed — `xtask/tests/reason_codes.rs` asserts the two
+  strings still agree, since `xtask` can depend on both crates without either depending on
+  the other. The caveat previously named the hazard and left it unguarded, which conflated
+  "not single-sourceable" with "not checkable"; only the first was true.
+- **Never run against a real changeset.** Every changeset in these tests is hand-built or
+  derived from synthetic `evtree::encode` output — P1-06's own first caveat, inherited
+  unchanged. The first real overlay upper layer reaches this code at P1-08.
+- **The `(path, ChangeKind)` amendment to ADR-008 is still unimplemented, and it bites
+  here.** A tool that *deletes* a base-layer file whose name matches an allowlist yields
+  `user_state = []`, so this engine reads it as `holds` (declared `true`) or
+  `no_user_state_change` (declared `false`). The engine is doing exactly what ADR-008
+  specifies; the specification is what needs the amendment, which has its own task and its
+  own review passes.
+
+  **Correction: this entry's claim about which test pins that was false.** It credited
+  `hostile_content_outside_user_state_still_reads_as_holds_and_is_reported`, saying the
+  amendment would therefore land as a visible test change. That test hand-places a `Deleted`
+  change into the `ephemeral` partition and **never calls `normalise`** — it pins how the
+  verdict engine treats a partition it was handed, not how classification fills one — and a
+  sweep of the whole suite found no test anywhere putting a deletion of an allowlisted path
+  through `normalise`. So the amendment could have landed with every test green, which is the
+  opposite of what the disclosure promised. The test that makes it true now exists:
+  `deleting_an_allowlisted_path_lands_in_ephemeral_today_not_user_state`
+  (`crates/normalise/src/tests.rs`), with a doc comment naming the amendment and saying the
+  test is expected to change when it lands.
+- **`Assessment` carries no `adversarial_flag`.** ADR-004 accepts evidence from a run that
+  attempted an escape and flags it, and P4-03 requires the flag to reach publication. It is an
+  attribute of the run, not the assessment, so it travels on `INTEGRITY` today; nothing here
+  forecloses adding it to the attestation when P4-03 needs it.
+- **⚑ Flagged for P1-03 and P2-04: Arm 0's absence is exploitable in both directions, and
+  the `holds` direction was undisclosed.** The caveat above notes Arm 0 is what separates
+  server-startup writes from tool writes and files it under a dispute a maintainer might
+  raise. It is worse than a dispute, and it runs both ways.
+
+  *Forward.* A server that writes one `user_state` path at startup — unconditionally,
+  whichever tool is called — makes **every** tool declaring `readOnlyHint: true` come back
+  `violated`, genuinely read-only ones included, and needs no completed invocation to do it
+  (a contradiction survives a failed call, by design). That is a reproducible, publicly
+  demonstrable false-positive generator aimed at this harness's credibility — and it also
+  arrives *accidentally*, via an `atexit`/`SIGTERM` handler that writes on teardown, which
+  does not fail the integrity gate, being neither a timeout nor a cap hit.
+
+  *Reverse.* Declare `readOnlyHint: false` or declare nothing, write one `user_state` path at
+  startup, let the call succeed → `holds` for every tool, with no tool having done anything.
+  Combined with the `declared`-pooling bug above that was an unlimited supply of published
+  `holds` rows; with that fixed they are confined to the declared-`false` column, which is
+  the column that means the least.
+
+  **Requirement, not a suggestion: Arm 0's changeset must be *subtracted* before assessment,
+  not merely reported beside it** — otherwise the subtraction becomes another thing someone
+  has to remember, which is the failure mode this whole task is written against.
+- **⚑ Flagged for P1-04: the capture walk must be *total*.** Anything it cannot represent
+  has to be recorded as a distinguishable entry — never silently dropped, and never an error.
+  A hostile tool cannot force a decode failure through file *content* alone (checked:
+  `evtree` lengths are `u64`, the xattr count is `u32`, and Linux provides neither 2^32
+  xattrs nor a 2^64-byte path), but it can present nodes designed to make a walk fail or
+  skip: a path unlinked mid-walk, a node that cannot be `stat`ed, an unexpected file type. An
+  error hands the attacker `malformed_evidence`; a silent skip hands it something strictly
+  better, laundered out of every partition *and* out of the counts `0002` just made visible.
+- **⚑ Flagged for P5-04: an aborted derivation launders into *absence*,** which is better
+  for an attacker than `unverifiable` because `unverifiable` is at least counted. There is no
+  derivation-*attempt* entity, so an abort is indistinguishable from "not yet derived" and
+  P5-04 cannot compute its own no-verdict fraction from stored data at all. A hostile tool
+  can reach it deliberately by emitting a large-but-perfectly-valid tree sized against
+  ADR-011's measured ~20× memory multiplier. Two options to record rather than choose here: a
+  derivation-attempt row written *before* the pure call, or a decoded-evidence size cap with
+  its own reason code instead of an abort.
+- **⚑ `VERDICT.protocol_version` is server-controlled, unvalidated and unbounded.**
+  `discovery`'s `extract_negotiated_version` accepts any JSON string with no length cap and
+  no allowlist, and `protocol_version` is an axis P5-04 reports by — the shortest path in the
+  tree from a server-controlled string to a published grouping key. Latent today: nothing
+  wires the two together and every test hardcodes the value. `declared` and `reason_code` are
+  likewise free strings at the storage boundary, and `VERDICT.reason_code` wants a `CHECK`
+  once P2-11 closes the taxonomy.
+- **⚑ Flagged for P2-08 (and for ADR-003's threat surface): a tool can inflate its own noise
+  floor.** Because `N` is measured *per tool* from that tool's own `D1`/`D1'`, a tool with a
+  timer-driven background writer widens its own tolerance, and `D2 Δ D1 ⊆ N` then swallows
+  its own second-call effect. Same Arm-0-shaped mechanism as above: cheap, always-on, needs
+  no sandbox detection. Found while reviewing P1-07 rather than P2-08, recorded here so it is
+  not lost before that task starts.
+- **⚑ A precision note on ADR-011's omission invariant.** *"Every omission is backed by at
+  least one reported descendant"* does not mean a **decisive** descendant — the backing
+  change may itself sit in `server_internal` or `ephemeral`, so an omission in `user_state`
+  can be backed by nothing that appears in `user_state`. Logically fine (the ancestor's
+  change is wholly explained by the child), but the invariant reads stronger than it is, and
+  what keeps it harmless is that the per-partition counts now reach the published row.
+- **The committed `results/conformance/track_b_probe.sqlite3` will be migrated in place the
+  next time `cargo xtask probe-stage1` runs**, since that command opens it through
+  `open_and_migrate`. The migration is non-destructive and that is proven, not assumed
+  (`migration_0002_preserves_rows_and_keeps_the_fk` does it against synthetic 0001-era data,
+  and the re-verification above does it against a *copy* of this exact file: 207 rows survive,
+  the FK survives the rename, every new column is honestly `NULL`, and Track B's published
+  tallies reproduce exactly), so B-01's and B-02's published numbers are unaffected — but the
+  committed file is 0001-era today and will show as a changed binary in whatever commit next
+  runs that sweep. Flagged because a binary diff nobody expected is how a schema change gets
+  reverted by mistake. Nothing in the test suite opens that file; no query anywhere selects
+  `ruleset_version` by name, so B-02's own `SELECT DISTINCT oracle FROM verdict` check still
+  reads unchanged. The re-verification worked on a `/tmp` copy and never touched the
+  committed file (checksum unchanged).
+
+- [x] Pure: cannot take a model, network client, or clock as a dependency (F-04 enforces) —
+      `cargo purity` green with `verdict`'s closure at `{datamodel}` alone, `#![no_std]`
+      kept, per-crate `clippy.toml` bans untouched. The one thing that would have forced an
+      allowlist widening — naming `NormaliseError` directly — was avoided by putting the
+      shared classification in `datamodel` (ADR-012 decision 5).
+- [x] Emits `holds` / `violated` / `unverifiable` with `reason_code` and `oracle` —
+      `Assessment` carries `outcome`, `reason`, `call`, `reported` and `ruleset_identity`
+      behind accessors (private fields, see the caveats), plus
+      `Assessment::ORACLE = Oracle::KernelChangeset` as an associated `const` (never a
+      field, so it cannot vary per instance); `unverifiable` cannot be constructed without a
+      reason, and the five codes it can carry are named constants in `verdict::reason`. All
+      of it reaches the `VERDICT` row: migration `0002` stores the oracle, the ruleset
+      identity, the derivation build, the invocation result, the three partition counts and
+      the `run_id` that joins to the evidence.
 
 ### P1-08 ⚑ End-to-end: first real verdict
 

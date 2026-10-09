@@ -589,6 +589,7 @@ dependencies = [
  "rusqlite",
  "sha2",
  "tempfile",
+ "verdict",
 ]
 
 [[package]]
@@ -830,6 +831,7 @@ dependencies = [
  "serde_json",
  "store",
  "tempfile",
+ "verdict",
 ]
 
 [[package]]

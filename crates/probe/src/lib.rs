@@ -31,6 +31,16 @@ mod snapshot;
 
 pub use argsynth_min::synthesize_arguments;
 pub use client::{ProbeClient, ProbeError};
-pub use protocol::{ProbeAssessment, assess_idempotent, assess_read_only};
+// The two reason-code constructors are re-exported alongside the decision functions, which
+// they were not before P1-07. `invocation_failed` is the one reason code this oracle shares
+// with the Class A engine (`verdict::reason::INVOCATION_FAILED`), spelled separately because
+// ADR-005 forbids an edge between `probe` and `verdict` in either direction; exporting it
+// lets `xtask` — which can see both crates without either seeing the other — assert the two
+// spellings still agree (`xtask/tests/reason_codes.rs`). `no_probe_surface` comes with it
+// rather than being left behind, since exporting one of a pair of sibling constructors is
+// the kind of asymmetry that costs the next reader a detour.
+pub use protocol::{
+    ProbeAssessment, assess_idempotent, assess_read_only, invocation_failed, no_probe_surface,
+};
 pub use runner::{ProbeTarget, probe_idempotent_hint, probe_read_only_hint};
 pub use snapshot::{ProbeSurface, ResourceRef, discover_surface, snapshot_state};

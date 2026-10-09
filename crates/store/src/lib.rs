@@ -8,7 +8,15 @@
 //! — a `VERDICT` row and an `EVIDENCE` blob are both "storage", but they have opposite
 //! mutability contracts, and nothing in this crate blurs that line. P1-06 adds [`ruleset`],
 //! the loader for the versioned normalisation rulesets in `rulesets/` — parsing lives here
-//! so the pure `normalise` crate only ever sees an already-parsed ruleset (ADR-005).
+//! so the pure `normalise` crate only ever sees an already-parsed ruleset (ADR-005). P1-07
+//! adds migration `0002`, which makes a verdict's derivation, its evidence and what it
+//! observed all nameable from the row: `ruleset_identity` rather than a bare label, plus
+//! `derivation_version`, `invocation_result`, the three ADR-008 partition counts, and
+//! `run_id` (the join to `EVIDENCE`) — see
+//! [ADR-012](../../../docs/adr/012-verdict-engine-and-readonlyhint.md) decisions 6 to 8a.
+//! Each of those columns closes one instance of the same gap: a distinction that existed
+//! correctly in the types and was destroyed here, at the storage boundary, so the published
+//! artefact could not support a claim the design makes.
 //!
 //! Contract: [architecture.md §3.1].
 

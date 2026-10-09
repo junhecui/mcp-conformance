@@ -90,6 +90,40 @@ impl core::fmt::Display for NormaliseError {
 
 impl core::error::Error for NormaliseError {}
 
+/// Classify a normalisation failure for the verdict engine (ADR-012 decision 5).
+///
+/// Three error variants map onto three distinct classifications, split by **whose fault the
+/// failure is** rather than by where in the pipeline it surfaced: a malformed *upper* layer
+/// is a finding about the tool, while a malformed *base* layer and an uncompilable ruleset
+/// are both harness faults that must never be published as findings about a server.
+///
+/// This mapping lives here, next to the error it maps, because it is the only edge the
+/// purity rule leaves open: `verdict` may not depend on `normalise` and `normalise` may not
+/// depend on `verdict` (ADR-005 — neither is on `cargo purity`'s allowlist), so the shared
+/// classification is [`datamodel::DerivationFailure`] and the derivation driver converts
+/// through it. Having exactly one `From` impl is what stops two drivers from classifying the
+/// same error differently.
+impl From<&NormaliseError> for datamodel::DerivationFailure {
+    fn from(error: &NormaliseError) -> Self {
+        match error {
+            // Hostile or corrupt stored evidence. A finding about the evidence, not an
+            // internal error — the tool under test wrote the tree this was captured from.
+            NormaliseError::MalformedUpperLayer(_) => Self::MalformedEvidence,
+            // Operator-side, and deliberately *not* folded into the line above. The base
+            // layer is built by the harness (`world::base_layer`, P1-02) and is mounted
+            // read-only beneath the tool, which has no way to write to it, so a base layer
+            // that will not decode is a harness fault — identical in kind to the
+            // uncompilable ruleset below. Mapping it to `MalformedEvidence` published a
+            // harness bug as a finding against a server, and, read the other way, handed
+            // any server deniability for a real malformed capture.
+            NormaliseError::MalformedBaseLayer(_) => Self::MalformedBaseLayer,
+            // Operator-side: the harness was handed a ruleset it cannot apply. Says nothing
+            // about the tool, and must not be reported as though it did.
+            NormaliseError::InvalidPattern { .. } => Self::InvalidRuleset,
+        }
+    }
+}
+
 /// A ruleset with its patterns compiled. Compile once and reuse across many evidence
 /// bundles (e.g. the whole verdict table during replay) via [`normalise_compiled`].
 #[derive(Debug, Clone)]

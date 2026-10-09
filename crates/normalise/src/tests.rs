@@ -750,3 +750,105 @@ fn large_and_deep_trees_are_handled() {
     let cs = run(&[], &wide);
     assert_eq!(cs.user_state.len(), 20_000);
 }
+
+// ---------------------------------------------------------------------------------------
+// Classification for the verdict engine (ADR-012 decision 5)
+// ---------------------------------------------------------------------------------------
+
+/// Every [`NormaliseError`] must classify, and all three causes must stay distinguishable,
+/// because the split is by **whose fault the failure is** and the reason code reaches
+/// publication:
+///
+/// - a malformed **upper** layer is a finding about the tool's own writes;
+/// - a malformed **base** layer is a harness fault — `world::base_layer` (P1-02) builds the
+///   base and the overlay mounts it read-only, so the tool has no way to corrupt it;
+/// - an uncompilable ruleset is a harness fault too.
+///
+/// Collapsing the first two (which is what this impl did until P1-07's review) published a
+/// harness bug as a finding against a server, and — read the other way — handed any server
+/// deniability for a real malformed capture.
+#[test]
+fn every_normalise_error_classifies_into_a_derivation_failure() {
+    use datamodel::DerivationFailure;
+
+    let good = evtree::encode(&[file("f", "x")]);
+    let bad_upper = normalise(
+        &RawEvidence { base_layer: good.clone(), upper_layer: b"nope".to_vec() },
+        &v1(),
+    )
+    .unwrap_err();
+    let bad_base =
+        normalise(&RawEvidence { base_layer: b"nope".to_vec(), upper_layer: good }, &v1())
+            .unwrap_err();
+    let mut rules = v1();
+    rules.ephemeral.push("relative/**".to_string());
+    let bad_rules = normalise(&evidence(&[], &[]), &rules).unwrap_err();
+
+    assert_eq!(DerivationFailure::from(&bad_upper), DerivationFailure::MalformedEvidence);
+    assert_eq!(DerivationFailure::from(&bad_base), DerivationFailure::MalformedBaseLayer);
+    assert_eq!(DerivationFailure::from(&bad_rules), DerivationFailure::InvalidRuleset);
+    // All three mutually distinct: no pair may share one published reason code.
+    let classified = [
+        DerivationFailure::from(&bad_upper),
+        DerivationFailure::from(&bad_base),
+        DerivationFailure::from(&bad_rules),
+    ];
+    for (i, a) in classified.iter().enumerate() {
+        for b in &classified[i + 1..] {
+            assert_ne!(a, b, "two causes collapsed into one reason code");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// The un-amended ADR-008 deletion gap, pinned where it actually happens
+// ---------------------------------------------------------------------------------------
+
+/// ADR-008 classifies on the path alone, so **deleting** a base-layer file whose *name*
+/// matches an allowlist lands in that allowlist and never in `user_state` — which makes
+/// `readOnlyHint` read as `holds` for a tool that destroyed real state. ADR-011's open
+/// questions propose amending the taxonomy to classify on `(path, ChangeKind)`: let an
+/// allowlist suppress `Created` and `Modified` only, and send `Deleted`, `Replaced` and
+/// `DirectoryReplaced` always to `user_state`.
+///
+/// **This test is expected to change when that amendment lands**, and that is its entire
+/// job. `docs/tasks.md` previously credited
+/// `verdict::tests::hostile_content_outside_user_state_still_reads_as_holds_and_is_reported`
+/// with pinning this, but that test hand-places a `Deleted` change into the `ephemeral`
+/// partition and never calls `normalise` — so it asserts how the *verdict engine* treats a
+/// partition it was handed, not how classification fills it. A sweep of the suite found no
+/// test anywhere putting a deletion of an allowlisted path through `normalise`, which means
+/// the amendment could have landed with every test still green. This is that test: it runs
+/// the real classifier over a real whiteout of `/srv/app.lock` (present in the base, matched
+/// by v1's `**/*.lock`) and asserts today's behaviour, so the amendment has to come here and
+/// say what it changed.
+#[test]
+fn deleting_an_allowlisted_path_lands_in_ephemeral_today_not_user_state() {
+    let base = [dir("srv"), file("srv/app.lock", "pid 1")];
+    let upper = [copied_up(dir("srv")), whiteout("srv/app.lock")];
+    let cs = run(&base, &upper);
+
+    assert_eq!(
+        paths(&cs.ephemeral),
+        ["/srv/app.lock"],
+        "v1's `**/*.lock` matches on path alone, so the deletion is classified ephemeral"
+    );
+    assert_eq!(
+        only(&cs.ephemeral),
+        &ChangeKind::Deleted { was: Some(FileType::Regular) },
+        "and it really is a deletion, not a creation — which is the whole objection"
+    );
+    assert!(
+        cs.user_state.is_empty(),
+        "today a destructive change to an allowlisted name decides nothing: {:?}",
+        cs.user_state
+    );
+
+    // The same path *created* rather than deleted is the case ADR-008's membership bar was
+    // actually argued with ("a tool touching a lock file at startup"), and the amendment
+    // would leave it exactly where it is. Asserted alongside so the amendment's diff shows
+    // one line changing and not two.
+    let created = run(&[dir("srv")], &[copied_up(dir("srv")), file("srv/app.lock", "pid 1")]);
+    assert_eq!(paths(&created.ephemeral), ["/srv/app.lock"]);
+    assert!(matches!(only(&created.ephemeral), ChangeKind::Created(_)));
+}

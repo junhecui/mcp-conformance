@@ -98,7 +98,11 @@ Two reasons, both load-bearing:
   tool's writes. If decoding happens upstream, "malformed blob" is an error in an I/O crate
   that must then be mapped to a verdict; if it happens here, it is
   `NormaliseError::MalformedUpperLayer` / `MalformedBaseLayer` — a typed value a verdict
-  reports as `unverifiable`, never as `holds`.
+  reports as `unverifiable`, never as `holds`. The two keep **separate** classifications
+  downstream ([ADR-012](012-verdict-engine-and-readonlyhint.md) decision 5): the upper layer
+  is the tool's own writes and a finding about it, while the base layer is harness-built and
+  mounted read-only, so an undecodable base layer is an operator-side fault and must not be
+  published against a server.
 
 Cost: `evtree` had to join the purity allowlist (Decision 10).
 
@@ -167,6 +171,17 @@ it is *never* diagnostic, and a parent directory's copy-up is a mechanical conse
 creating the child), but P1-07 and P2-10 should know the interaction exists. It is visible in
 `adr_008_classification` (`crates/normalise/src/tests.rs:426-446`), where `/srv` is omitted
 while `/srv/app.lock` is reported as ephemeral.
+
+**A precision correction to the invariant as worded above**, from P1-07's review passes:
+"every omission is backed by at least one reported descendant" does **not** mean a *decisive*
+descendant. As the cross-partition consequence makes clear, the backing change may itself sit
+in `server_internal` or `ephemeral`, so an omission in `user_state` can be backed by nothing
+that appears in `user_state`. That is logically sound — the ancestor's change is wholly
+explained by the child, and the child is reported somewhere — but the sentence reads stronger
+than it is, and what keeps it harmless is that the per-partition counts reach the published
+verdict row, which only became true with
+[ADR-012](012-verdict-engine-and-readonlyhint.md) decision 8 (`VERDICT.*_count`). Before
+that, a reader of a `holds` row could not see that anything had been copied up at all.
 
 ### 5. `mtime` and `inode` are excluded; overlay-private xattrs are stripped
 
@@ -485,13 +500,18 @@ way. The rest are argued inline above.
 
 ## Open questions and follow-on decisions this ADR does not make
 
-- **Does `VERDICT` need to record the normaliser's code version?** The cost above says a verdict
+- **Does `VERDICT` need to record the normaliser's code version?** **Answered: yes** —
+  [ADR-012](012-verdict-engine-and-readonlyhint.md) decision 6 adds
+  `VERDICT.derivation_version` (migration `0002`), sourced from `MCP_CONFORMANCE_BUILD_ID`
+  with a visible `+unpinned` fallback. The question as posed: the cost above says a verdict
   depends on it. ADR-005's promise ("hand a reviewer the evidence and the ruleset") is currently
   true only if the harness version is also fixed. P1-07 and P5-02 should decide whether
   `VERDICT` gains a `normaliser_version` (or reuses `harness_version`) before any verdict is
   published; it is cheap now, in the F-06 spirit of adding `embargo_state` early.
-- **Should `VERDICT.ruleset_version` hold the label or the full identity?**
-  `VerdictRecord::ruleset_version` is an `Option<&str>` FK to `RULESET.ruleset_version`, and the
+- **Should `VERDICT.ruleset_version` hold the label or the full identity?** **Answered: the
+  identity** — [ADR-012](012-verdict-engine-and-readonlyhint.md) decision 7, with both columns
+  renamed to `ruleset_identity` so `RULESET`'s primary key carries it too. The question as
+  posed: `VerdictRecord::ruleset_version` is an `Option<&str>` FK to `RULESET.ruleset_version`, and the
   tamper-evident value is `identity()` (`"v1+sha256:…"`), not `"v1"`. Recommend storing the
   identity, as the `CanonicalChangeset` already does — but it is a P1-07 decision, not one to
   make here without the insertion path in front of it.
@@ -547,6 +567,16 @@ way. The rest are argued inline above.
   P1-06**: it is a semantic change to ADR-008's taxonomy and deserves its own task and its own
   review pass rather than being slipped into the normaliser. Also recorded in `docs/tasks.md`
   under P1-06's carry-forward findings.
+
+  **Now pinned where it actually happens**, which it was not until P1-07's review:
+  `deleting_an_allowlisted_path_lands_in_ephemeral_today_not_user_state`
+  (`crates/normalise/src/tests.rs`) runs a real whiteout of `/srv/app.lock` — present in the
+  base, matched by v1's `**/*.lock` — through `normalise` and asserts today's classification,
+  so the amendment has to come to that test and say what it changed. `docs/tasks.md` had
+  credited the pin to a `verdict` test that hand-places a `Deleted` change into the
+  `ephemeral` partition and never calls `normalise`; a sweep of the suite found no test
+  anywhere putting a deletion of an allowlisted path through the classifier, so the amendment
+  could have landed with every test green.
 - **A fixture-authoring constraint this implies for P2-05.** Until that amendment lands, a
   generic or bespoke fixture's *user-state* files must never be named `*.lock`, `*.pid` or
   `*.sock`, nor nested under `.cache`, `.config`, `.local/state`, `__pycache__` or
@@ -562,6 +592,12 @@ way. The rest are argued inline above.
   unspecified, still a P2-05 concern. Nothing here forecloses it: classification is a single
   function of `(ruleset, path)` and an override would enter at the same point.
 - **P1-07** consumes `CanonicalChangeset` and decides `readOnlyHint` against the `user_state`
-  partition. Two constraints from this ADR carry into it: a `NormaliseError` is never `holds`
-  (it is `unverifiable` with a reason code), and an empty changeset from a *failed* invocation
-  is also never `holds` — the false-`holds` gap commit 832d990 closed in Track B.
+  partition. **Done** — [ADR-012](012-verdict-engine-and-readonlyhint.md). Two constraints
+  from this ADR carried into it and both hold: a `NormaliseError` is never `holds` (it is
+  `unverifiable` with a reason code, and the three causes keep three distinct codes), and an
+  empty changeset from a *failed* invocation is also never `holds` — the false-`holds` gap
+  commit 832d990 closed in Track B. A third constraint emerged there rather than here and is
+  worth naming from this side: the per-partition **counts** this ADR's structural-omission
+  rule makes necessary reading are now stored on the verdict row (`VERDICT.*_count`,
+  migration `0002`), because without them an omission and a laundered write are
+  indistinguishable in the published artefact.

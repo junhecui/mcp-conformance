@@ -172,6 +172,55 @@ pub fn load_file(path: &Path) -> Result<Ruleset, RulesetError> {
     Ok(ruleset)
 }
 
+/// Render a loaded ruleset as the JSON that belongs in `RULESET.rules`.
+///
+/// The column's own doc says *"the rules themselves, as JSON"*, and storing a **pointer**
+/// there instead — `{"source":"rulesets/v1.yaml"}` was the first draft, and
+/// `crates/store/tests/verdict_derivation.rs` is the file P1-08's driver will be written by
+/// copying — quietly breaks ADR-005's claim that a reviewer handed the evidence and the
+/// ruleset can reproduce every verdict: `VERDICT.ruleset_identity` pins a digest over bytes
+/// that are then nowhere in the bundle, and a filename is not rules.
+///
+/// What this produces *is* sufficient to reproduce a verdict, because `normalise` consumes a
+/// parsed [`Ruleset`] and never the file bytes. It is deliberately **not** a reconstruction
+/// of those bytes: the identity's digest is over the source file (ADR-011 decision 9), so
+/// checking the digest still means fetching the published `rulesets/<version>.yaml`, and this
+/// column is the record of what the rules actually were, not a second copy of the file.
+///
+/// Hand-rolled rather than via `serde_json`, which this crate does not depend on and does
+/// not need for one fixed shape. Values are escaped anyway: the loader's YAML subset already
+/// rejects a quote or a backslash inside a pattern, so this cannot currently be reached, and
+/// an escaper that is correct regardless is cheaper than a loader change silently producing
+/// invalid JSON later and failing the `json_valid` `CHECK` at insert time.
+#[must_use]
+pub fn to_json(ruleset: &Ruleset) -> String {
+    fn escape(s: &str) -> String {
+        let mut out = String::with_capacity(s.len() + 2);
+        for c in s.chars() {
+            match c {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+                c => out.push(c),
+            }
+        }
+        out
+    }
+    fn array(patterns: &[String]) -> String {
+        let items: Vec<String> = patterns.iter().map(|p| format!("\"{}\"", escape(p))).collect();
+        format!("[{}]", items.join(","))
+    }
+    format!(
+        "{{\"version\":\"{}\",\"ephemeral\":{},\"server_internal\":{}}}",
+        escape(&ruleset.version),
+        array(&ruleset.ephemeral),
+        array(&ruleset.server_internal),
+    )
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Section {
     None,
@@ -287,6 +336,51 @@ mod tests {
             ]
         );
         assert_eq!(r.identity(), format!("v1+sha256:{}", PUBLISHED[0].1));
+    }
+
+    /// `RULESET.rules` must hold the rules, not a pointer at the file they came from: a
+    /// database row saying `{"source":"rulesets/v1.yaml"}` hands a reviewer nothing, while
+    /// `ruleset_identity` goes on pinning a digest over bytes that are then absent from the
+    /// bundle (ADR-005). Asserted against v1's real contents, round-tripped through
+    /// `rules_json_round_trips_through_a_json_parser` below for validity.
+    #[test]
+    fn to_json_emits_the_rules_themselves_not_a_pointer_at_the_file() {
+        let json = to_json(&load(V1).unwrap());
+        assert_eq!(
+            json,
+            r#"{"version":"v1","ephemeral":["/tmp/**","/var/tmp/**","/run/**","**/*.lock","**/*.pid","**/*.sock"],"server_internal":["**/.cache/**","**/.config/**","**/.local/state/**","**/__pycache__/**","**/node_modules/.cache/**"]}"#
+        );
+        assert!(!json.contains("v1.yaml"), "a filename is not rules");
+        // Every pattern the loader accepted is present verbatim, so the stored row is
+        // sufficient to re-derive: `normalise` consumes a parsed ruleset, never the bytes.
+        let r = load(V1).unwrap();
+        for pattern in r.ephemeral.iter().chain(&r.server_internal) {
+            assert!(json.contains(pattern), "{pattern} missing from the stored rules");
+        }
+    }
+
+    /// The column carries a `json_valid` `CHECK` (F-06), so a hand-rolled writer that got
+    /// escaping wrong would fail at insert time. Checked here against SQLite's own parser —
+    /// the same one the constraint uses — rather than by eye, including a pattern carrying
+    /// every character the escaper handles, which the loader's YAML subset cannot currently
+    /// produce but which must not silently emit invalid JSON if it ever can.
+    #[test]
+    fn rules_json_round_trips_through_a_json_parser() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let mut ruleset = load(V1).unwrap();
+        ruleset.ephemeral.push("/a\"b\\c\nd\te/**".to_string());
+        let json = to_json(&ruleset);
+        let valid: i64 =
+            conn.query_row("SELECT json_valid(?1)", [&json], |row| row.get(0)).unwrap();
+        assert_eq!(valid, 1, "{json}");
+        let count: i64 = conn
+            .query_row("SELECT json_array_length(?1, '$.ephemeral')", [&json], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 7);
+        let extracted: String = conn
+            .query_row("SELECT json_extract(?1, '$.ephemeral[6]')", [&json], |row| row.get(0))
+            .unwrap();
+        assert_eq!(extracted, "/a\"b\\c\nd\te/**", "escaping must be lossless");
     }
 
     #[test]
