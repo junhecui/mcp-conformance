@@ -3,7 +3,8 @@
 **Status:** Accepted
 **Date:** 2026-07-27
 **Author:** Jun Cui
-**Closes:** [F-00](../tasks.md#f-00-pinned-linux-development-and-ci-target)
+**Closes:** [F-00](../tasks.md#f-00-pinned-linux-development-and-ci-target),
+[F-08](../tasks.md#f-08-pinned-linux-vm-on-the-windows-development-host) (the Windows/amd64 boot of the same pin)
 **Gates:** P1-02 onward. Does not gate Phase 0 (Stage 0/1/2 census) — see "Scope" below.
 **Related:** [ADR-007](007-implementation-language.md) (names this as blocking), F-03 (CI),
 design.md §9 (overlayfs semantics), architecture.md §3 (trust model), §5 (containment),
@@ -220,6 +221,8 @@ be self-defeating.
 
 ## Provisioning record
 
+### First provisioning: macOS / Apple Silicon (arm64) (2026-07-27), closing [F-00](../tasks.md#f-00-pinned-linux-development-and-ci-target)
+
 **The first real boot of this pin, closing the gap this ADR itself left open** ("the checksum
 for the pinned serial is not recorded in this document — deliberately... recording it is the
 first concrete action for whoever provisions the image").
@@ -284,6 +287,397 @@ verbatim commands and output:**
 real boot rather than asserted from the pin's specification — the pin now has a real
 provisioning behind it, not only a decision.
 
+### Second provisioning: Windows 11 Home / amd64 (2026-10-09), closing [F-08](../tasks.md#f-08-pinned-linux-vm-on-the-windows-development-host)
+
+The macOS/arm64 record above is **kept, not replaced** — it remains the provisioning path for
+Apple Silicon contributors. This section records the second host the pin has been booted on,
+and the first time the **amd64** branch of this ADR's "Architecture" clause was exercised,
+which matters because amd64 is the arch this ADR names as the CI-matching one.
+
+**Date:** 2026-10-09. **Host:** Windows 11 **Home** 10.0.26200, 24 logical CPUs, 15.9 GiB RAM,
+135 GiB free on `C:`. WSL2 (Microsoft kernel 6.6.87.2-1) already present and in use for the
+non-sandbox workspace — see HANDOFF.md §3.1. WSL2 is **the hypervisor host, never the kernel
+under test**: it runs Microsoft's own 6.6 kernel, which cannot satisfy this pin, so the
+pinned Ubuntu 6.8 GA kernel runs in a real guest *inside* it. See "Hypervisor" below.
+
+- **Serial used:** `20260725` — **the same dated serial as the macOS/arm64 boot**, which was
+  the goal rather than a coincidence: a single serial across both architectures is what makes
+  the two hosts the same pin instead of two adjacent ones. Verified present and still served
+  before relying on it (`HTTP 200` for
+  `https://cloud-images.ubuntu.com/releases/noble/release-20260725/SHA256SUMS`, and that
+  path's own page title reads `Ubuntu 24.04 LTS (Noble Numbat) release [20260725]`). No
+  substitution was needed. The moving `.../releases/noble/release/` symlink was never
+  fetched; for the record, `releases/noble/` now lists **five** serials *newer* than
+  `20260725` (`20260801`, `20260814`, `20260826`, `20260911`, `20260926`), which is exactly
+  the drift the dated path exists to be immune to. The `release/` symlink is not a sixth —
+  it currently targets the fifth of those, so counting it separately double-counts.
+- **Image:** `ubuntu-24.04-server-cloudimg-amd64.img` from
+  `https://cloud-images.ubuntu.com/releases/noble/release-20260725/ubuntu-24.04-server-cloudimg-amd64.img`
+- **Checksum, independently verified, not copied from a search result:**
+  `sha256:d1940f7d69d343355e183dff1e08a59852d32e7309baa7a4bad8365b11b005ac`. Same two checks
+  the arm64 record ran, with one deliberate improvement:
+  1. `SHA256SUMS.gpg` for serial `20260725` verified with
+     `gpgv --keyring /usr/share/keyrings/ubuntu-cloudimage-keyring.gpg SHA256SUMS.gpg SHA256SUMS`
+     → exit 0, verbatim:
+     ```
+     gpgv: Signature made Sat Jul 25 15:34:07 2026 PDT
+     gpgv:                using RSA key D2EB44626FDDC30B513D5BB71A5D6C4C7DB87C81
+     gpgv: Good signature from "UEC Image Automatic Signing Key <cdimage@ubuntu.com>"
+     ```
+     The signing key's fingerprint is `D2EB 4462 6FDD C30B 513D  5BB7 1A5D 6C4C 7DB8 7C81`,
+     byte-identical to the fingerprint the arm64 record pinned, and the uid is the same
+     "UEC Image Automatic Signing Key <cdimage@ubuntu.com>" — *not* the similarly-named
+     CD-image signing key that signs a different `SHA256SUMS`.
+     **The improvement:** the key came from the distro-packaged
+     `ubuntu-cloudimage-keyring` (2023.11.28.1), installed through `apt` and therefore
+     already authenticated by Ubuntu's own archive signing key, rather than fetched over TLS
+     from `keyserver.ubuntu.com` the way the arm64 boot did. This directly narrows the caveat
+     the arm64 record disclosed ("fetched over TLS from a keyserver, not verified
+     out-of-band against a second independent source"): the apt path is a second,
+     independent trust root, and the two agree on the fingerprint. It is still not a
+     web-of-trust check against a physically distributed keyring, so the caveat is reduced,
+     not eliminated. Recorded as such. (A keyserver fetch was attempted first and failed —
+     `gpg: keyserver receive failed: Server indicated a failure` — which is what prompted
+     looking for the better path rather than the worse one.)
+  2. The downloaded image's own `sha256sum` computed locally and compared against the signed
+     `SHA256SUMS` entry for `ubuntu-24.04-server-cloudimg-amd64.img`. Exact match.
+
+- **Artifacts live outside the repo**, under `~/vm/f-08/` on the WSL distro's own ext4
+  (943 GiB free), not on `/mnt/c` (drvfs/9p — wrong performance profile for a qcow2 under
+  active I/O) and not in the worktree. `image/` holds the pinned base plus the `SHA256SUMS`
+  and `SHA256SUMS.gpg` it was verified against, so the verification is re-runnable in place
+  rather than only recorded here; `disk.qcow2` is a **copy-on-write overlay backed by** that
+  base, which keeps the pinned image byte-identical and effectively read-only for the guest's
+  whole life. Nothing large lands in git: the repo gains only `scripts/`.
+
+#### Hypervisor: QEMU + KVM *inside* WSL2, not QEMU on Windows
+
+This diverges from HANDOFF.md §4.1's menu ("Hyper-V Gen2 if available, otherwise QEMU or
+VirtualBox"), and from the plan this task started with, so the reasoning is recorded here
+rather than left implicit.
+
+One Windows-side option is closed outright; the other was **available but not chosen**, and
+the distinction matters enough to state precisely, because an earlier draft of this section
+asserted that *both* were closed by privilege while disclosing, three sentences later, an
+unelevated QEMU that had already run with WHPX. That was a contradiction, and it corrupted the
+escalation path at the bottom of this section by overstating what a future reader has to
+acquire.
+
+- **Hyper-V is absent.** Windows 11 *Home* does not ship it; §4.1 already anticipated this.
+  This one genuinely is closed by the SKU, not by a preference.
+- **QEMU on Windows was viable and was declined on artifact quality, not on privilege.**
+  What is true about privilege: the *supported installer* path wanted elevation and that
+  elevation was declined — the `winget` install of `SoftwareFreedomConservancy.QEMU` 11.1.0
+  reached `Starting package install...` and then returned
+  `0x800704c7 : The operation was canceled by the user`. And
+  `Get-WindowsOptionalFeature` genuinely cannot even *query* whether the `HypervisorPlatform`
+  feature (WHPX's prerequisite — distinct from the `VirtualMachinePlatform` feature WSL2
+  uses) is enabled without an elevated token, let alone enable it; that was verified, and it
+  means WHPX's availability was **unknowable in advance** from an unelevated shell.
+  What is equally true: a **portable, no-admin extraction** of the same QEMU 11.1.0 Windows
+  build was tried and **did start with `accel=whpx`** — so the install elevation was
+  bypassable by extraction, and WHPX was evidently already available on this host rather than
+  needing to be enabled. Neither elevation turned out to be *needed*. It was still abandoned
+  in favour of the path below, for a reason that is a preference rather than a blocker:
+  **depending on a hand-extracted installer payload is a worse artifact than a distro
+  package.** It has no package manager behind it, no upgrade or integrity story, and a
+  version nobody else on this project can reproduce by name — against
+  `apt-get install qemu-system-x86` from the pinned distro, which this ADR's whole posture
+  (pinned image, pinned serial, pinned toolchain, signature-verified base) is built out of.
+  Recorded as a preference grounded in artifact quality, not as an impossibility.
+- **VirtualBox** was not attempted: on a host where the Windows hypervisor is already
+  running (it is — WSL2 and Docker Desktop both depend on it) VirtualBox 7 falls back to its
+  Hyper-V backend, which has well-known performance problems, and it needs elevation to
+  install regardless.
+
+For the record of what a TCG fallback would have cost, had WHPX actually been unavailable: a
+QEMU without it falls back to pure instruction emulation, and a full `cargo test --workspace`
+under TCG is an order of magnitude slower — which would not plausibly satisfy this task's own
+exit criterion of a *working dev loop*. That cost is why WHPX mattered; it is not evidence
+that WHPX was unobtainable.
+
+**What is available with no elevation at all:** the WSL2 `Ubuntu-24.04` distro already
+exposes `/dev/kvm` (`crw-rw---- 1 root kvm 10, 232`) with `svm` in `/proc/cpuinfo` — nested
+virtualisation is live by default on this host, with no `.wslconfig` change. So the VM runs
+as `qemu-system-x86_64 -machine q35,accel=kvm -cpu host` inside that distro
+(`qemu-system-x86` 8.2.2, from the distro archive), reached over an SSH port-forward bound
+to `127.0.0.1:2222`.
+
+**Why this does not weaken the pin.** The nesting is L0 Microsoft/Hyper-V → L1 WSL2 →
+**L2 the pinned Ubuntu 24.04 guest**. Everything this ADR pins — the GA 6.8 kernel,
+cgroups v2 controllers, the six namespaces, overlayfs and its mount options — belongs to
+**L2's own kernel**, which is the kernel `sandbox` compiles and runs against. WSL2's 6.6
+kernel is demoted to hypervisor host and is never the kernel under test. The decision in
+"Why a VM image over a dedicated bare-metal/cloud box" above is untouched; only the choice
+of *which VM runner boots the image* changed, which that section explicitly left open
+("the requirement is 'boots the exact pinned image,' not a specific launcher").
+
+**Costs, disclosed rather than buried.**
+
+- **Two layers of nesting cost throughput.** Expect builds slower than a bare L1 guest
+  would be. Acceptable: nothing in Phase 1–4 is throughput-bound, and architecture.md §7
+  already constrains the *real* throughput story to "one sandbox per worker slot at a time,
+  scale out not up" — a contributor's local loop was never the scaling story.
+- **If the WSL service dies, the VM dies with it.** Two such failures happened during this
+  project's work on 2026-10-08. This is the specific objection that originally argued
+  *against* QEMU-in-WSL, and it is a real operational caveat, not a resolved one. Note what
+  it is now weighed against: not a hard blocker (see the correction above — the Windows-side
+  path was viable), but a preference for a distro-packaged hypervisor over a hand-extracted
+  one. If this reliability cost ever starts dominating, that trade should be re-made rather
+  than treated as settled. Mitigated meanwhile in two ways: all VM state lives in
+  `~/vm/f-08/` and survives a `wsl --shutdown` or a distro restart, and
+  `scripts/vm.sh start` is idempotent, so recovery is one command and never a reprovision.
+- **The escalation path, concretely, if either cost ever bites.** Ordered cheapest-first,
+  since the cheapest step needs no elevation at all:
+  1. **Re-try the portable extraction**, which already worked once: extract the QEMU for
+     Windows build and run `qemu-system-x86_64.exe -machine q35,accel=whpx`. No elevation,
+     no feature enable — on this host WHPX was already available. Check it with
+     `qemu-system-x86_64.exe -accel help`, or just launch and see whether it starts with
+     `accel=whpx` instead of falling back. This is the step the earlier draft of this
+     section wrongly described as closed.
+  2. **If WHPX turns out to be absent on some other host**, then and only then:
+     `Enable-WindowsOptionalFeature -Online -FeatureName HypervisorPlatform` from an
+     elevated shell, and reboot. The query itself needs elevation too, so on an unelevated
+     shell step 1 *is* the probe.
+  3. **Prefer a supported install over the extraction** once elevation is available at all:
+     `winget install SoftwareFreedomConservancy.QEMU`, which is the artifact-quality
+     objection answered rather than worked around.
+
+  In every case the port is small and bounded: the image pin, the signed-sums verification,
+  `seed.iso`, the qcow2 overlay and the whole test loop are unchanged. Only
+  `scripts/vm.sh`'s `qemu-system-x86_64 … -machine q35,accel=kvm` line is
+  hypervisor-specific, plus translating `$VM_DIR` paths and the `127.0.0.1:2222` forward
+  across the WSL/Windows filesystem boundary. Named, not built.
+
+**Guest:** `dev@mcp-conformance-vm`, 4 vCPU / 4096 MiB / 40 GiB qcow2 overlay, seeded by a
+`CIDATA`-labelled NoCloud ISO (`scripts/vm/user-data.template` + `meta-data`). Password login
+is impossible by construction (`lock_passwd: true`, `ssh_pwauth: false`, `disable_root: true`);
+the only credential is the per-host ed25519 keypair `scripts/vm-provision.sh` generates, and
+SSH is reachable only on a loopback-bound forward (`127.0.0.1:2222`), never on a LAN-visible
+address. Toolchain: `build-essential`, distro `rustup`, and `1.85.1` + `clippy` from
+`rust-toolchain.toml`. `CARGO_TARGET_DIR=/home/dev/cargo-target` — VM-local, never on a
+shared mount and never synced.
+
+`linux-image-generic` is installed **as a cloud-init package** rather than inferred from
+whatever the image happened to ship, which makes the GA metapackage the thing actually
+present rather than a property hoped for. It pulls a newer in-series kernel than the image
+booted, so cloud-init reboots once into it (`power_state: reboot`, conditional on
+`/var/run/reboot-required`) — that reboot is expected behaviour on first boot, not a fault.
+
+**The four probes, re-run inside this guest.** They are now a **re-runnable script**
+(`scripts/vm.sh probes`) that exits non-zero if the guest stops satisfying the pin, rather
+than a transcript that can only ever describe one past moment. Verbatim output, exit 0 —
+note the two prefixes, which are structural rather than decorative: every byte relayed from
+the guest is tagged `  [guest] ` *host-side* (bounded and control-character-stripped; see
+"Guest output is bounded and sanitised" below), and `==> [host]` is a line the host wrote
+itself from the exit status, in a slot a guest cannot reach:
+
+```
+  [guest] ### probe 1: kernel is GA 6.8 series, not HWE
+  [guest] 6.8.0-146-generic
+  [guest] linux-image-6.8.0-136-generic 6.8.0-136.136
+  [guest] linux-image-6.8.0-146-generic 6.8.0-146.146
+  [guest] linux-image-generic 6.8.0-146.146
+  [guest] linux-image-virtual 6.8.0-146.146
+  [guest] -- HWE kernel packages present (expect none):
+  [guest] (none)
+  [guest] linux-image-generic:
+  [guest]   Installed: 6.8.0-146.146
+  [guest]   Candidate: 6.8.0-146.146
+  [guest]   Version table:
+  [guest]
+  [guest] ### probe 2: cgroups v2 controllers include memory, cpu, pids
+  [guest] cpuset cpu io memory hugetlb pids rdma misc
+  [guest]
+  [guest] ### probe 3: six-namespace unshare
+  [guest] unshare exit=0
+  [guest]
+  [guest] ### probe 4: overlay mount with ADR-010's pinned options
+  [guest] -- overlay filesystem registered (module loaded by the mount above):
+  [guest] nodev	overlay
+  [guest] -- negative control: an unknown overlay option must be REJECTED
+  [guest]    rejected, as required
+  [guest] -- mount options as the kernel reports them:
+  [guest] overlay /tmp/tmp.9K4XHZsocy/merged overlay rw,relatime,lowerdir=/tmp/tmp.9K4XHZsocy/lower,upperdir=/tmp/tmp.9K4XHZsocy/upper,workdir=/tmp/tmp.9K4XHZsocy/work,uuid=on,nouserxattr 0 0
+  [guest]    nouserxattr: present, as expected for a privileged mount
+  [guest] -- overlay module defaults for the pinned options (asserted, not merely printed):
+  [guest]    redirect_dir  N
+  [guest]    metacopy      N
+  [guest]    index         N
+  [guest]    xino_auto     Y   (not pinned; informational)
+  [guest] -- lower-layer file read through the merge:
+  [guest] lower-layer-content
+  [guest] -- post-mount write captured in upper:
+  [guest] total 4
+  [guest] -rw-r--r-- 1 root root 20 Oct 10 06:46 new-file.txt
+  [guest] written-after-mount
+  [guest] umount: clean
+  [guest]
+  [guest] ALL FOUR PROBES PASSED
+==> [host] probes: PASS (guest exited 0; this line is the host's own, derived from that status)
+```
+
+Four things in that output are worth reading carefully rather than skimming:
+
+- **The kernel is `6.8.0-146-generic`, not the `6.8.0-136-generic` the arm64 boot reported.**
+  That is the GA metapackage's *in-series* update track doing exactly what this ADR says it
+  does (`6.8.0-31` → `6.8.0-40` → …), not drift: same 6.8 series, and
+  `apt-cache policy linux-image-generic` confirms `6.8.0-146.146` is the GA metapackage's own
+  candidate. No HWE kernel package is installed, checked positively (a `grep` for
+  `^linux-(image|generic|headers).*hwe` over installed packages, which prints `(none)`) rather
+  than inferred from the absence of a complaint. Both `6.8.0-136` and `6.8.0-146` are present
+  because the image shipped the former and cloud-init installed the latter; the *running*
+  kernel is `-146`.
+- **The absence of `redirect_dir` / `metacopy` / `index` from that `/proc/mounts` line is now
+  treated as positive evidence, and asserted.** An earlier version of probe 4 leaned on the
+  module-parameter block as a proxy, on the belief that the kernel never echoes those options
+  back. That belief was too weak. Measured in this guest rather than assumed: mounting with
+  `redirect_dir=on,metacopy=on,index=on` yields
+  `…,redirect_dir=on,index=on,uuid=on,metacopy=on,nouserxattr`, i.e. the kernel **does** echo
+  them when they are set non-default — so their absence on the pinned mount is evidence they
+  are *off*, not merely evidence that they parsed. The probe now asserts that absence.
+  It also carries a **negative control**: an unknown option (`mcp_bogus_option=42`) must be
+  rejected, because if this kernel silently ignored unrecognised options then "the mount was
+  accepted with our three" would prove nothing at all about them. It is rejected, so
+  acceptance really is parse evidence — tested, not inferred.
+- **The module-parameter block is asserted now, not merely printed.** It was printed before,
+  which meant a guest whose kernel-wide defaults had flipped to `Y` would have printed `Y` and
+  still reported `ALL FOUR PROBES PASSED`. Demonstrated by flipping
+  `/sys/module/overlay/parameters/redirect_dir` to `Y` in this guest: the probe now prints
+  `FAIL: kernel-wide default for redirect_dir is Y, expected N` and exits 1 (restored to `N`
+  afterwards). That flip also surfaced something worth recording — with the kernel-wide
+  default at `Y`, the pinned mount displays `redirect_dir=follow` rather than nothing, because
+  overlayfs maps a requested `off` onto `follow` while `redirect_always_follow` is `Y`
+  (meaning: create no new redirects, but follow pre-existing ones). The two assertions are
+  therefore complementary, not redundant: the token check catches an `=on`, the
+  module-parameter check catches the `follow` case. `xino_auto` is printed but deliberately
+  **not** asserted — this ADR does not pin it.
+- **`nouserxattr`.** This is the expected branch: the probe mounts privileged, from the host
+  side of the guest, so ADR-010's conditional `userxattr` must *not* be set, and the kernel
+  confirms it is not — now asserted rather than eyeballed. The other branch becomes live only
+  if P1-03 chooses a rootless-in-userns mount.
+
+**The dev loop, proven end to end rather than asserted.** `scripts/vm-test.sh` rsyncs the
+worktree over SSH (never a shared mount — HANDOFF.md §3 flags CRLF conversion of byte-exact
+fixtures as a live hazard on this host, and `evtree`/`world` assert byte-identical captures)
+and runs the same four gates HANDOFF.md §3.1 reports for WSL2 and for macOS, so the results
+are directly comparable:
+
+```
+==> environment
+  [guest] kernel:   6.8.0-146-generic
+  [guest] rustc:    rustc 1.85.1 (4eb161250 2025-03-15)
+  [guest] cargo:    cargo 1.85.1 (d73d2caf9 2024-12-31)
+  [guest] CARGO_TARGET_DIR=/home/dev/cargo-target
+==> asserting the guest's CARGO_TARGET_DIR
+  [guest] CARGO_TARGET_DIR=/home/dev/cargo-target is absolute and outside the synced tree
+==> [host] CARGO_TARGET_DIR: OK
+
+==> gate: purity
+  [guest] purity: OK  ["normalise", "verdict"] depend only on ["datamodel", "evtree"]
+==> [host] gate purity: PASS
+
+==> summary (inside the pinned VM; host-side verdicts)
+==> [host] PASS  build
+==> [host] PASS  test
+==> [host] PASS  clippy
+==> [host] PASS  purity
+```
+
+Two details in that transcript are deliberate. `CARGO_TARGET_DIR` is **asserted**, not just
+printed: the gates would otherwise still print `PASS` while building into the synced tree's
+`./target` if `/etc/profile.d/99-mcp-conformance.sh` ever went missing — and rsync both
+excludes that path *and*, by excluding it, protects it from `--delete`, which is precisely the
+stale-artifact state this sync model exists to prevent. And `purity: OK  [...]` is missing its
+em-dash because the guest-output relay drops every non-ASCII byte along with the control
+characters; that fidelity cost is disclosed in `scripts/vm-lib.sh` rather than discovered
+later.
+
+**345 tests passed, 0 failed** — the same count `main` produces on WSL2/amd64, so the suite
+is now confirmed reproducible across three environments (macOS/arm64, WSL2/amd64, and this
+pinned Ubuntu 6.8 guest). `cargo build --workspace` finished in 23.4s and
+`cargo clippy --workspace --all-targets -- -D warnings` in 8.0s on a warm target dir, which
+settles the throughput worry about double nesting as a non-issue in practice at this
+workspace's size.
+
+**Driving it** (all from inside the WSL `Ubuntu-24.04` distro, from a checkout):
+
+```
+scripts/vm-provision.sh      # once: verify + fetch image, build seed.iso and disk.qcow2
+scripts/vm.sh start          # boot, detached (idempotent; no-op if already running)
+scripts/vm.sh wait           # block until cloud-init has finished (first boot only)
+scripts/vm.sh probes         # re-run the four probes above; non-zero exit = pin violated
+scripts/vm-test.sh           # sync + build/test/clippy/purity inside the guest
+scripts/vm.sh ssh            # interactive shell as dev@
+scripts/vm.sh status         # pid + ssh reachability + kernel
+scripts/vm.sh stop           # poweroff -> SIGTERM -> SIGKILL, each step verified
+```
+
+Environment knobs, all validated before they reach a QEMU argument: `MCP_VM_DIR`,
+`MCP_VM_SSH_PORT`, `MCP_VM_CPUS`, `MCP_VM_MEM`, `MCP_VM_DISK_SIZE`, `MCP_VM_RESTRICT`,
+`MCP_VM_MAX_GUEST_BYTES`, `MCP_VM_SSH_STDIN`.
+
+**The stdin bug was found twice, and the second time is the more useful record.** Every
+internal `ssh` call inherited the caller's stdin, so invoking these scripts from a script that
+was itself being fed on stdin (`bash -s < script` — how a non-interactive agent or a CI step
+naturally drives them) made `ssh` swallow the remainder of the calling script; the caller then
+stopped executing silently, with a **zero** exit status and no error. The first fix routed
+every non-interactive call in `scripts/vm.sh` through an `ssh -n -o BatchMode=yes` variant,
+with one explicit `MCP_VM_SSH_STDIN=1` opt-in for `cmd_probes`, which legitimately pipes a
+heredoc in — and this section said so. But `scripts/vm-test.sh`, *the script this record
+elsewhere calls the dev loop*, still had two bare `ssh` calls: its reachability probe and
+`run_remote`, which carries the environment dump and all four gates. Driving
+`./scripts/vm-test.sh purity` from a piped caller printed `PASS purity` and then silently
+dropped the caller's next two lines, exiting 0 — the same green-looking no-op, in the entry
+point most likely to be driven by an agent. Closed by moving the definition of "a
+non-interactive ssh call" into **one** shared `scripts/vm-lib.sh` that both entry points
+source, so the claim "every non-interactive call in both scripts carries `-n`" is structural
+rather than a coincidence between two copies. That file also enumerates the complete set of
+exceptions so the claim is auditable by grepping for `ssh ` under `scripts/`: the interactive
+`vm.sh ssh` with no arguments, the one `MCP_VM_SSH_STDIN=1` opt-in (`cmd_probes`, which pipes
+a heredoc in), and `vm-test.sh`'s `rsync -e` command — rsync drives its own pipes into that
+ssh child's stdin, so it cannot swallow the caller's and `-n` would break the transport
+outright. Verified the way the bug was found: a piped driver with marker `echo`s after the
+call, which now print.
+
+**Guest output is bounded and sanitised.** Nothing the guest writes used to be bounded or
+stripped: a guest emitting `ESC[2J`, SGR colour, an OSC title-set and an alt-screen switch had
+every escape byte arrive intact host-side, so it could clear scrollback and repaint a clean
+transcript — and in this project's workflow that console is read by a model. This is the same
+output-surface class as the Stage 2 census's unbounded container stderr, which P0-11 fixed
+with a bounded, escape-stripped drain (`crates/discovery/src/transport.rs`), so the same
+remedy applies here: relayed bytes are capped (`MCP_VM_MAX_GUEST_BYTES`, default 256 KiB, with
+one truncation notice), C0-except-LF/TAB plus CR, DEL and all bytes ≥ 0x80 are dropped, record
+length is bounded so a newline-free gigabyte cannot grow the host-side buffer, and every guest
+line is prefixed `  [guest] ` host-side. The harness's own verdicts are printed from the exit
+status with an `==> [host]` sigil that a relayed line cannot occupy. `scripts/vm.sh ssh`
+remains a deliberate raw passthrough, because an interactive shell needs its pty and its
+escapes. **What this is not:** an integrity boundary. `ssh`'s exit status *is* the remote exit
+status, so guest output and guest exit code are one guest-controlled channel — see the
+precondition list below and on F-08.
+
+**Three smaller corrections from the same pass**, all cheap and all with a real failure behind
+them: `MCP_VM_SSH_PORT='2222-:22,hostfwd=tcp::12345'` used to build a *second* QEMU host
+forward bound to `0.0.0.0`, publishing the guest's sshd off-host from one environment
+variable (now a digits-only check, as for every other numeric); `vm.sh stop` sent one SIGTERM,
+waited, then removed the pidfile and said "stopped" with no SIGKILL escalation and no liveness
+re-check, so a guest that ignored poweroff left a running VM invisible to `running()` and the
+next `start` would attach a second QEMU to the same qcow2 — the same failure class as P0-06's
+orphaned containers, and exactly what ADR-004's integrity gate forbids one level down (it now
+escalates poweroff → SIGTERM → SIGKILL, verifies the process is gone before touching the
+pidfile, and `die`s rather than claiming success); and `gpgv --keyring
+ubuntu-cloudimage-keyring.gpg` accepts a signature from **either** key that keyring holds
+(`1A5D6C4C7DB87C81` UEC Image Automatic Signing Key and `7FF3F408476CF100` Ubuntu Cloud Image
+Builder — both confirmed present), so the re-runnable check asserted only "signed by some key
+in Canonical's keyring" while this record asserts the stronger "signed by
+`D2EB44626FDDC30B513D5BB71A5D6C4C7DB87C81`, not the similarly-named other key". The script now
+greps `gpgv --status-fd`'s `VALIDSIG` line for that exact fingerprint and refuses otherwise.
+
+A second, unrelated self-inflicted failure is worth naming because it will bite anyone who
+repeats it: **editing `vm.sh` while a copy of it was mid-run** produced
+`line 130: point:: command not found`, because bash reads a script incrementally from the file
+rather than slurping it — not a defect in the script.
+
 ---
 
 ## Follow-on decisions this ADR does not make
@@ -294,13 +688,53 @@ provisioning behind it, not only a decision.
   Revisit if hosted-runner kernel drift is ever observed to actually change `sandbox`
   behaviour, or once Phase 1 has enough real findings that the infrastructure investment is
   justified rather than anticipatory.
-- **The writable virtiofs mount of the repo into this VM is a P1-03+ blast-radius question,
-  not decided here.** Nothing hostile runs in this guest today — it exists to compile and
-  run `sandbox`'s own namespace/overlayfs/cgroups code, per this file's own "no container
-  runtime needed" note. That changes once P1-03 starts actually launching untrusted MCP
-  server processes inside it: a writable mount of the full repo (build scripts, `cargo`
-  config, evidence store) sitting next to that execution widens what a hostile tool under
-  test could reach if containment inside the guest were ever incomplete. Revisit then —
-  options include a read-only mount for the parts a test run doesn't need to write, or
-  moving untrusted execution to a separate scratch VM instead of this development one. Not
-  a defect in the current pin; a note so it isn't forgotten when P1-03 lands.
+- **Getting the whole repo into this VM is a P1-03+ blast-radius question, not decided
+  here.** Nothing hostile runs in this guest today — it exists to compile and run `sandbox`'s
+  own namespace/overlayfs/cgroups code, per this file's own "no container runtime needed"
+  note. That changes once P1-03 starts actually launching untrusted MCP server processes
+  inside it: a full copy of the repo (build scripts, `cargo` config, evidence store) sitting
+  next to that execution widens what a hostile tool under test could reach if containment
+  inside the guest were ever incomplete. (The **mechanism is per host**, and the earlier
+  wording here named the wrong one: the macOS/Lima record uses a writable **virtiofs mount**,
+  while the Windows/amd64 path uses **`rsync -a --delete` over SSH** — `scripts/vm-test.sh`
+  explains at length why a shared mount is the one thing this loop must not do casually. The
+  substance applies unchanged to the rsync'd copy, and the rsync form makes a partial or
+  read-only sync a strictly easier change than a mount would have been.) Revisit then —
+  options include syncing only what a run needs, or moving untrusted execution to a separate
+  scratch VM instead of this development one. Not a defect in the current pin; a note so it
+  isn't forgotten when P1-03 lands.
+
+### Preconditions on the transition to running untrusted code
+
+**Not F-08 defects.** Every item below is sound as the guest stands today, because nothing
+hostile runs in it or near it. They bind when untrusted registry code arrives — P2-06 against
+real servers, and P4-05's deliberately hostile server — not at P1-03's first commit. Two
+things this project already got right and that these preconditions build on rather than
+correct: HANDOFF.md §4.6 already scopes P1-08 to a **trusted** reference server
+(`@modelcontextprotocol/server-filesystem`) with hand-written arguments and states that Phase
+1 containment is mount namespace plus timeout only, and the bullet above already defers the
+blast-radius question to P1-03 rather than pretending it is answered.
+
+The canonical list, with the measurements behind each item, lives on
+[F-08 in tasks.md](../tasks.md#f-08-pinned-linux-vm-on-the-windows-development-host) and is
+cross-referenced from P1-03. In priority order:
+
+1. **Network isolation.** `-netdev user` with no `restrict=` tunnels the guest into the WSL
+   distro's loopback and gives it unrestricted egress. `MCP_VM_RESTRICT=1` now exists as an
+   opt-in; a `tap` device in a host-side netns is the proper fix, and is what Phase 3's
+   strict/instrumented arms need anyway.
+2. **A separate scratch VM for untrusted execution**, not this development guest. Promoted
+   from the recommendation in the bullet above to a requirement: QEMU runs as the
+   contributor's own user, so an L2 escape lands in **L1, the WSL distro** — the most
+   valuable square in the chain.
+3. **Snapshot/revert around every untrusted run, and a non-sudo execution user.**
+4. **Guest-reported results are untrusted once untrusted code has run.** `ssh`'s exit status
+   *is* the remote exit status, so the probe and gate verdicts are evidence about the pin and
+   the build only on a guest that has run nothing untrusted.
+5. **Verify `disk.qcow2`, not only the base image it is backed by.**
+6. **Bound the `-serial file:` sink**, an unbounded guest→host-disk write channel.
+7. **Narrow the device surface** for untrusted runs (`-nodefaults -vga none`, QEMU's own
+   `-sandbox on`, a dedicated unprivileged QEMU user).
+8. **Pin a real `known_hosts`** instead of `StrictHostKeyChecking=no` plus
+   `UserKnownHostsFile=/dev/null`.
+9. **Disable TCP/agent/X11 forwarding in the guest's sshd** for an untrusted-execution guest.

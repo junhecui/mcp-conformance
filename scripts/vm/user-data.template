@@ -1,0 +1,71 @@
+#cloud-config
+# NoCloud user-data for the F-08 pinned VM (ADR-010 / tasks.md F-08).
+#
+# This is a TEMPLATE. `scripts/vm-provision.sh` substitutes @SSH_PUBKEY@ with the
+# public half of the VM-only keypair it generates, and writes the result into the
+# seed ISO. The rendered file is never committed: it would pin one contributor's key
+# into the repo, and the key is per-host state, not project state.
+
+hostname: mcp-conformance-vm
+fqdn: mcp-conformance-vm
+prefer_fqdn_over_hostname: false
+
+users:
+  - name: dev
+    gecos: mcp-conformance pinned-VM dev user
+    groups: [sudo]
+    shell: /bin/bash
+    # Password login is impossible by construction: the account is locked and
+    # ssh_pwauth is off. The only way in is the generated keypair.
+    lock_passwd: true
+    sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+    ssh_authorized_keys:
+      - "@SSH_PUBKEY@"
+
+ssh_pwauth: false
+disable_root: true
+
+package_update: true
+packages:
+  # ADR-010's kernel pin, stated as a package rather than inferred from the image:
+  # the GA metapackage, which stays on the 6.8.x series for the life of 24.04.
+  # `linux-generic-hwe-24.04` is deliberately absent and must stay absent -- the HWE
+  # track jumps upstream series mid-LTS, which is the drift ADR-010 exists to prevent.
+  - linux-image-generic
+  # HANDOFF.md 3.1: rusqlite builds bundled SQLite, so a C toolchain is mandatory.
+  - build-essential
+  # Distro rustup, preferred over `curl | sh` per HANDOFF.md 4.1's standing preference.
+  - rustup
+  - git
+  # rsync is the repo-sync transport (scripts/vm-test.sh); a shared mount is
+  # deliberately not used, to keep CRLF/line-ending hazards out of the loop.
+  - rsync
+  - pkg-config
+  - ca-certificates
+
+write_files:
+  - path: /etc/profile.d/99-mcp-conformance.sh
+    permissions: "0644"
+    content: |
+      # F-08: CARGO_TARGET_DIR is VM-local, never on a shared mount. A target dir on a
+      # 9p/virtiofs/drvfs mount is both slow and a correctness hazard (cargo's
+      # fingerprint cache depends on mtime behaviour the host filesystem may not give).
+      export CARGO_TARGET_DIR="$HOME/cargo-target"
+      export PATH="$HOME/.cargo/bin:$PATH"
+
+runcmd:
+  - [ install, -d, -o, dev, -g, dev, /home/dev/cargo-target ]
+  - [ install, -d, -o, dev, -g, dev, /home/dev/mcp-conformance ]
+  # Toolchain pinned to rust-toolchain.toml's exact channel. Installed eagerly here so
+  # the first `scripts/vm-test.sh` run is a build, not a toolchain download.
+  - [ su, -l, dev, -c, "rustup toolchain install 1.85.1 --component clippy --profile minimal" ]
+  - [ su, -l, dev, -c, "rustup default 1.85.1" ]
+  # Provisioning sentinel: scripts/vm.ps1 and scripts/vm-test.sh wait on this file
+  # rather than on sshd, because sshd comes up well before the toolchain exists.
+  - [ bash, -lc, "echo f-08 > /var/lib/cloud/mcp-provisioned" ]
+
+power_state:
+  mode: reboot
+  condition: test -f /var/run/reboot-required
+  message: "Rebooting into the GA kernel installed by cloud-init"
+  timeout: 60

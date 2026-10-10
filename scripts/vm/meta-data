@@ -1,0 +1,6 @@
+# NoCloud datasource metadata for the F-08 pinned VM (ADR-010).
+# instance-id is fixed on purpose: changing it makes cloud-init treat the boot as a
+# brand-new instance and re-run every module, which would silently re-provision a VM
+# a contributor had already customised.
+instance-id: mcp-conformance-f08-001
+local-hostname: mcp-conformance-vm

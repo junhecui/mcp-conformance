@@ -28,6 +28,13 @@
 .env.*
 !.env.example
 /config.local.*
+# F-08's *rendered* cloud-init user-data (scripts/vm/user-data.template is the committed
+# half). The rendered copy embeds one contributor's SSH public key, i.e. per-host state, not
+# project state. scripts/vm-provision.sh writes it under $MCP_VM_DIR, outside the repo, so
+# this line is belt-and-braces — but the template's promise that the rendered form is never
+# committed should be structural rather than only a comment inside the template.
+/scripts/vm/user-data
+/scripts/vm/seed-src/
 
 # Rust build artifacts
 /target/
