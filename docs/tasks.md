@@ -765,17 +765,30 @@ wider than this caveat anticipated — see the re-scoped checklist item below, a
 - [x] Record which handshake path succeeded as provenance on the result
 - [x] `TOOL_SNAPSHOT.spec_revision` (already captured per P0-01) reflects whichever revision
       was actually negotiated, regardless of which handshake produced it
-- [ ] Re-run against a real `2026-07-28` server once one exists in the wild, not just a
+- [x] Re-run against a real `2026-07-28` server once one exists in the wild, not just a
       hand-built fixture, before trusting this at census scale — **re-scoped 2026-10-07 by
       O-01's spec re-check** (see that section, and
-      [`prior-art-resurvey-2026-10.md`](prior-art-resurvey-2026-10.md) §1.4). The blocker
-      recorded here no longer holds: three of five well-known public endpoints answered
-      `server/discover` correctly on 2026-10-07, so a test target exists today. The box stays
-      unchecked for a harder reason — the fallback's request shape, response parsing,
-      post-handshake `tools/list` params and HTTP headers are each wrong against the shipped
-      spec, and on the HTTP transport the fallback branch is never reached at all. Running it
-      against a real server now would simply fail, so the fix comes first; this item then
-      becomes real verification rather than a smoke test.
+      [`prior-art-resurvey-2026-10.md`](prior-art-resurvey-2026-10.md) §1.4), then
+      **discharged 2026-10-08 by [P0-11](#p0-11-correct-dual-era-discovery-for-mcp-2026-07-28)**,
+      which replaced this fallback rather than fixing it in place. Closed by that task, not by
+      this one: the code P0-09 shipped could not have passed. The blocker recorded here had
+      already stopped holding (three of five well-known public endpoints answer
+      `server/discover` today), and the box stayed unchecked for the harder reason that the
+      fallback's request shape, response parsing, post-handshake `tools/list` params and HTTP
+      headers were each wrong against the shipped spec, with the HTTP branch unreachable
+      besides. P0-11 corrected all five and verified against three live modern-capable hosts
+      at connect level, and it carries a replay test over a real captured `DiscoverResult` so
+      the verification is permanent rather than a one-off smoke run.
+
+**Superseded 2026-10-08.** The caveat above was not merely incomplete — the extrapolated
+shape is **confirmed wrong**, on four axes plus an unreachable fifth, and the implementation
+this entry describes has been replaced by P0-11. Recorded here rather than quietly rewritten,
+because the failure mode is the instructive part: a wire format inferred from prose and
+shipped with a fake built to match the inference will pass its own tests and still not work
+against any real server. P0-09's HTTP fallback test passed only because its fake answered
+`-32601` behind an HTTP **200**, which a conformant `2026-07-28` server must not do. What
+P0-09 did get right is kept: the narrow fallback trigger (connection-level failures must never
+provoke a retry) survives unchanged into P0-11, with its regression test.
 
 ### P0-10 Census evidence persistence, server-weighted metrics, offline re-derivation
 
@@ -924,6 +937,387 @@ Deliberately **deferred**, recorded here rather than left in a review nobody rea
   failures — a host problem misread as an ecosystem finding, which is the exact misattribution
   this task's provenance work exists to prevent. A sweep interrupted this way should be
   discarded, not published.
+
+### P0-11 Correct dual-era discovery for MCP `2026-07-28`
+
+**Depends on:** P0-01, P0-09, O-01
+**Exit:** `DiscoveryClient` discovers a conformant `2026-07-28` server, a legacy server, and a
+dual-era server, choosing the era from what the server actually answers; the HTTP failure
+taxonomy keeps its July meaning; provenance records what was offered, what was chosen, and why
+any fallback was taken.
+**Status:** Done — [ADR-013](adr/013-era-negotiation.md). `crates/discovery` gains
+`src/era.rs` (new) and rewrites `src/client.rs` and `src/transport.rs`;
+`xtask/src/{census_report.rs,probe_stage1.rs}` absorb the new error variant and the era
+provenance. P0-09's fallback is replaced rather than patched, because
+[`prior-art-resurvey-2026-10.md`](prior-art-resurvey-2026-10.md) §1.4 found it wrong on four
+independent axes and *unreachable* on a fifth.
+
+**What was actually broken.** P0-09's `server/discover` sent `initialize`-shaped top-level
+params and no `_meta`; it parsed `result.protocolVersion`, which a `DiscoverResult` does not
+have, so every successful probe would have ended in
+`Protocol("handshake result missing protocolVersion")`; it sent the post-handshake
+`tools/list` with `params: {}` where `2026-07-28` requires `_meta` on **every** request; and it
+sent neither `MCP-Protocol-Version` nor `Mcp-Method` on the modern path. Over HTTP none of
+that was even reachable: a conformant modern-only server answers the legacy `initialize` with
+HTTP 400, `ureq` turned that into `DiscoveryError::Transport` (because `http_status_as_error`
+defaults `true`), and `is_initialize_unavailable` deliberately excluded `Transport`. P0-09's
+own HTTP fallback test passed only because its fake returned `-32601` behind an HTTP **200**,
+which a `2026-07-28` server must not do.
+
+**The algorithm now.** Modern-first, as the spec's own backward-compatibility sections
+prescribe: `server/discover` with the full `_meta` block and (over HTTP) both required headers
+→ a `DiscoverResult` or a recognised modern error means modern and must not be downgraded
+(`-32022` re-chooses from `data.supported`; `-32020`/`-32021` surface as real failures) →
+anything else falls back to `initialize` with the reason recorded. A connection-level failure
+or a non-era-signalling HTTP status is never a fallback trigger, which preserves P0-09's own
+review fix against doubling the cost of unresponsive hosts. Two places where this diverges
+from §1.4, both recorded in ADR-013 §1: a `DiscoverResult` offering only legacy revisions uses
+the legacy handshake at the revision the server named, and an HTTP 404 carrying `-32601`
+(which §1.4 classifies as modern but leaves hanging) stays on the modern path and goes
+straight to `tools/list` — a third `DiscoveryPath`, `modern_without_discover`.
+
+- [x] Request shape: `params` is exactly `{"_meta": {…}}` with the required
+      `io.modelcontextprotocol/protocolVersion` and `…/clientCapabilities` plus optional
+      `…/clientInfo`, on **both** `server/discover` and `tools/list` — asserted field by field
+      in `modern_params_carry_only_a_meta_block_with_the_three_required_members` and, over the
+      wire, in `a_modern_only_http_server_is_discovered_through_server_discover`. The stdio
+      fake answers `-32021` to any modern request whose `_meta` is missing or wrong, so a
+      regression that dropped it fails loudly instead of being shrugged off by the fake.
+- [x] Response parsing: `supportedVersions` intersected with a closed client-side allowlist
+      (`era::CLIENT_SUPPORTED_REVISIONS`, five revisions, ordered). An offer with no member of
+      that list is a **discovery failure, not a downgrade**
+      (`supported_versions_offering_nothing_implemented_fails_without_a_second_request`,
+      `an_unsupported_version_error_offering_nothing_implemented_fails_rather_than_downgrading`
+      — the stdio fake answers `initialize` *successfully* in that mode on purpose, so a
+      client that wrongly downgraded would pass and the assertion catches it).
+- [x] HTTP headers: `MCP-Protocol-Version` and `Mcp-Method` on every modern POST including the
+      first, equal to the body; neither on a legacy request (`Mcp-Method` is undefined before
+      `2026-07-28`, and announcing a revision the server just refused invites an outright
+      rejection); `Mcp-Name` never sent, since it is required only for
+      `tools/call`/`resources/read`/`prompts/get`, which this crate must never send. All four
+      asserted from the recorded request headers, including the negative cases.
+- [x] Era classification is a **separate read-only function** over `(status, bytes)`, and
+      `decode_and_validate` is **unmodified**. Forced, not stylistic: that function requires
+      `id.as_u64()` as a deliberate anti-hostile-server measure, and both real 4xx bodies in
+      Appendix A violate it (DeepWiki substitutes the string id `"server-error"`, GitMCP
+      returns `"id": null`). `transport.rs` carries
+      `decode_and_validate_rejects_the_real_4xx_bodies_the_era_classifier_must_read`, which
+      asserts those two bodies *are* rejected there, so the duplication cannot later be
+      mistaken for an oversight and "simplified" away.
+- [x] `http_status_as_error(false)` with the failure taxonomy kept keyed on the status.
+      Mandatory, not optional: `ureq::Error::StatusCode` carries only a number — no response,
+      no body — so a 4xx body is unreachable while the flag is on. Because the flag is
+      agent-wide it also changes `tools/list`, so a new
+      `DiscoveryError::HttpStatus { status, retry_after }` carries the status deliberately and
+      renders byte-identically to what `ureq` used to produce
+      (`http_status_renders_the_same_detail_the_july_census_recorded`). Proven end to end by
+      `an_http_500_on_tools_list_stays_a_status_failure_with_the_july_detail_string` (a 500
+      with an HTML body must stay a status failure, not become `Protocol(…)`) and, on the
+      census side, by `an_http_status_failure_keeps_the_july_transport_category_and_detail_string`
+      over six statuses. **This is the test the whole change hinges on**: without it July's
+      435 `transport` / 312 `protocol` split silently stops meaning what it meant.
+- [x] `429` as its own failure category, never pooled into `transport` —
+      `a_429_is_its_own_failure_category_and_never_pooled_into_transport`, plus
+      `an_http_429_is_captured_with_retry_after_and_never_triggers_a_fallback`, which also
+      pins that a throttled host costs **exactly one request**. `Retry-After` is captured
+      (sanitised, length-bounded) so a sweep skips the host; nothing retries within a run.
+      `http_status_category` is shared between `census_report` and `probe_stage1` so the two
+      sweeps cannot disagree about what a throttled host is called.
+- [x] Era provenance on every result — a security requirement, not bookkeeping. A hostile
+      server can choose which era the harness records about it by stalling or answering with
+      garbage; no security control is relaxed by that downgrade (the four annotations are
+      byte-identical across revisions and P0-02's pin is revision-independent), but P0-10
+      publishes `discovery_path` distributions and a server must not skew them invisibly. So
+      `EraProvenance` records the policy (`modern_first`), the offered revisions, the chosen
+      revision and a closed-taxonomy `FallbackReason`; `census_report` writes all four per
+      server and counts policies and reasons corpus-wide, so a coordinated attempt to steer
+      the era distribution appears as a spike in one reason instead of an unexplained
+      histogram shift. The policy field exists because initialize-first and modern-first
+      classify a *dual-era* server differently, so the two are not poolable — the discipline
+      ADR-002 already imposes across oracles.
+- [x] `pin_tools` needed **no change**, and that is now proven rather than asserted.
+      `2026-07-28` adds three required fields to every result (`resultType`, `ttlMs`,
+      `cacheScope`), all outside the per-tool `(name, inputSchema, annotations, description)`
+      preimage. `tests/era_pin.rs` pins both directions:
+      `a_tool_pin_is_identical_across_the_legacy_and_modern_result_shapes` (same tools, two
+      genuinely different response bodies, identical per-tool and server pins — otherwise
+      every server in the corpus would look rug-pulled the day it upgraded its SDK) and
+      `a_change_inside_the_pinned_tuple_still_moves_the_pin_in_the_modern_shape` (so the first
+      test cannot pass by the pin having gone insensitive).
+- [x] Field renamed `initialize_raw` → `handshake_raw`, with every reference updated. P0-09
+      kept the old name as a "disclosed minor wart"; under modern-first those bytes are
+      usually *not* `initialize` bytes, and a field name that says otherwise is a trap for
+      anyone reading evidence back out of the store. The results-file key was already
+      `handshake_raw`, so no published shape changed.
+
+**Live verification — 2026-10-08, five hosts, seven requests, unrepeatable so recorded in
+full.** Policy enforced, matching the O-01 probe's: **connect-level only** (`server/discover`
+and `initialize` — no `tools/list` against any third party, no tool call), no credentials, the
+harness's own identifying `User-Agent`, **at most two requests per host** (budget was three),
+and **1.2 s between every request** (the floor was 500 ms; the O-01 probe lost a transcript to
+a 429 caused by three probes landing inside one second). No host returned 429 and none
+misbehaved, so nothing was retried. The bytes sent were not hand-written: they were captured
+off the wire from the real client against a local listener and replayed verbatim by `curl`,
+precisely because P0-09's error was writing a payload from a schema reading instead of
+checking one.
+
+Sent (modern probe), verbatim, with headers `Content-Type: application/json`,
+`Accept: application/json, text/event-stream`, `MCP-Protocol-Version: 2026-07-28`,
+`Mcp-Method: server/discover`,
+`User-Agent: mcp-conformance-harness/0.1.0 (annotation conformance research; read-only discovery; contact: see repository)`:
+
+```json
+{"jsonrpc":"2.0","id":0,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/clientCapabilities":{},"io.modelcontextprotocol/clientInfo":{"name":"mcp-conformance-harness","version":"0.1.0"},"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}
+```
+
+Sent (legacy probe), same first two headers and `User-Agent`, and — as the implementation
+requires — **no** `MCP-Protocol-Version` and **no** `Mcp-Method`:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{},"clientInfo":{"name":"mcp-conformance-harness","version":"0.1.0"},"protocolVersion":"2025-11-25"}}
+```
+
+**The server-authored strings from this run are deliberately not quoted here.** The
+`serverInfo` identities and the two JSON-RPC error `message` strings are recorded verbatim in
+[`prior-art-resurvey-2026-10.md`](prior-art-resurvey-2026-10.md) **Appendix A.7**, which holds
+this class of material under its own redaction policy. The reason is the mechanism, not the
+payload: these particular strings are benign, but this file is auto-imported into every
+session and the *server* chooses which of its errors looks interesting enough to be worth
+quoting. This section was already careful with `instructions`; the same care now covers the
+fields beside it.
+
+| host | probe | status | content-type | outcome, as this client classifies it |
+|---|---|---|---|---|
+| `docs.mcp.cloudflare.com/mcp` | modern | 200 | `application/json` | `DiscoverResult`, `supportedVersions:["2026-07-28"]`, no `instructions` → `server_discover`, revision `2026-07-28` |
+| `mcp.context7.com/mcp` | modern | 200 | `application/json` | `DiscoverResult`, same `supportedVersions`, **plus `instructions`** → `server_discover` |
+| `huggingface.co/mcp` | modern | 200 | `application/json` | `DiscoverResult`, same `supportedVersions`, `capabilities.extensions["io.modelcontextprotocol/skills"]`, **plus `instructions`** → `server_discover` |
+| `mcp.deepwiki.com/mcp` | modern | 400 | `application/json` | a `-32600` error — none of the three `2026-07-28` codes — naming its own supported revisions, with the string id `"server-error"` → `non_modern_error_body`, fall back |
+| `mcp.deepwiki.com/mcp` | legacy | 200 | **`text/event-stream`** | `protocolVersion:"2025-11-25"`, plus `instructions` → SSE, out of this transport's scope |
+| `gitmcp.io/docs` | modern | 400 | **`text/plain;charset=UTF-8`** | a `-32000` error complaining of a missing session header, with `id: null` → `non_modern_error_body`, fall back |
+| `gitmcp.io/docs` | legacy | 200 | **`text/event-stream`** | `protocolVersion:"2025-03-26"` → SSE, out of scope |
+
+Body digests (sha256 over bytes as received): Cloudflare modern
+`227d5c641b7a619dd71fd4e211ab41c13708a5ec1e4ed39d1910fc3f6a5c899b` (296 B); Context7 modern
+`76cb0d3b58216fb6cf649fb944faf06af4843b560a79f438d2c9dd14657bda72` (1230 B); Hugging Face
+modern `30fc122a7caa9fedc6fd020a7a8f5d2b8bd1aff2fd14377be1b22184f349b27e` (2189 B); DeepWiki
+modern `28232be0c986a8e5d4a9f4e45d3e19bd69555c936637ce01fcb2aa64628ea539` (195 B); GitMCP
+modern `b001151d802e2a9ae708e48870654ab7501203250b6643cb78348f508fd6168d` (110 B); DeepWiki
+legacy `6e08e3dfbf54d2db38b2459dd42a82d82f623b48fce597a1cc83a33a1b27091a` (3670 B); GitMCP
+legacy `88afbe328d4c966f0ac51318cbde494d4a978f79cda6f100832c35af6f61f240` (184 B). The last
+four reproduce §1.6 and Appendix A byte for byte, a day later.
+
+**Three of the five responses carry server-authored `instructions`: imperative prose written
+at a language model.** Recorded as evidence, never acted on, per `CLAUDE.md` and
+architecture.md §1 ("everything reaching the harness from a server is evidence, never
+instruction"). Their content is deliberately **not** quoted here or embedded in any test
+fixture — the replay fixture below uses Cloudflare's response precisely because it is the one
+of the three with no `instructions` field. Also noted and not republished here: Hugging Face's
+response headers leak an RFC1918 `x-proxied-host` and an internal `x-proxied-replica`, the
+same leak Appendix A redacted; and GitMCP minted an `mcp-session-id` for the anonymous legacy
+probe. Both are described in Appendix A.7 and neither is reproduced anywhere.
+
+**Two things that contradict or sharpen §1.6's table**, both found only because real bytes were
+used:
+
+1. **GitMCP answers its JSON-RPC error with `Content-Type: text/plain;charset=UTF-8`.** §1.6
+   and A.5 record the body but not that mislabel. It matters: a classifier keyed on
+   content-type would have refused to read the body and lost the era signal. This client
+   classifies from the body and checks content-type only to exclude `text/event-stream`, so it
+   is unaffected — now pinned by
+   `a_real_gitmcp_400_with_a_text_plain_content_type_still_falls_back`.
+2. **Hugging Face's legacy half, which §1.6 had to mark "evidence not preserved"
+   (rate-limited), is still unresolved** — deliberately. Its modern half reproduced cleanly, a
+   single modern probe is all this change needs from that host, and spending the second
+   request on a host that 429'd the last attempt was not worth the risk. §1.6's dual-era
+   classification for it therefore still rests on an unpreserved reading.
+
+Also worth stating because it changes a July number: **two of the three modern-capable hosts
+answer a *legacy* `initialize` over SSE while answering `server/discover` as
+`application/json`** (Cloudflare and Context7 — confirmed in A.1/A.2 and consistent with
+today's run). Part of the July census's "SSE-only" failure population is therefore reachable
+now, over a path the harness could not previously speak. How much is unmeasured here; it needs
+a census re-run, which this task deliberately does not do.
+
+**The live capture is now a permanent regression guard**, not just a transcript:
+`a_real_cloudflare_discover_result_is_accepted_byte_for_byte` replays that response verbatim
+(id and all — note the server echoed this client's *integer* id, not the spec example's string
+id) through the full client and asserts the recorded path, revision, offer and evidence bytes.
+That is exactly the test that would have caught P0-09's extrapolation.
+
+**Test suite.** `crates/discovery` 77 tests (45 unit — 18 of them the `era` module — plus 17
+HTTP integration, 13 stdio integration, 2 pin); `xtask` 42 lib + 6 purity; `store` 31.
+Workspace: **306 passed, 0 failed** (294 before the review fixes below; baseline 253 at
+`f839388`). All four gates clean:
+`cargo build --workspace`, `cargo test --workspace`,
+`cargo clippy --workspace --all-targets -- -D warnings`, `cargo purity`
+(`normalise`/`verdict` closures untouched — `discovery` was never on the allowlist).
+
+---
+
+#### Review findings, addressed after the two mandated passes
+
+Four blocking, each now with a test; the ADR records the decisions
+([ADR-013](adr/013-era-negotiation.md) §§1, 6–9).
+
+- **A 25-byte response could forge an unnegotiated revision.** HTTP 404 plus the body
+  `{"error":{"code":-32601}}` — no `jsonrpc` member, no `id`, nothing requiring a JSON-RPC
+  implementation — was recorded as `modern_without_discover` with
+  `negotiated_spec_revision: "2026-07-28"`, `offered_revisions: []` and no fallback reason;
+  and `discovery::negotiated_spec_revision()` *errors* on that same stored evidence, so the
+  published claim could not be contradicted offline. Two fixes, both landed: a modern
+  classification now requires a well-formed JSON-RPC envelope
+  (`era::classify_discover_outcome`), and that path no longer fills
+  `negotiated_spec_revision` at all — it is `Option<String>`, `None` here, with a new
+  `EraProvenance::revision_source` of `negotiated | assumed` saying which kind of value
+  `chosen_revision` is. ADR-013 §7.
+- **The 404/`-32601` trap on legacy servers is closed.** `-32601` → HTTP 404 is a documented
+  JSON-RPC-over-HTTP convention, not a `2026-07-28` invention, so a legacy server presenting
+  it was locked onto the modern path and never offered an `initialize` — failing discovery
+  where P0-09 succeeded. (Exposure, sized from the committed July file: 60 of 1,000 Class B
+  servers returned `http status: 404`, so 0–60 per 1,000 and *undeterminable*, because that
+  sweep predates evidence persistence.) A failed `tools/list` after
+  `modern_without_discover` now retries the legacy handshake, recorded as
+  `FallbackReason::ModernWithoutDiscoverToolsListFailed`; every *confirmed* modern path still
+  propagates its failure untouched. ADR-013 §6.
+- **The bytes that justify an era classification are persisted.** `Discovery::probe_raw`
+  (`ProbeEvidence`) carries the probe response, `census_report::persist` writes it as a third
+  evidence blob, and `era_provenance.probe_raw` carries `{state, digest, bytes}`. Where no
+  bytes existed the absence is *recorded* — `no_response` or `body_not_read` — so "no
+  evidence" is distinguishable from "evidence not kept", which nothing may now produce. The
+  attacker gain this closes is sharper than hiding modern capability: a dual-era server's two
+  handlers may expose different tool sets with different annotations, so garbage on the probe
+  *steers* the harness onto the handler the server picked. ADR-013 §8.
+- **ADR-013's own justification inverted a normative MUST**, and so did the two places in the
+  code echoing it. `server/discover` is MAY-for-clients but **MUST-for-servers**, so there is
+  no such thing as a conformant "modern server that did not implement the discovery method" —
+  a 404/`-32601` is a non-conformant server. Corrected in `docs/adr/013-era-negotiation.md`,
+  `crates/discovery/src/era.rs` and `crates/discovery/src/client.rs`, with the defensible
+  argument substituted and stated plainly as a spec misreading of the same class as P0-09's.
+
+Also fixed in the same pass:
+
+1. **Server prose no longer reaches a committed results file from the first request.** A
+   pre-handshake `-32020`/`-32021` body carried up to 512 characters of server-authored text
+   into `results/census/*.json`. `DiscoverClass::ModernFatal` now carries `message_sha256`;
+   the code and the digest are published, the text stays in the uncommitted evidence blob.
+   ADR-013 §9.
+2. **A revision string is bounded and shape-gated where it leaves `discovery`**, not per
+   consumer — `era::bounded_revision`, used by both the live handshake and the offline
+   re-derivation so they cannot drift. `SERVER.spec_revision` and `VERDICT.protocol_version`
+   gained `CHECK (length(...) <= 64)` as a backstop, with a both-directions test; the
+   committed `track_b_probe.sqlite3` was checked against the new bound (max length 10 in both
+   columns) before the constraint landed, and `store::db`'s migration comment discloses that
+   editing `0001` in place leaves that file on the older schema text.
+3. **The `Retry-After` suffix is appended for `429` only.** It was appended for any status
+   carrying the header, so a 503 recorded `http status: 503 (retry-after: 30)` — a detail July
+   never produced. Both call sites now share `census_report::http_status_detail`, and the new
+   test passes a non-`None` value for seven statuses; every previous test passed `None`, which
+   is why none of them could catch it.
+4. **A missing revision gets its own census bucket, `<none>`**, instead of being filed under
+   `<unparseable>` — nothing was unparseable; there was no revision. It is specifically the
+   `modern_without_discover` path that lands there, which is why this interacts with the first
+   blocking fix.
+5. **The stdio exit-on-unknown-method regression is fixed, and the silent case disclosed.**
+   See the limitations list below.
+6. **A spawned child's stderr is piped, bounded and escape-stripped** rather than inherited.
+   See the limitations list below.
+7. **The live-verification table above no longer quotes server-authored prose** — moved to
+   `prior-art-resurvey-2026-10.md` Appendix A.7.
+8. **The commonest legacy HTTP shape has a test.** All four HTTP fallback tests used HTTP
+   400; HTTP **200** plus `-32601` — what Cloudflare actually does and what most legacy SDK
+   servers do — was covered only by an `era.rs` unit test and over stdio.
+9. Smaller: `offered_revisions` is deduplicated (200 copies of one revision wrote 64
+   identical strings into published provenance); `OnlyLegacyRevisions` is split into
+   `OnlyLegacyRevisionsOffered` and `OnlyLegacyRevisionsAfterUnsupportedVersion`, two
+   distinct server behaviours that shared one code; the `fallback_reason` distribution is
+   seeded with every reason plus `none` so an absent bucket cannot be read as a zero one;
+   `architecture.md` §9 and `HANDOFF.md` no longer name the renamed `initialize_raw`; and the
+   report-test fixture now gives each path the provenance it can actually have, so the `none`
+   fallback bucket that every real modern success produces is finally exercised.
+
+**⚑ Flagged for the next ≥1,000-host sweep, recorded and not fixed here: the conduct
+disclosure, with its size.** Modern-first sends an **unsolicited pre-handshake request to
+every host in the corpus**, roughly 75% of which is legacy, taking those hosts from 3 requests
+to 4 — and `xtask/src/census_stage1.rs` still has **no intra-host delay**, so a host's 2–4
+requests go out back to back with zero spacing. This project's own O-01 probe lost a
+transcript to a 429 caused by three requests inside one second, and P0-11's live verification
+imposed a 1.2 s floor **by hand** that the sweep code does not have. Landing the intra-host
+delay and the eTLD+1 request budget is a **prerequisite** for the next ≥1,000-host sweep, not
+a nice-to-have: it is what makes "polite client" true rather than aspirational. Note also that
+the defence of modern-first rests on *"the newer revision of the same protocol prescribes this
+ordering"*, **not** on a MUST — see the fourth blocking finding above.
+
+**⚑ Three further findings recorded in [ADR-013](adr/013-era-negotiation.md)'s "Flagged"
+section rather than fixed:** the `{400,404}` × SSE taxonomy asymmetry (lands in `protocol`
+where July said `transport`, and making it a status failure would remove the fallback for a
+dual-era server whose probe answers 400 + SSE; the security pass found no security
+consequence, since both labels are failures); the latent `chosen ∉ offered` inconsistency in
+`renegotiate_after_unsupported_version`, unreachable while one modern revision is
+allowlisted; and `era_provenance.policy` being length-bounded on read-back but not
+re-validated against a closed set, unlike every other field in that block — not
+server-reachable on the live path today.
+
+---
+
+**Limitations, disclosed rather than hidden:**
+
+- **`tools/list` pagination is still not followed**, in either era. `ListToolsResult` is a
+  `PaginatedResult` and `nextCursor` is ignored, so tools on later pages are silently missing
+  from P0-06/P0-07 counts. Real, pre-existing, out of scope here, and its own task.
+- **Modern-first costs every legacy server one extra round trip.** The spec accepts this. The
+  populations that dominate census failures are unaffected — a connection-level failure and any
+  non-era-signalling status (401 above all) still cost exactly one request, asserted by
+  request-count tests — but a full Class B sweep will send more requests than July's did.
+- **A stdio server that *exits* on an unknown method is discovered again — this was the worse
+  of the two cases and it was undisclosed.** Measured: such a server gave `Broken pipe` and
+  **could not be discovered at all**, where P0-09 discovered it fine, because the probe
+  destroyed the channel and the fallback reuses the same child. Fixed: the legacy fallback
+  re-spawns the child, once, and only when the probe produced **no bytes whatsoever**
+  (`ProbeAbsence::NoResponse`) — so a server that *answered* the probe is never re-spawned,
+  which would otherwise double the cost of every legacy stdio server in a sweep. Both
+  directions are tested (`a_stdio_server_that_exits_on_an_unknown_method_is_still_discovered`,
+  `a_stdio_server_that_answers_the_probe_is_not_respawned_for_the_fallback`).
+- **The *silent* stdio server is improved but not solved, and this is the precise
+  disclosure.** It still spends the entire watchdog before the fallback; what the re-spawn
+  fixes is that the fallback then *succeeds* instead of also failing on the killed child.
+  §1.4(e)'s short dedicated probe read deadline remains the real fix, and `StdioTransport`
+  still has no read deadline (adding one needs a reader thread). At 45 s per host, and with N
+  registry entries able to point at one implementation, the cost is 45N seconds. **Sizing the
+  exit-on-unknown-method and silent-on-unknown-method populations is therefore a prerequisite
+  for the next Class A sweep**, not a curiosity: "every mainstream SDK answers with a JSON-RPC
+  error, so the population is believed empty" was believed, never measured, and the exit case
+  above shows the belief was at least partly wrong.
+- **A spawned child's stderr is piped, bounded and escape-stripped rather than inherited.**
+  Previously `Stdio::inherit()`, and under Stage 2 `docker run` proxies the container's
+  stderr into it — so any Class A registry package could emit unbounded unsanitised bytes
+  (ANSI/OSC escapes, prose aimed at a model) onto the sweep console, which `CLAUDE.md` names
+  explicitly as a surface this project's workflow has a model read. Now capped at 8 KiB per
+  child, filtered to printable ASCII and tab, and prefixed `[server stderr]`, with draining
+  continuing past the cap so a full pipe never blocks the child. `Stdio::null()` was
+  rejected deliberately: P0-06's `EBADENGINE` and wrong-entry-point diagnoses came out of
+  exactly these bytes, so silencing them has a real cost. The residual, stated: the *prose*
+  half is inherent to keeping that diagnostic value — only the escape-sequence and volume
+  halves are removed, and the marker is what makes a line's provenance visible.
+- **`modern_without_discover` records a null `negotiated_spec_revision` on the live record as
+  well as on re-derivation**, since the review fix above. Its handshake evidence is a 404
+  error body carrying no revision, so `negotiated_spec_revision()` cannot re-derive one — and
+  now the live field agrees instead of claiming one. `era_provenance.chosen_revision` holds
+  the value the client actually put on the wire, labelled `revision_source: assumed`, and the
+  census revision distribution files it under `<none>`.
+- **The modern path's revision is re-chosen from the allowlist on re-derivation, not read out
+  of the bytes.** Adding a revision to `CLIENT_SUPPORTED_REVISIONS` could therefore change what
+  a re-derivation reports for an old `DiscoverResult` that offered several. Census provenance is
+  outside ADR-005's pure, ruleset-versioned derivation path, so this is a documented property
+  rather than a violated invariant — and it is why the list is ordered and append-averse.
+- **The `-32022` re-negotiation branch that retries `server/discover` at a second modern
+  revision is unreachable today** and therefore untested against a real server: the allowlist
+  holds exactly one modern revision, so the only live `-32022` paths are "offers a legacy
+  revision" (tested) and "offers nothing we implement" (tested). Written out rather than left
+  as a hole for when a second modern revision ships.
+- **No census sweep was run.** Nothing in `results/` changed. The failure-category split, the
+  `rate_limited` bucket and the era provenance are all proven by test, not yet by corpus data.
+- **The two carry-forward items from §1.4.1 are still carry-forward:** an intra-host request
+  delay and an eTLD+1 request budget for the census re-run.
 
 ---
 
@@ -2427,6 +2821,14 @@ revision. Recommend a follow-up task (not created here, since O-01 is check-and-
 teach discovery to attempt `server/discover` when `initialize` gets no response, and record
 which path succeeded as provenance, mirroring the Stage 2 bare-host-vs-containerized
 provenance pattern already used in the Phase 0 staging note.
+
+**⚑ discharged 2026-10-08 by [P0-11](#p0-11-correct-dual-era-discovery-for-mcp-2026-07-28).**
+The recommended follow-up became P0-09, whose extrapolated shape was wrong; P0-11 is the
+corrected implementation, verified against three live `2026-07-28`-capable public endpoints at
+connect level. The ordering recommended above also inverted on the spec's own authority:
+`server/discover` is the *probe* and `initialize` the fallback, and the fallback must not be
+keyed on one error code. Era selection, the version allowlist and the provenance now recorded
+are in [ADR-013](adr/013-era-negotiation.md). O-01 itself stays open and standing.
 
 **Tool annotations themselves (the four this project verifies): unchanged.** Confirmed
 directly against `ToolAnnotations` in the same draft `schema.ts` (lines ~1899–1939, GitHub

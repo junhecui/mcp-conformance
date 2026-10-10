@@ -83,12 +83,29 @@ fn discover(url: &str) -> DiscoverOutcome {
         Ok(discovery) => match parse_tools(&discovery.tools_list_raw) {
             Ok(tools) => DiscoverOutcome::Success {
                 tools_list_raw: discovery.tools_list_raw,
-                spec_revision: discovery.negotiated_spec_revision,
+                // `None` means no revision was *negotiated* — the `modern_without_discover`
+                // path assumed one, or the server's echo was not storable. Both columns this
+                // value reaches are `NOT NULL` — `server.spec_revision` here, and through
+                // `run_and_record` every `verdict.protocol_version` this sweep writes — so
+                // the absence is written as the empty string rather than as a revision
+                // nobody negotiated; `era_provenance.chosen_revision` is where the
+                // assumed value lives (P0-11, `discovery::RevisionSource`). The string
+                // itself is already bounded to `era::MAX_REVISION_CHARS` by `discovery`,
+                // which is what the `CHECK(length(...) <= 64)` on this column backstops.
+                spec_revision: discovery.negotiated_spec_revision.unwrap_or_default(),
                 tools,
             },
             Err(e) => DiscoverOutcome::Failed { category: "tool_parse", detail: e.to_string() },
         },
         Err(DiscoveryError::Transport(msg)) => DiscoverOutcome::Failed { category: "transport", detail: msg },
+        // P0-11: a non-2xx status no longer arrives as a `Transport` error (reading a 4xx
+        // body is required by the `2026-07-28` era algorithm, which needs
+        // `http_status_as_error(false)`). Categorised through the same helper the census
+        // sweeps use, so `rate_limited` means the same thing in both.
+        Err(DiscoveryError::HttpStatus { status, retry_after }) => DiscoverOutcome::Failed {
+            category: crate::census_report::http_status_category(status),
+            detail: crate::census_report::http_status_detail(status, retry_after.as_deref()),
+        },
         Err(DiscoveryError::Io(e)) => DiscoverOutcome::Failed { category: "io", detail: e.to_string() },
         Err(DiscoveryError::Protocol(msg)) => DiscoverOutcome::Failed { category: "protocol", detail: msg },
         Err(DiscoveryError::ServerError { code, message }) => {

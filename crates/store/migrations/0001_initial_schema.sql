@@ -19,7 +19,15 @@ CREATE TABLE server (
     source_uri            TEXT NOT NULL,
     containability_class  TEXT NOT NULL
                            CHECK (containability_class IN ('A', 'B', 'unclassifiable')),
-    spec_revision         TEXT NOT NULL
+    -- Bounded, not merely typed. On the legacy `initialize` path a spec revision is
+    -- server-supplied free text (the server echoes its own `protocolVersion`), and this
+    -- column plus `verdict.protocol_version` are where that string comes to rest — inside a
+    -- SQLite file that gets committed (`results/conformance/track_b_probe.sqlite3`).
+    -- `discovery::era::bounded_revision` is the primary bound, applied once where the value
+    -- leaves that crate; this is the backstop that makes "unbounded server-authored text in a
+    -- tracked artifact" unrepresentable rather than merely avoided by every caller
+    -- remembering to bound it.
+    spec_revision         TEXT NOT NULL CHECK (length(spec_revision) <= 64)
 );
 
 CREATE TABLE tool_snapshot (
@@ -115,7 +123,9 @@ CREATE TABLE verdict (
     reason_code       TEXT,
     oracle            TEXT NOT NULL CHECK (oracle IN ('kernel_changeset', 'protocol_probe')),
     ruleset_version   TEXT REFERENCES ruleset (ruleset_version),
-    protocol_version  TEXT NOT NULL,
+    -- Bounded for the same reason as `server.spec_revision` above: this is where a
+    -- server-echoed revision string ends up in a committed artifact.
+    protocol_version  TEXT NOT NULL CHECK (length(protocol_version) <= 64),
     -- §12 item 6: added now, ahead of Phase 5, per the disclosure workflow (P5-03).
     embargo_state     TEXT NOT NULL DEFAULT 'none'
                        CHECK (embargo_state IN ('none', 'embargoed', 'disclosed')),

@@ -158,7 +158,8 @@ Exit: census runs persist raw evidence, report server-weighted metrics and spec-
 provenance, and every number can be re-derived offline from stored bytes.
 
 Original scope (audit the WIP branch against it):
-1. Persist `initialize_raw` (may hold `server/discover` bytes — see `discovery_path`) and
+1. Persist `handshake_raw` (named `initialize_raw` until P0-11 renamed it; may hold
+   `server/discover` bytes — see `discovery_path`), `probe_raw` (P0-11) and
    `tools_list_raw` for every successful discovery via `store::BlobStore`; digests on each
    server record. Store root defaults to `results/census/evidence/`, overridable. JSON must stay
    useful even if blobs aren't committed.

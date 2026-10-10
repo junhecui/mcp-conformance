@@ -37,7 +37,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use census::coverage::{self, AnnotationTally, Tally};
 use datamodel::{Annotation, Digest};
-use discovery::{Discovery, DiscoveryError, DiscoveryPath};
+use discovery::{
+    Discovery, DiscoveryError, DiscoveryPath, EraProvenance, FallbackReason, ProbeAbsence,
+    ProbeEvidence, RevisionSource,
+};
 use serde_json::{Map, Value, json};
 use store::{BlobStore, StoreError};
 
@@ -80,6 +83,7 @@ const SERVER_NON_IDENTITY_KEYS: &[&str] = &[
     "failure_category",
     "failure_detail",
     "discovery_path",
+    "era_provenance",
     "negotiated_spec_revision",
     "evidence",
     "tool_count",
@@ -89,12 +93,192 @@ const SERVER_NON_IDENTITY_KEYS: &[&str] = &[
     "annotation_tally",
 ];
 
+/// How the era was negotiated, as a census observation.
+///
+/// P0-11: a server can steer *which* era the harness records about it, by stalling or by
+/// answering `server/discover` with garbage. Recording only `discovery_path` would make that
+/// influence invisible in published distributions, so the offer, the choice and the fallback
+/// reason travel with every record. Every field is re-validated on read-back, so the bound
+/// holds for a results file this process did not write.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct EraRecord {
+    policy: String,
+    offered_revisions: Vec<String>,
+    chosen_revision: String,
+    /// Whether `chosen_revision` was negotiated with the server or assumed by the client —
+    /// `None` for a record written before this was captured. Without it, a populated
+    /// `chosen_revision` beside an empty `offered_revisions` reads as a contradiction.
+    revision_source: Option<String>,
+    fallback_reason: Option<String>,
+    /// The probe response's evidence — the preimage of the whole era classification.
+    probe: ProbeRecord,
+}
+
+/// The `server/discover` probe's evidence, as a census observation.
+///
+/// Three states, and the third is why this is a type rather than an `Option<Digest>`: "no
+/// bytes ever existed" and "this record predates probe persistence" are different claims
+/// about the evidence store, and neither is "bytes existed and were thrown away" — which
+/// nothing may now produce (architecture.md §6 invariant 2: a derived field needs a
+/// replayable preimage).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) enum ProbeRecord {
+    /// The probe bytes are in the evidence store under this digest.
+    Captured(Digest),
+    /// No bytes were ever read, for the stated reason.
+    Absent(ProbeAbsence),
+    /// Written before P0-11 persisted the probe. A fact about the file, not an error.
+    Unrecorded,
+}
+
+impl ProbeRecord {
+    fn of(evidence: &ProbeEvidence, digest: Option<Digest>) -> Self {
+        match (evidence, digest) {
+            (ProbeEvidence::Captured(_), Some(digest)) => Self::Captured(digest),
+            // `persist` always stores the bytes when there are any, so the `None` arm is
+            // unreachable from a live run; written out rather than unwrapped.
+            (ProbeEvidence::Captured(_), None) => Self::Unrecorded,
+            (ProbeEvidence::Absent(absence), _) => Self::Absent(*absence),
+        }
+    }
+
+    /// Read one back out of an `era_provenance` block, re-validating rather than trusting:
+    /// a digest is parsed strictly before it can name a path inside the store, and an
+    /// unrecognised absence reason is dropped rather than copied through as a new bucket.
+    fn from_json(value: Option<&Value>) -> Self {
+        let Some(state) = value.and_then(|v| v.get("state")).and_then(Value::as_str) else {
+            return Self::Unrecorded;
+        };
+        if state == "captured" {
+            return value
+                .and_then(|v| v.get("digest"))
+                .and_then(Value::as_str)
+                .and_then(Digest::from_hex)
+                .map_or(Self::Unrecorded, Self::Captured);
+        }
+        ProbeAbsence::parse(state).map_or(Self::Unrecorded, Self::Absent)
+    }
+
+    /// This record as JSON. `bytes` is re-read from the store by the caller, so it is
+    /// recomputed from the evidence on every derivation rather than carried through.
+    fn to_json(&self, bytes: Option<usize>) -> Value {
+        match self {
+            Self::Captured(digest) => json!({
+                "state": "captured",
+                "digest": digest.to_string(),
+                "bytes": bytes,
+            }),
+            Self::Absent(absence) => json!({ "state": absence.as_str() }),
+            Self::Unrecorded => json!({ "state": "unrecorded" }),
+        }
+    }
+
+    fn digest(&self) -> Option<&Digest> {
+        match self {
+            Self::Captured(digest) => Some(digest),
+            Self::Absent(_) | Self::Unrecorded => None,
+        }
+    }
+}
+
+/// Cap on `offered_revisions` as re-read from a results file, matching the cap
+/// `discovery::era` applies when observing. Each entry is additionally required to be
+/// revision-shaped, which bounds it to ten bytes.
+const MAX_OFFERED_REVISIONS: usize = 64;
+
+impl EraRecord {
+    fn of(provenance: &EraProvenance, probe: ProbeRecord) -> Self {
+        Self {
+            policy: provenance.policy.to_string(),
+            offered_revisions: provenance.offered_revisions.clone(),
+            chosen_revision: provenance.chosen_revision.to_string(),
+            revision_source: Some(provenance.revision_source.as_str().to_string()),
+            fallback_reason: provenance.fallback_reason.map(|r| r.as_str().to_string()),
+            probe,
+        }
+    }
+
+    /// What a record written before P0-11 implies: the era was not recorded, so it must not
+    /// be reported as anything in particular.
+    fn unrecorded() -> Self {
+        Self {
+            policy: "unrecorded".into(),
+            offered_revisions: Vec::new(),
+            chosen_revision: String::new(),
+            revision_source: None,
+            fallback_reason: None,
+            probe: ProbeRecord::Unrecorded,
+        }
+    }
+
+    /// Read one back out of a server record, re-applying every bound rather than trusting
+    /// the file. An absent block is [`Self::unrecorded`]; a malformed field degrades to its
+    /// empty value rather than failing the whole re-derivation.
+    fn from_record(value: Option<&Value>) -> Self {
+        let Some(value) = value else { return Self::unrecorded() };
+        let text = |key: &str| {
+            value.get(key).and_then(Value::as_str).map(|s| bounded(s, MAX_REVISION_CHARS))
+        };
+        Self {
+            policy: text("policy").unwrap_or_else(|| "unrecorded".into()),
+            offered_revisions: value
+                .get("offered_revisions")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .filter(|s| discovery::era::is_revision_shaped(s))
+                        .take(MAX_OFFERED_REVISIONS)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            chosen_revision: text("chosen_revision")
+                .filter(|s| discovery::era::is_revision_shaped(s))
+                .unwrap_or_default(),
+            // Closed taxonomies, both: anything the parser does not recognise is dropped
+            // rather than copied through into a published distribution as a new bucket.
+            revision_source: value
+                .get("revision_source")
+                .and_then(Value::as_str)
+                .and_then(RevisionSource::parse)
+                .map(|s| s.as_str().to_string()),
+            fallback_reason: value
+                .get("fallback_reason")
+                .and_then(Value::as_str)
+                .and_then(FallbackReason::parse)
+                .map(|r| r.as_str().to_string()),
+            probe: ProbeRecord::from_json(value.get("probe_raw")),
+        }
+    }
+
+    fn to_json(&self, probe_bytes: Option<usize>) -> Value {
+        json!({
+            "policy": self.policy,
+            "offered_revisions": self.offered_revisions,
+            "chosen_revision": self.chosen_revision,
+            "revision_source": self.revision_source.clone().map_or(Value::Null, Value::String),
+            "fallback_reason": self.fallback_reason.clone().map_or(Value::Null, Value::String),
+            "probe_raw": self.probe.to_json(probe_bytes),
+        })
+    }
+
+    /// Was the revision on this record assumed by the client rather than negotiated with
+    /// the server? See [`discovery::RevisionSource`].
+    fn revision_is_assumed(&self) -> bool {
+        self.revision_source.as_deref() == Some(RevisionSource::Assumed.as_str())
+    }
+}
+
 /// What one discovery attempt observed.
 pub(crate) enum Observation {
     /// Discovery returned both responses, and both were persisted.
     Discovered {
         /// Which handshake produced the result (P0-09 provenance).
         discovery_path: DiscoveryPath,
+        /// How that era was decided (P0-11 provenance).
+        era: EraRecord,
         /// The handshake response's evidence digest.
         handshake: Digest,
         /// The `tools/list` response's evidence digest.
@@ -119,15 +303,59 @@ impl Observation {
     /// used. They differ only in what an I/O failure is called: plain `io` over HTTP, but
     /// `io_or_timeout` over Stage 2's stdio, where a watchdog-killed container also surfaces
     /// as a closed pipe.
+    ///
+    /// `DiscoveryError::HttpStatus` is new in P0-11 and is handled so that the taxonomy does
+    /// **not** change meaning. Before P0-11 every non-2xx arrived as
+    /// `Transport("http status: NNN")` because `ureq`'s `http_status_as_error` was on; that
+    /// flag had to be turned off to read a 4xx body at all (see
+    /// `discovery::transport`), which would otherwise have let HTML error bodies drift into
+    /// the `protocol` bucket and broken comparability with the July split (435 `transport`
+    /// against 312 `protocol`). So the category stays keyed on the status and the detail
+    /// string stays byte-identical — with one deliberate exception, `429`, which July could
+    /// not tell apart from a dead host and now gets its own category.
     pub(crate) fn from_discovery_error(err: DiscoveryError, io_category: &str) -> Self {
         match err {
             DiscoveryError::Transport(msg) => Self::failed("transport", &msg),
+            DiscoveryError::HttpStatus { status, retry_after } => Self::failed(
+                http_status_category(status),
+                &http_status_detail(status, retry_after.as_deref()),
+            ),
             DiscoveryError::Io(e) => Self::failed(io_category, &e.to_string()),
             DiscoveryError::Protocol(msg) => Self::failed("protocol", &msg),
             DiscoveryError::ServerError { code, message } => {
                 Self::failed("server_error", &format!("{code}: {message}"))
             }
         }
+    }
+}
+
+/// The census failure category for an HTTP status.
+///
+/// `429` is its own category rather than part of `transport`: the July Class B results hold
+/// two `http status: 429` responses that are indistinguishable there from dead hosts, which
+/// makes self-inflicted throttling unmeasurable. Shared with `probe_stage1` so the two
+/// sweeps cannot disagree about what a throttled host is called.
+pub(crate) fn http_status_category(status: u16) -> &'static str {
+    if status == 429 { "rate_limited" } else { "transport" }
+}
+
+/// The census failure *detail* for an HTTP status — `http status: NNN`, byte-identical to
+/// what `ureq::Error::StatusCode` rendered through `Transport(e.to_string())` and therefore
+/// to what the July results files literally contain.
+///
+/// The `Retry-After` suffix is appended for `429` **only**. Appending it for any status that
+/// happened to carry the header produced details July never produced — a 503 with a
+/// `Retry-After` recorded as `http status: 503 (retry-after: 30)`, silently un-comparable
+/// with July's `http status: 503` — and `Retry-After` is a perfectly ordinary header on a 503
+/// or a 3xx. `429` is the one status whose category already diverges from July on purpose,
+/// so it is the one status where a diverging detail is intended rather than drift.
+///
+/// Shared with `probe_stage1`, like [`http_status_category`], so the two sweeps cannot
+/// disagree about what a throttled host's record looks like.
+pub(crate) fn http_status_detail(status: u16, retry_after: Option<&str>) -> String {
+    match retry_after {
+        Some(after) if status == 429 => format!("http status: {status} (retry-after: {after})"),
+        _ => format!("http status: {status}"),
     }
 }
 
@@ -140,11 +368,30 @@ pub(crate) struct ServerObservation {
     pub(crate) observation: Observation,
 }
 
-/// Write both raw responses of a successful discovery into the evidence store.
+/// Write every raw response of a successful discovery into the evidence store.
+///
+/// Three blobs now, not two: the `server/discover` probe response joins the handshake and
+/// the `tools/list`, wherever any probe bytes existed at all. The probe is the preimage of
+/// the era classification, which is otherwise the one derived field in the system with
+/// nothing to replay it against — and a dual-era server that answers the probe with garbage
+/// is *choosing* which of its handlers the harness ends up talking to, which must be visible
+/// in the evidence rather than only in the client's own `fallback_reason` assertion.
+///
+/// Content addressing makes the third blob nearly free: on the modern paths the probe bytes
+/// and the handshake bytes are the same bytes, so they share one blob, and real probe bodies
+/// are 100–300 bytes besides.
 pub(crate) fn persist(store: &BlobStore, discovery: &Discovery) -> Result<Observation, StoreError> {
+    let probe_digest = match discovery.probe_raw.bytes() {
+        Some(bytes) => Some(store.put(bytes)?),
+        None => None,
+    };
     Ok(Observation::Discovered {
         discovery_path: discovery.discovery_path,
-        handshake: store.put(&discovery.initialize_raw)?,
+        era: EraRecord::of(
+            &discovery.era_provenance,
+            ProbeRecord::of(&discovery.probe_raw, probe_digest),
+        ),
+        handshake: store.put(&discovery.handshake_raw)?,
         tools_list: store.put(&discovery.tools_list_raw)?,
     })
 }
@@ -236,8 +483,8 @@ pub(crate) fn build_report(
                 record.insert("failure_category".into(), category.as_str().into());
                 record.insert("failure_detail".into(), detail.as_str().into());
             }
-            Observation::Discovered { discovery_path, handshake, tools_list } => {
-                derive_discovered(store, *discovery_path, handshake, tools_list, &mut record, &mut rollup)?;
+            Observation::Discovered { discovery_path, era, handshake, tools_list } => {
+                derive_discovered(store, *discovery_path, era, handshake, tools_list, &mut record, &mut rollup)?;
             }
         }
         records.push(Value::Object(record));
@@ -252,6 +499,7 @@ pub(crate) fn build_report(
 fn derive_discovered(
     store: &BlobStore,
     discovery_path: DiscoveryPath,
+    era: &EraRecord,
     handshake: &Digest,
     tools_list: &Digest,
     record: &mut Map<String, Value>,
@@ -259,15 +507,34 @@ fn derive_discovered(
 ) -> Result<(), StoreError> {
     let handshake_raw = store.get(handshake)?;
     let tools_list_raw = store.get(tools_list)?;
+    // Read back, not carried through: the byte count in the file is recomputed from the
+    // blob, so a tampered count is caught by the same re-derivation that catches a tampered
+    // tally, and a missing probe blob fails loudly like any other missing evidence.
+    let probe_bytes = match era.probe.digest() {
+        Some(digest) => Some(store.get(digest)?.len()),
+        None => None,
+    };
 
-    // Same parser the live client used to negotiate (`discovery::negotiated_spec_revision`).
-    // It cannot fail on bytes a live discovery accepted; `null` covers it being asked to anyway.
+    // Same parser the live client used to negotiate (`discovery::negotiated_spec_revision`),
+    // which since P0-11 reads both eras: a legacy `result.protocolVersion`, or a modern
+    // `DiscoverResult`'s `supportedVersions` re-intersected with the client's own allowlist.
+    // `null` covers the one shape that carries neither — the `modern_without_discover` path,
+    // whose handshake evidence is a 404 error body; `era_provenance.chosen_revision` is
+    // where that record's *assumed* revision lives, labelled as assumed.
     let revision = discovery::negotiated_spec_revision(&handshake_raw)
         .ok()
         .map(|r| bounded(&r, MAX_REVISION_CHARS));
-    rollup.record_discovered(discovery_path, revision.as_deref(), (handshake, handshake_raw.len()), (tools_list, tools_list_raw.len()));
+    rollup.record_discovered(
+        discovery_path,
+        era,
+        revision.as_deref(),
+        (handshake, handshake_raw.len()),
+        (tools_list, tools_list_raw.len()),
+        (era.probe.digest(), probe_bytes),
+    );
 
     record.insert("discovery_path".into(), discovery_path.as_str().into());
+    record.insert("era_provenance".into(), era.to_json(probe_bytes));
     record.insert("negotiated_spec_revision".into(), revision.map_or(Value::Null, Value::String));
     record.insert(
         "evidence".into(),
@@ -388,10 +655,13 @@ struct Rollup {
     // Provenance, over every server whose handshake and tools/list both returned.
     discovered: usize,
     discovery_paths: BTreeMap<&'static str, usize>,
+    era_policies: BTreeMap<String, usize>,
+    fallback_reasons: BTreeMap<String, usize>,
     revisions: BTreeMap<String, usize>,
     // Evidence volume.
     handshake_bytes: u64,
     tools_list_bytes: u64,
+    probe_bytes: u64,
     distinct_blobs: HashMap<Digest, u64>,
 }
 
@@ -404,16 +674,39 @@ impl Rollup {
     fn record_discovered(
         &mut self,
         path: DiscoveryPath,
+        era: &EraRecord,
         revision: Option<&str>,
         handshake: (&Digest, usize),
         tools_list: (&Digest, usize),
+        probe: (Option<&Digest>, Option<usize>),
     ) {
         self.discovered += 1;
         *self.discovery_paths.entry(path.as_str()).or_insert(0) += 1;
-        *self.revisions.entry(revision.unwrap_or("<unparseable>").to_string()).or_insert(0) += 1;
+        *self.era_policies.entry(era.policy.clone()).or_insert(0) += 1;
+        // Counted, not just stored per server: a corpus-wide spike in one reason is how a
+        // coordinated attempt to steer the published era distribution would show up.
+        *self
+            .fallback_reasons
+            .entry(era.fallback_reason.clone().unwrap_or_else(|| "none".into()))
+            .or_insert(0) += 1;
+        // Three distinct buckets, because "the server named this revision", "no revision was
+        // ever negotiated" and "something was there and could not be read" are three
+        // different findings. `<none>` used to be pooled into `<unparseable>`, which claimed
+        // a parse failure where nothing had been there to parse — and it is specifically the
+        // `modern_without_discover` path, where the revision is assumed, that lands here.
+        let bucket = match revision {
+            Some(revision) => revision,
+            None if era.revision_is_assumed() || path == DiscoveryPath::ModernWithoutDiscover => {
+                "<none>"
+            }
+            None => "<unparseable>",
+        };
+        *self.revisions.entry(bucket.to_string()).or_insert(0) += 1;
         self.handshake_bytes += handshake.1 as u64;
         self.tools_list_bytes += tools_list.1 as u64;
-        for (digest, len) in [handshake, tools_list] {
+        self.probe_bytes += probe.1.unwrap_or(0) as u64;
+        let blobs = [Some(handshake), Some(tools_list), probe.0.zip(probe.1)];
+        for (digest, len) in blobs.into_iter().flatten() {
             self.distinct_blobs.insert(*digest, len as u64);
         }
     }
@@ -460,8 +753,18 @@ impl Rollup {
         }
 
         let mut discovery_paths: BTreeMap<&str, usize> =
-            [DiscoveryPath::Initialize, DiscoveryPath::ServerDiscover].into_iter().map(|p| (p.as_str(), 0)).collect();
+            DiscoveryPath::all().iter().map(|p| (p.as_str(), 0)).collect();
         discovery_paths.extend(self.discovery_paths);
+
+        // Seeded with every reason plus `none`, for the same reason `discovery_path` is: this
+        // distribution exists to make a coordinated steering attempt visible as a spike, and
+        // a bucket that is merely absent cannot be told from one that is zero.
+        let mut fallback_reasons: BTreeMap<String, usize> = FallbackReason::all()
+            .iter()
+            .map(|r| (r.as_str().to_string(), 0))
+            .chain([("none".to_string(), 0)])
+            .collect();
+        fallback_reasons.extend(self.fallback_reasons);
 
         let derived = json!({
             "attempted": self.attempted,
@@ -485,13 +788,16 @@ impl Rollup {
                 "denominator": "servers whose handshake and tools/list both returned",
                 "servers": self.discovered,
                 "discovery_path": discovery_paths,
+                "era_policy": self.era_policies,
+                "fallback_reason": fallback_reasons,
                 "negotiated_spec_revision": self.revisions,
             },
             "evidence_summary": {
                 "servers_with_evidence": self.discovered,
                 "handshake_bytes": self.handshake_bytes,
                 "tools_list_bytes": self.tools_list_bytes,
-                "bytes_referenced": self.handshake_bytes + self.tools_list_bytes,
+                "probe_bytes": self.probe_bytes,
+                "bytes_referenced": self.handshake_bytes + self.tools_list_bytes + self.probe_bytes,
                 "distinct_blobs": self.distinct_blobs.len(),
                 "bytes_distinct": self.distinct_blobs.values().sum::<u64>(),
             },
@@ -708,6 +1014,9 @@ fn observation_of(record: &Map<String, Value>) -> Result<Observation, String> {
             .ok_or("discovery_path is missing or unrecognised")?;
         return Ok(Observation::Discovered {
             discovery_path,
+            // Absent in a file written before P0-11, which is a fact about the file rather
+            // than an error: re-derivation still works, and reports the era as unrecorded.
+            era: EraRecord::from_record(record.get("era_provenance")),
             handshake: digest("handshake_raw")?,
             tools_list: digest("tools_list_raw")?,
         });
@@ -761,15 +1070,80 @@ fn differences(original: &Value, regenerated: &Value) -> Vec<String> {
 mod tests {
     use super::*;
 
+    /// A legacy-only server's `-32601` answer to the modern probe — the probe evidence on
+    /// every [`DiscoveryPath::Initialize`] fixture below, and the commonest real shape.
+    const LEGACY_PROBE: &str =
+        r#"{"jsonrpc":"2.0","id":0,"error":{"code":-32601,"message":"method not found"}}"#;
+
+    /// One discovery, with era provenance that **matches the path it claims**.
+    ///
+    /// The previous version of this helper gave every fixture
+    /// `fallback_reason: Some(NonModernErrorBody)` — including the `server_discover` one,
+    /// which cannot have fallen back at all. The cost was invisible and real: the `"none"`
+    /// bucket that *every* successful modern discovery produces was never exercised by any
+    /// report test, so no assertion covered the shape the modern path actually writes.
     fn discovery(path: DiscoveryPath, revision: &str, tools_json: &str) -> Discovery {
+        let tools_list_raw =
+            format!(r#"{{"jsonrpc":"2.0","id":1,"result":{{"tools":[{tools_json}]}}}}"#)
+                .into_bytes();
+        let legacy_handshake = format!(
+            r#"{{"jsonrpc":"2.0","id":0,"result":{{"protocolVersion":"{revision}","capabilities":{{}},"serverInfo":{{"name":"fake","version":"0"}}}}}}"#
+        )
+        .into_bytes();
+        let discover_result = format!(
+            r#"{{"jsonrpc":"2.0","id":0,"result":{{"resultType":"complete","supportedVersions":["{revision}"],"capabilities":{{}},"ttlMs":0,"cacheScope":"private"}}}}"#
+        )
+        .into_bytes();
+        // `2026-07-28`'s unknown-method shape: the handshake evidence on this path is an
+        // error body carrying no revision at all, which is exactly why the record's revision
+        // is `None`/assumed rather than re-derivable.
+        let unknown_method = br#"{"jsonrpc":"2.0","id":0,"error":{"code":-32601,"message":"Method not found"}}"#.to_vec();
+
+        let (handshake_raw, probe_raw, negotiated, offered, chosen, source, fallback) = match path {
+            DiscoveryPath::Initialize => (
+                legacy_handshake,
+                ProbeEvidence::Captured(LEGACY_PROBE.as_bytes().to_vec()),
+                Some(revision.to_string()),
+                Vec::new(),
+                "2025-11-25",
+                RevisionSource::Negotiated,
+                Some(FallbackReason::NonModernErrorBody),
+            ),
+            DiscoveryPath::ServerDiscover => (
+                discover_result.clone(),
+                // On a modern path the probe response *is* the handshake: one blob, two
+                // references, which is what content addressing is for.
+                ProbeEvidence::Captured(discover_result),
+                Some(revision.to_string()),
+                vec![revision.to_string()],
+                "2026-07-28",
+                RevisionSource::Negotiated,
+                None,
+            ),
+            DiscoveryPath::ModernWithoutDiscover => (
+                unknown_method.clone(),
+                ProbeEvidence::Captured(unknown_method),
+                None,
+                Vec::new(),
+                "2026-07-28",
+                RevisionSource::Assumed,
+                None,
+            ),
+        };
+
         Discovery {
-            initialize_raw: format!(
-                r#"{{"jsonrpc":"2.0","id":0,"result":{{"protocolVersion":"{revision}","capabilities":{{}},"serverInfo":{{"name":"fake","version":"0"}}}}}}"#
-            )
-            .into_bytes(),
-            tools_list_raw: format!(r#"{{"jsonrpc":"2.0","id":1,"result":{{"tools":[{tools_json}]}}}}"#).into_bytes(),
-            negotiated_spec_revision: revision.to_string(),
+            handshake_raw,
+            tools_list_raw,
+            probe_raw,
+            negotiated_spec_revision: negotiated,
             discovery_path: path,
+            era_provenance: EraProvenance {
+                policy: "modern_first",
+                offered_revisions: offered,
+                chosen_revision: chosen,
+                revision_source: source,
+                fallback_reason: fallback,
+            },
         }
     }
 
@@ -816,12 +1190,23 @@ mod tests {
         );
         // Byte-identical to "none": content addressing must store it once.
         push("none-twin", record_discovery(&store, &discovery(init, "2025-11-25", NONE), &stop));
+        // The optimistic-modern path: its handshake evidence is a 404 error body, so there is
+        // no revision in the bytes to re-derive and the record must land in the `<none>`
+        // revision bucket rather than be mislabelled `<unparseable>`.
+        push(
+            "modern-without-discover",
+            record_discovery(
+                &store,
+                &discovery(DiscoveryPath::ModernWithoutDiscover, "2026-07-28", ""),
+                &stop,
+            ),
+        );
         assert_eq!(stop.check(), Ok(()), "no store fault in a healthy run");
 
         let header = RunHeader {
             stage: "test",
             sample_size_requested: 10,
-            candidates_selected: 8,
+            candidates_selected: 9,
             attempted: servers.len(),
             stop_reason: None,
             evidence_store: &evidence_dir,
@@ -848,8 +1233,8 @@ mod tests {
         let outcome = rederive(&results, None).expect("rederive");
         assert!(outcome.byte_identical, "differs at {:?}", outcome.differences);
         assert_eq!(outcome.regenerated, std::fs::read_to_string(&results).expect("read"));
-        assert_eq!(outcome.servers, 8);
-        assert_eq!(outcome.servers_with_evidence, 7);
+        assert_eq!(outcome.servers, 9);
+        assert_eq!(outcome.servers_with_evidence, 8);
     }
 
     /// The same exit criterion through the whole live wiring rather than a hand-assembled
@@ -862,13 +1247,19 @@ mod tests {
         use crate::sweep::run_bounded;
 
         fn fake_server(revision: &str, tools: &str, delay_ms: u32) -> String {
+            // A legacy-only server, which under P0-11's modern-first policy is probed with
+            // `server/discover` before anything else and answers it the way every pre-
+            // `2026-07-28` SDK does: JSON-RPC `-32601`. Request ids, in order: 0 the probe,
+            // 1 `initialize`, then the id-less `notifications/initialized`, then 2
+            // `tools/list`.
+            let probe = r#"{"jsonrpc":"2.0","id":0,"error":{"code":-32601,"message":"method not found"}}"#;
             let init = format!(
-                r#"{{"jsonrpc":"2.0","id":0,"result":{{"protocolVersion":"{revision}","capabilities":{{}},"serverInfo":{{"name":"fake","version":"0"}}}}}}"#
+                r#"{{"jsonrpc":"2.0","id":1,"result":{{"protocolVersion":"{revision}","capabilities":{{}},"serverInfo":{{"name":"fake","version":"0"}}}}}}"#
             );
-            let list = format!(r#"{{"jsonrpc":"2.0","id":1,"result":{{"tools":[{tools}]}}}}"#);
-            // initialize -> response; notifications/initialized; tools/list -> response.
+            let list = format!(r#"{{"jsonrpc":"2.0","id":2,"result":{{"tools":[{tools}]}}}}"#);
             format!(
-                "sleep {}; read -r _; printf '%s\\n' '{init}'; read -r _; read -r _; printf '%s\\n' '{list}'",
+                "sleep {}; read -r _; printf '%s\\n' '{probe}'; read -r _; printf '%s\\n' '{init}'; \
+                 read -r _; read -r _; printf '%s\\n' '{list}'",
                 f64::from(delay_ms) / 1000.0
             )
         }
@@ -936,13 +1327,13 @@ mod tests {
         let report = read(&results);
 
         let mut every_tool = Vec::new();
-        for body in [ALL, NONE, SOME, "", UNPINNABLE, NONE] {
+        for body in [ALL, NONE, SOME, "", UNPINNABLE, NONE, ""] {
             every_tool.extend(coverage::tool_coverage(&discovery(DiscoveryPath::Initialize, "x", body).tools_list_raw).expect("parse"));
         }
         assert_eq!(report["tools_discovered"], every_tool.len());
         assert_eq!(report["annotation_tally"], tally_json(&coverage::tally(&every_tool)));
-        assert_eq!(report["attempted"], 8);
-        assert_eq!(report["succeeded"], 6);
+        assert_eq!(report["attempted"], 9);
+        assert_eq!(report["succeeded"], 7);
         assert_eq!(report["failed"], 2);
         assert_eq!(report["failure_categories"], json!({ "coverage_extraction": 1, "transport": 1 }));
     }
@@ -956,7 +1347,7 @@ mod tests {
         // all, none, some, unpinnable, none-twin declare tools; the zero-tool server is
         // reported separately rather than counted as vacuously "all" or "none".
         assert_eq!(weighted["servers"], 5);
-        assert_eq!(weighted["succeeded_with_zero_tools"], 1);
+        assert_eq!(weighted["succeeded_with_zero_tools"], 2);
         assert_eq!(weighted["annotations_object"]["none"], json!({ "count": 2, "pct": 40.0 }));
         assert_eq!(weighted["annotations_object"]["some"], json!({ "count": 1, "pct": 20.0 }));
         assert_eq!(weighted["annotations_object"]["all"], json!({ "count": 2, "pct": 40.0 }));
@@ -977,14 +1368,72 @@ mod tests {
         let report = read(&results);
         let servers = report["servers"].as_array().expect("servers");
 
-        assert_eq!(report["provenance"]["servers"], 7);
-        assert_eq!(report["provenance"]["discovery_path"], json!({ "initialize": 6, "server_discover": 1 }));
-        assert_eq!(report["provenance"]["negotiated_spec_revision"], json!({ "2025-11-25": 6, "2026-07-28": 1 }));
+        assert_eq!(report["provenance"]["servers"], 8);
+        // Every `DiscoveryPath` variant is seeded with an explicit zero, so a path a run
+        // happened not to take is visibly absent rather than silently missing from the map.
+        assert_eq!(
+            report["provenance"]["discovery_path"],
+            json!({ "initialize": 6, "server_discover": 1, "modern_without_discover": 1 })
+        );
+        // Three revision buckets, not two. `<none>` is the `modern_without_discover` record:
+        // no revision was negotiated, so there is nothing to parse — which is a different
+        // finding from `<unparseable>`, where something was there and could not be read.
+        assert_eq!(
+            report["provenance"]["negotiated_spec_revision"],
+            json!({ "2025-11-25": 6, "2026-07-28": 1, "<none>": 1 })
+        );
+        // P0-11 provenance: the policy that produced these records, and why any fallback
+        // happened. One policy across all of them, which is the point — a mixed-policy
+        // report would be the thing that must never be pooled silently.
+        assert_eq!(report["provenance"]["era_policy"], json!({ "modern_first": 8 }));
+        // Seeded with every reason plus `none`, for the same reason `discovery_path` is:
+        // this distribution exists so a steering attempt shows up as a spike, and an absent
+        // bucket cannot be told from a zero one. `none` is what every successful modern
+        // discovery produces, and it is exercised here precisely because the fixtures now
+        // give each path the provenance it can actually have.
+        assert_eq!(
+            report["provenance"]["fallback_reason"],
+            json!({
+                "none": 2,
+                "no_response": 0,
+                "non_modern_error_body": 6,
+                "malformed_response": 0,
+                "only_legacy_revisions_offered": 0,
+                "only_legacy_revisions_after_unsupported_version": 0,
+                "modern_without_discover_tools_list_failed": 0,
+            })
+        );
 
         let zero = &servers[3];
         assert_eq!(zero["discovery_path"], "server_discover");
         assert_eq!(zero["negotiated_spec_revision"], "2026-07-28");
         assert_eq!(zero["annotations_object"], "no_tools");
+        assert_eq!(zero["era_provenance"]["policy"], "modern_first");
+        assert_eq!(zero["era_provenance"]["offered_revisions"], json!(["2026-07-28"]));
+        assert_eq!(zero["era_provenance"]["chosen_revision"], "2026-07-28");
+        assert_eq!(zero["era_provenance"]["revision_source"], "negotiated");
+        assert_eq!(zero["era_provenance"]["fallback_reason"], Value::Null);
+        // The probe's own bytes, kept. On a modern path they *are* the handshake bytes, so
+        // the digest matches and content addressing stores them once.
+        assert_eq!(zero["era_provenance"]["probe_raw"]["state"], "captured");
+        assert_eq!(
+            zero["era_provenance"]["probe_raw"]["digest"],
+            zero["evidence"]["handshake_raw"]["digest"],
+            "a DiscoverResult is both the probe response and the handshake"
+        );
+
+        // The optimistic-modern record: a revision this client *assumed*, labelled as such,
+        // next to an empty offer — which is coherent only because `revision_source` says so.
+        let assumed = &servers[8];
+        assert_eq!(assumed["discovery_path"], "modern_without_discover");
+        assert_eq!(
+            assumed["negotiated_spec_revision"], Value::Null,
+            "nothing was negotiated, so nothing is published as negotiated"
+        );
+        assert_eq!(assumed["era_provenance"]["revision_source"], "assumed");
+        assert_eq!(assumed["era_provenance"]["chosen_revision"], "2026-07-28");
+        assert_eq!(assumed["era_provenance"]["offered_revisions"], json!([]));
+        assert_eq!(assumed["era_provenance"]["probe_raw"]["state"], "captured");
 
         let malformed = &servers[4];
         assert_eq!(malformed["outcome"], "failed");
@@ -1000,8 +1449,134 @@ mod tests {
         assert!(servers[6].get("evidence").is_none(), "a failed discovery has no bytes to keep");
         assert_eq!(servers[1]["evidence"], servers[7]["evidence"], "identical responses share blobs");
         let summary = &report["evidence_summary"];
-        assert_eq!(summary["servers_with_evidence"], 7);
+        assert_eq!(summary["servers_with_evidence"], 8);
         assert!(summary["bytes_distinct"].as_u64() < summary["bytes_referenced"].as_u64());
+        assert!(
+            summary["probe_bytes"].as_u64().is_some_and(|b| b > 0),
+            "probe evidence is counted in the volume summary like any other blob"
+        );
+    }
+
+    /// **The comparability requirement P0-11 had to not break.** Turning off
+    /// `http_status_as_error` was mandatory to read a 4xx body at all, and it would
+    /// otherwise have moved HTTP-level failures into the `protocol` bucket, making the July
+    /// split (435 `transport` against 312 `protocol`) incomparable with every later run. The
+    /// category stays keyed on the status, and the detail string stays byte-identical to what
+    /// `ureq::Error::StatusCode` rendered — which is literally what the July Class B results
+    /// file contains.
+    #[test]
+    fn an_http_status_failure_keeps_the_july_transport_category_and_detail_string() {
+        for status in [400u16, 401, 403, 404, 500, 502] {
+            let observation = Observation::from_discovery_error(
+                DiscoveryError::HttpStatus { status, retry_after: None },
+                "io",
+            );
+            let Observation::Failed { category, detail } = observation else {
+                panic!("an HTTP status failure is a Failed observation");
+            };
+            assert_eq!(category, "transport", "status {status} must stay in the July bucket");
+            assert_eq!(detail, format!("http status: {status}"));
+        }
+    }
+
+    /// `429` is the one deliberate departure: July recorded two of them as plain
+    /// `transport`, indistinguishable from a dead host, which makes self-inflicted throttling
+    /// unmeasurable. It gets its own category, and `Retry-After` is carried so a sweep can
+    /// skip the host instead of retrying it.
+    #[test]
+    fn a_429_is_its_own_failure_category_and_never_pooled_into_transport() {
+        let observation = Observation::from_discovery_error(
+            DiscoveryError::HttpStatus { status: 429, retry_after: Some("120".into()) },
+            "io",
+        );
+        let Observation::Failed { category, detail } = observation else {
+            panic!("a 429 is a Failed observation");
+        };
+        assert_eq!(category, "rate_limited");
+        assert_ne!(category, "transport", "pooling this back into transport is the regression");
+        assert_eq!(detail, "http status: 429 (retry-after: 120)");
+        // And the sweeps must agree on the name, since they share one mapping.
+        assert_eq!(http_status_category(429), "rate_limited");
+        assert_eq!(http_status_category(503), "transport");
+    }
+
+    /// The `Retry-After` suffix belongs to `429` and nothing else.
+    ///
+    /// `Retry-After` is a perfectly ordinary header on a 503 or a 3xx, and appending the
+    /// suffix for any status that carried one produced details July never produced — a 503
+    /// recorded as `http status: 503 (retry-after: 30)` where July recorded
+    /// `http status: 503`, silently un-comparable. The old tests could not catch it because
+    /// every one of them passed `retry_after: None`, so this one passes a value for each
+    /// status it checks.
+    #[test]
+    fn the_retry_after_suffix_is_appended_for_429_only() {
+        for status in [301u16, 400, 403, 404, 500, 502, 503] {
+            let observation = Observation::from_discovery_error(
+                DiscoveryError::HttpStatus { status, retry_after: Some("30".into()) },
+                "io",
+            );
+            let Observation::Failed { detail, .. } = observation else {
+                panic!("an HTTP status failure is a Failed observation");
+            };
+            assert_eq!(
+                detail,
+                format!("http status: {status}"),
+                "status {status} carrying a Retry-After must still read exactly as July's \
+                 detail string, with no suffix"
+            );
+            assert_eq!(http_status_detail(status, Some("30")), detail, "and via the helper");
+        }
+        // The one status where a diverging detail is intended rather than drift.
+        assert_eq!(http_status_detail(429, Some("30")), "http status: 429 (retry-after: 30)");
+        assert_eq!(http_status_detail(429, None), "http status: 429");
+    }
+
+    /// Era provenance read back out of a results file is re-validated rather than trusted:
+    /// a file is as untrusted as the server whose bytes produced it (design.md §3), and
+    /// these values become map keys in a published distribution.
+    #[test]
+    fn era_provenance_read_back_from_a_file_is_revalidated_and_bounded() {
+        let hostile = json!({
+            "policy": "x".repeat(10_000),
+            "offered_revisions": (0..500).map(|i| json!(format!("2026-07-{:02}", i % 28 + 1)))
+                .chain([json!("not-a-revision"), json!(12345), json!({"a": 1})])
+                .collect::<Vec<_>>(),
+            "chosen_revision": "../../etc/passwd",
+            "fallback_reason": "invented_reason",
+            "revision_source": "invented_source",
+            "probe_raw": { "state": "captured", "digest": "../../../../etc/passwd" },
+        });
+        let record = EraRecord::from_record(Some(&hostile));
+        assert!(record.policy.chars().count() <= MAX_REVISION_CHARS + 40, "{}", record.policy);
+        assert!(record.offered_revisions.len() <= MAX_OFFERED_REVISIONS);
+        assert!(record.offered_revisions.iter().all(|r| discovery::era::is_revision_shaped(r)));
+        assert_eq!(record.chosen_revision, "", "an unshaped revision is dropped, not echoed");
+        assert_eq!(record.fallback_reason, None, "the reason taxonomy is closed");
+        assert_eq!(record.revision_source, None, "so is the revision-source taxonomy");
+        assert_eq!(
+            record.probe, ProbeRecord::Unrecorded,
+            "a probe digest is parsed strictly before it could ever name a path, and a \
+             rejected one degrades to `unrecorded` rather than to a read outside the store"
+        );
+        // And the absence taxonomy is closed too, with the real values accepted.
+        for (state, expected) in [
+            ("no_response", ProbeRecord::Absent(ProbeAbsence::NoResponse)),
+            ("body_not_read", ProbeRecord::Absent(ProbeAbsence::BodyNotRead)),
+            ("invented_state", ProbeRecord::Unrecorded),
+        ] {
+            assert_eq!(
+                ProbeRecord::from_json(Some(&json!({ "state": state }))),
+                expected,
+                "probe state {state:?}"
+            );
+        }
+
+        // A record written before P0-11 has no era block at all. That is a fact about the
+        // file, not an error: re-derivation still works and reports the era as unrecorded.
+        assert_eq!(EraRecord::from_record(None), EraRecord::unrecorded());
+        let unrecorded = EraRecord::unrecorded();
+        assert_eq!(unrecorded.policy, "unrecorded");
+        assert_eq!(unrecorded.fallback_reason, None);
     }
 
     /// The derived numbers are checked against the evidence, not trusted from the file.

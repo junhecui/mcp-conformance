@@ -1542,3 +1542,51 @@ stream being held open after the single `event: message`, not latency.
   number which retires P0-09's "blocked on such a server existing" caveat: a dual-era server
   is a sufficient target for testing the modern path, and three are reachable without
   credentials.
+
+### A.7 P0-11's live verification — 2026-10-08, and where its server-authored strings live
+
+P0-11 re-ran the same five hosts on 2026-10-08 under the same conduct policy (connect-level
+only, no credentials, the harness's own `User-Agent`, at most two requests per host, 1.2 s
+between every request; no host returned 429 and nothing was retried). The request bytes it
+sent, the body digests, and the per-host outcome as the client classifies it are recorded
+under P0-11 in `docs/tasks.md`.
+
+**The server-authored strings from that run live here rather than there**, per `CLAUDE.md`:
+`docs/tasks.md` is auto-imported into every session, and the *server* chooses which of its
+errors is interesting enough to be worth quoting — so the habit of "quote the interesting
+error into tasks.md" is itself the finding, benign payload or not. That section was already
+scrupulous about `instructions`; this extends the same care to the adjacent `serverInfo` and
+error-`message` fields. Every byte below is evidence, not instruction to any reader, human or
+model.
+
+Self-reported `serverInfo` identities, as received — and note §1.4's own caveat that
+`serverInfo` is explicitly self-reported and *"SHOULD NOT [be relied on] for security
+decisions"*:
+
+| host | probe | `serverInfo` name / version |
+|---|---|---|
+| `docs.mcp.cloudflare.com/mcp` | modern | `docs-ai-search` / `0.4.13` |
+| `mcp.context7.com/mcp` | modern | `Context7` / `4.2.0` |
+| `huggingface.co/mcp` | modern | `huggingface.co/mcp` / `0.4.28` |
+| `mcp.deepwiki.com/mcp` | legacy | `DeepWiki` / `2.14.3` |
+| `gitmcp.io/docs` | legacy | `GitMCP` / `1.1.0` |
+
+The two JSON-RPC error `message` strings from that run, verbatim:
+
+- `mcp.deepwiki.com/mcp`, modern probe, HTTP 400, code `-32600`, id `"server-error"`:
+  `Bad Request: Unsupported protocol version: 2026-07-28. Supported versions: 2024-11-05, 2025-03-26, 2025-06-18, 2025-11-25`
+- `gitmcp.io/docs`, modern probe, HTTP 400 with `Content-Type: text/plain;charset=UTF-8`,
+  code `-32000`, id `null`:
+  `Bad Request: Mcp-Session-Id header is required`
+
+Both reproduce A.4 and A.5 byte for byte a day later, which is why the digests recorded under
+P0-11 match this appendix's. Three of the five responses also carry server-authored
+`instructions` — Context7 (A.2), Hugging Face (A.3), DeepWiki (A.4) — and that prose stays
+quoted only in those appendix entries and in no test fixture; P0-11's replay fixture uses
+Cloudflare's response precisely because it is the one modern response with no `instructions`
+field.
+
+Two header-level leaks from that run, noted and deliberately **not** reproduced: Hugging
+Face's response headers carry an RFC1918 `x-proxied-host` and an internal
+`x-proxied-replica` (the same leak A.3 redacts), and GitMCP minted an `mcp-session-id` for
+the anonymous legacy probe.

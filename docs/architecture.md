@@ -671,8 +671,10 @@ by editing the decision text, which still stands as written.
 1. **Two injection-bearing fields, not one.** This ADR and Q-03 say "descriptions".
    `instructions` is a second piece of server-controlled free text whose *stated purpose* is
    inclusion in a model's system prompt, it arrives on the connect-level response rather than
-   per tool, and now that P0-10 persists `initialize_raw` into the evidence store it sits
-   inside the very corpus the classifier reads out-of-band. Read every rule in this ADR as
+   per tool, and now that P0-10 persists `handshake_raw` into the evidence store (the field
+   P0-11 renamed from `initialize_raw`, since under modern-first those bytes are usually a
+   `server/discover` response) it sits inside the very corpus the classifier reads
+   out-of-band. Read every rule in this ADR as
    covering `description` **and** `instructions`. The field is not new —
    `InitializeResult.instructions` predates `2026-07-28`, and legacy `initialize` transcripts
    carry the same imperative prose — so the exposure is retroactive: it is already in the

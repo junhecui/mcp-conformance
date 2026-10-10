@@ -20,6 +20,21 @@ use rusqlite::Connection;
 /// Migrations in application order. Each name is also the row recorded in
 /// `schema_migrations` once applied, so re-ordering this array without renaming a file
 /// would silently change what "already applied" means — don't.
+///
+/// **`0001` is still edited in place rather than superseded, which has one disclosed cost.**
+/// The schema is pre-release and no deployment of it exists; the only on-disk artifact is
+/// `results/conformance/track_b_probe.sqlite3` from the B-01 run, which already records
+/// `0001_initial_schema` as applied and so will not pick up a later edit to it. When P0-11
+/// added `CHECK (length(...) <= 64)` to the two revision columns, that file's existing rows
+/// were checked against the new bound and satisfy it (every `protocol_version` in it is a
+/// ten-character revision), so the divergence is between two schema texts, not between data
+/// and its own constraint. The first change that *existing data could violate* has to be a
+/// new migration file rather than an edit plus a note.
+///
+/// The divergence also outlives `0002`: once that migration is applied to the same file
+/// it becomes a two-migration database whose `0001`-era tables still lack both `CHECK`s,
+/// so its schema differs permanently from a freshly built one at the same migration
+/// level. The data satisfies the bound either way — the difference is schema text only.
 const MIGRATIONS: &[(&str, &str)] = &[
     ("0001_initial_schema", include_str!("../migrations/0001_initial_schema.sql")),
     (
@@ -402,7 +417,10 @@ pub struct VerdictRecord<'a> {
     /// Without it a verdict row names no evidence at all, and a tampered row cannot be
     /// caught by re-derivation because nothing says which evidence it claimed.
     pub run_id: Option<&'a str>,
-    /// The MCP protocol revision this verdict was derived under.
+    /// The MCP protocol revision this verdict was derived under. For a Track B row whose
+    /// revision was never negotiated this is the empty string, not a revision anyone
+    /// claimed — see the note at the `spec_revision` assignment in `xtask::probe_stage1`;
+    /// the assumed value, where there is one, lives in `era_provenance.chosen_revision`.
     pub protocol_version: &'a str,
     /// When this verdict was derived.
     pub derived_at: &'a str,
@@ -1259,5 +1277,61 @@ mod tests {
             Some(id) => assert_eq!(v, id, "a pinned build must record its id verbatim"),
             None => assert!(v.ends_with("+unpinned"), "got {v}"),
         }
+    }
+
+    /// A spec revision is server-supplied free text on the legacy `initialize` path, and
+    /// these two columns are where it comes to rest inside a file that gets committed
+    /// (`results/conformance/track_b_probe.sqlite3`). `discovery::era::bounded_revision` is
+    /// the primary bound; this constraint is the backstop that makes an unbounded one
+    /// unrepresentable rather than merely avoided by every caller remembering.
+    ///
+    /// Exercised in both directions: a 64-character revision is accepted, a 65-character one
+    /// is rejected, on both columns.
+    #[test]
+    fn a_revision_column_rejects_a_string_longer_than_its_bound() {
+        let conn = open_and_migrate(":memory:").expect("open_and_migrate");
+        let at_bound = "9".repeat(64);
+        let over_bound = "9".repeat(65);
+
+        fn server<'a>(id: &'a str, revision: &'a str) -> ServerRecord<'a> {
+            ServerRecord {
+                server_id: id,
+                source_uri: "https://example.com/mcp",
+                containability_class: datamodel::ContainabilityClass::B,
+                spec_revision: revision,
+            }
+        }
+        insert_server(&conn, &server("srv-ok", &at_bound))
+            .expect("exactly at the bound must be accepted");
+        let err = insert_server(&conn, &server("srv-long", &over_bound))
+            .expect_err("one character over the bound must be rejected");
+        assert!(format!("{err}").to_lowercase().contains("check"), "{err}");
+
+        seed_run(&conn);
+        fn verdict<'a>(id: &'a str, revision: &'a str) -> VerdictRecord<'a> {
+            VerdictRecord {
+                verdict_id: id,
+                snapshot_id: "snap-1",
+                annotation: datamodel::Annotation::ReadOnlyHint,
+                declared: "true",
+                outcome: datamodel::Outcome::Holds,
+                reason_code: None,
+                // Incidental to what this test checks, but still truthful: there is no
+                // changeset here, so there is no ruleset identity, no derivation build,
+                // no partition counts and no invocation classification to record — which
+                // is exactly what `ProtocolProbe` asserts. It is also the oracle of
+                // the committed artifact this bound exists to protect
+                // (`track_b_probe.sqlite3` is a Track B sweep).
+                provenance: VerdictProvenance::ProtocolProbe,
+                run_id: None,
+                protocol_version: revision,
+                derived_at: "now",
+            }
+        }
+        insert_verdict(&conn, &verdict("v-ok", &at_bound))
+            .expect("exactly at the bound must be accepted");
+        let err = insert_verdict(&conn, &verdict("v-long", &over_bound))
+            .expect_err("one character over the bound must be rejected");
+        assert!(format!("{err}").to_lowercase().contains("check"), "{err}");
     }
 }
