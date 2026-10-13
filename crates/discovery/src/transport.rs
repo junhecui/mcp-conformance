@@ -30,6 +30,7 @@ use serde_json::Value;
 
 use crate::DiscoveryError;
 use crate::jsonrpc::{self, ResponseEnvelope};
+use crate::pace::{PacedAgent, Permit, StatusHandling};
 
 /// Identifies this harness to any HTTP server it discovers against — visible polling, not
 /// anonymous, the same disclosure posture `intake::registry` uses against the registry
@@ -393,13 +394,35 @@ fn relay_child_stderr(stderr: std::process::ChildStderr) {
 
 // ---- HTTP (Streamable HTTP, single-JSON-response case) ----
 
+/// Mandatory for this crate, not a preference: `ureq::Error::StatusCode` carries only a
+/// number, so a 4xx *body* — which the `2026-07-28` dual-era algorithm (ADR-013) requires
+/// reading to decide a server's era — is unreachable under
+/// [`StatusHandling::AsError`]. Named here rather than inlined so both constructors below
+/// cannot disagree about it.
+const STATUS_HANDLING: StatusHandling = StatusHandling::AsResponse;
+
 /// Streamable HTTP transport, limited to the non-streaming case: POST a JSON-RPC message,
 /// get a `Content-Type: application/json` body back. A server that upgrades to
 /// `text/event-stream` gets a clear [`DiscoveryError::Protocol`] rather than silent
 /// mishandling — SSE support is out of scope for P0-01's thinnest path.
 pub(crate) struct HttpTransport {
     endpoint: String,
-    agent: ureq::Agent,
+    /// P0-12: the pacing hook and the no-redirect policy, in one object that cannot be
+    /// taken apart. An unpaced client is [`PacedAgent::unpaced`] — the shape every
+    /// pre-P0-12 caller and every request-count test still gets, so pacing changes nobody's
+    /// request *sequence*, only its timing — and it is still redirect-free, because
+    /// [`discovery::MAX_REDIRECTS`](crate::MAX_REDIRECTS) is a property of every client
+    /// `pace` builds rather than part of the pacing bargain.
+    ///
+    /// **Latent trap, for whoever adds a paced stdio or reconnecting transport:** the permit
+    /// lives *in the transport*. `DiscoveryClient::respawn_stdio` replaces a transport
+    /// wholesale, so a paced transport rebuilt that way would drop its permit and leave the
+    /// rest of the sequence both unpaced *and uncharged* — an undercount, which is the
+    /// direction that hides load rather than overstating it. Safe today only because
+    /// `DiscoveryClient::http_paced` sets `respawn: None` and the stdio transport is never
+    /// paced. A respawn that must keep pacing has to carry the permit across, not rebuild
+    /// around it.
+    agent: PacedAgent,
     next_id: u64,
     protocol_version: Option<String>,
     send_method_header: bool,
@@ -410,54 +433,58 @@ impl HttpTransport {
         Self::with_timeout(endpoint, Duration::from_secs(30))
     }
 
-    pub(crate) fn with_timeout(endpoint: String, timeout: Duration) -> Self {
-        let agent: ureq::Agent = ureq::Agent::config_builder()
-            .timeout_global(Some(timeout))
-            // Mandatory, not a preference: see the module doc comment. `Error::StatusCode`
-            // carries only a number, so a 4xx body — which the `2026-07-28` dual-era
-            // algorithm requires reading — is unreachable while this is true.
-            .http_status_as_error(false)
-            .build()
-            .into();
-        Self {
-            endpoint,
-            agent,
-            next_id: 0,
-            protocol_version: None,
-            send_method_header: false,
-        }
+    /// [`Self::with_timeout`], governed by a P0-12 pacing permit: every request this
+    /// transport sends is spaced against, and charged to, the permit's registrable domain.
+    pub(crate) fn paced(endpoint: String, timeout: Duration, permit: Permit) -> Self {
+        Self::over(endpoint, permit.into_agent(timeout, STATUS_HANDLING))
     }
 
+    pub(crate) fn with_timeout(endpoint: String, timeout: Duration) -> Self {
+        Self::over(endpoint, PacedAgent::unpaced(timeout, STATUS_HANDLING))
+    }
+
+    fn over(endpoint: String, agent: PacedAgent) -> Self {
+        Self { endpoint, agent, next_id: 0, protocol_version: None, send_method_header: false }
+    }
+
+    /// The single place every HTTP request this crate sends is built — which is why P0-12's
+    /// pacing hook is here rather than in `call_raw` and `notify` separately. "The unit is
+    /// requests to this host, not hosts processed" is then true by construction: the probe,
+    /// the legacy `initialize`, the `notifications/initialized` POST and `tools/list` all
+    /// pass through, and so would any request a later task adds.
+    ///
+    /// The wait happens before [`ureq`] is handed the body, so it is outside the agent's
+    /// `timeout_global` and never eats into a request's own time budget.
     fn post(
         &self,
         method: &str,
         body: &[u8],
     ) -> Result<ureq::http::Response<ureq::Body>, DiscoveryError> {
-        let mut builder = self
-            .agent
-            .post(&self.endpoint)
-            .header("Content-Type", "application/json")
-            // The Streamable HTTP spec (2025-03-26) requires both content types here even
-            // though this transport only handles the single-JSON-response case: "the client
-            // MUST include an Accept header, listing both application/json and
-            // text/event-stream." Advertising only application/json gets a spec-compliant
-            // server to correctly reject the request with 406 — found running Stage 1
-            // against live servers: 14 of 78 failures were exactly this, not a real
-            // reachability problem. The scope exclusion is unaffected: if a server responds
-            // with an SSE stream anyway, that is still rejected below, just no longer
-            // provoked by an under-declared Accept header in the first place.
-            .header("Accept", "application/json, text/event-stream")
-            .header("User-Agent", USER_AGENT);
+        let mut headers: Vec<(&str, &str)> = Vec::with_capacity(5);
+        headers.push(("Content-Type", "application/json"));
+        // The Streamable HTTP spec (2025-03-26) requires both content types here even
+        // though this transport only handles the single-JSON-response case: "the client
+        // MUST include an Accept header, listing both application/json and
+        // text/event-stream." Advertising only application/json gets a spec-compliant
+        // server to correctly reject the request with 406 — found running Stage 1 against
+        // live servers: 14 of 78 failures were exactly this, not a real reachability
+        // problem. The scope exclusion is unaffected: if a server responds with an SSE
+        // stream anyway, that is still rejected below, just no longer provoked by an
+        // under-declared Accept header in the first place.
+        headers.push(("Accept", "application/json, text/event-stream"));
+        headers.push(("User-Agent", USER_AGENT));
         if let Some(v) = &self.protocol_version {
-            builder = builder.header("MCP-Protocol-Version", v);
+            headers.push(("MCP-Protocol-Version", v));
         }
         if self.send_method_header {
             // Required on every request by `2026-07-28`, and must equal the body's method
             // or the server answers 400 `-32020`. `method` is always one of the literals in
             // `client.rs`, never caller-supplied — see that module's structural guarantee.
-            builder = builder.header("Mcp-Method", method);
+            headers.push(("Mcp-Method", method));
         }
-        builder.send(body).map_err(|e| DiscoveryError::Transport(e.to_string()))
+        self.agent
+            .post(&self.endpoint, &headers, body)
+            .map_err(|e| DiscoveryError::Transport(e.to_string()))
     }
 }
 

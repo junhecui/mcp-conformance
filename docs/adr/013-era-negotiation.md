@@ -376,6 +376,12 @@ is what makes "polite client" true rather than aspirational. Note also that the 
 modern-first rests on *"the newer revision of the same protocol prescribes this ordering"* —
 **not** on a MUST; see §1, where the MUST/MAY misreading is corrected.
 
+**Resolved by [ADR-014](014-request-pacing-and-domain-budget.md)** (P0-12): the delay now
+covers the whole sequence a host sees, this ADR's extra pre-handshake request included, and the
+eTLD+1 budget is a hard per-registrable-domain cap whose refusals are recorded as their own
+failure category. The extra round trip disclosed above is unchanged in count; what changed is
+that it is spaced from its neighbours and counted in a published header.
+
 **⚑ Flagged: the `{400,404}` × SSE taxonomy asymmetry.** A probe answered with an SSE upgrade
 behind a 400 or a 404 is rejected by the transport before its status is considered, so it lands
 in the `protocol` failure bucket where July's taxonomy would have put it in `transport`. The

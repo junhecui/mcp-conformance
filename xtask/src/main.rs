@@ -24,7 +24,7 @@ fn main() -> ExitCode {
 }
 
 const USAGE: &str = "usage: cargo xtask <purity|census\
-|census-stage1 [sample_size] [--out PATH] [--evidence-dir PATH]\
+|census-stage1 [sample_size] [--out PATH] [--evidence-dir PATH] [--min-interval-ms N] [--max-requests-per-domain N]\
 |census-stage2-class-a [sample_size] [--jobs N] [--out PATH] [--evidence-dir PATH]\
 |census-rederive <results.json> [--evidence-dir PATH] [--out PATH]\
 |census-pin-stability <input.json>|probe-stage1 [sample_size]|dump-tools <url>>";
@@ -86,7 +86,7 @@ fn parse_sample_size() -> Result<usize, String> {
 }
 
 fn census_stage1() -> ExitCode {
-    let args = match xtask::cli::parse_sweep_args(&task_args(), false) {
+    let args = match xtask::cli::parse_sweep_args(&task_args(), xtask::cli::Stage::ClassB) {
         Ok(args) => args,
         Err(e) => {
             eprintln!("census-stage1: {e}\n\n{USAGE}");
@@ -120,7 +120,7 @@ fn probe_stage1() -> ExitCode {
 }
 
 fn census_stage2_class_a() -> ExitCode {
-    let args = match xtask::cli::parse_sweep_args(&task_args(), true) {
+    let args = match xtask::cli::parse_sweep_args(&task_args(), xtask::cli::Stage::ClassA) {
         Ok(args) => args,
         Err(e) => {
             eprintln!("census-stage2-class-a: {e}\n\n{USAGE}");

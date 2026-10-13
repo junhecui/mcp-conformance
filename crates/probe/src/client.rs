@@ -19,6 +19,7 @@
 use std::time::Duration;
 
 use discovery::jsonrpc::{encode_notification, encode_request};
+use discovery::{PacedAgent, Permit, StatusHandling};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -37,6 +38,13 @@ const USER_AGENT: &str = concat!(
 /// than this crate's one call site justifies today. O-01 (spec-revision tracking) is the
 /// natural place to notice drift if these two ever disagree.
 const CLIENT_PROTOCOL_VERSION: &str = "2025-11-25";
+
+/// `probe` has always let `ureq` raise a non-2xx status as an error, rendering as
+/// `http status: NNN` through [`ProbeError::Transport`] — which is what B-01's committed
+/// `results/conformance/track_b_protocol_probe.json` records its `401`/`429`/`400`
+/// outcomes as. Preserved explicitly rather than inherited from a default, because the
+/// other choice would reclassify every one of those records as a protocol failure.
+const STATUS_HANDLING: StatusHandling = StatusHandling::AsError;
 
 /// Why a probe-client operation failed.
 #[derive(Debug)]
@@ -75,17 +83,41 @@ impl std::error::Error for ProbeError {}
 /// lifecycle requires it, the same way `discovery::DiscoveryClient` does.
 pub struct ProbeClient {
     endpoint: String,
-    agent: ureq::Agent,
+    /// The pacing hook and the no-redirect policy, in one object that cannot be taken
+    /// apart. Built by `discovery::pace`, which is the only agent constructor in the
+    /// workspace — see [`ProbeClient::paced`] for why this crate stopped building its own.
+    agent: PacedAgent,
     next_id: u64,
     negotiated_version: Option<String>,
 }
 
 impl ProbeClient {
-    /// A client against `endpoint`, timing out any single request after `timeout`.
+    /// A client against `endpoint`, timing out any single request after `timeout`, **not**
+    /// paced.
+    ///
+    /// Kept for unit tests driving a local fake. A run against live third-party
+    /// infrastructure wants [`Self::paced`]: this is the crate whose job is to invoke
+    /// tools on servers this project does not control, so it is the higher-consequence
+    /// client of the two, not the one that gets to skip the control.
     #[must_use]
     pub fn new(endpoint: impl Into<String>, timeout: Duration) -> Self {
-        let agent: ureq::Agent =
-            ureq::Agent::config_builder().timeout_global(Some(timeout)).build().into();
+        Self::over(endpoint, PacedAgent::unpaced(timeout, STATUS_HANDLING))
+    }
+
+    /// [`Self::new`], governed by a P0-12 pacing [`Permit`] taken from the run's `Pacer`.
+    ///
+    /// Every request this client sends — `initialize`, `notifications/initialized`,
+    /// `resources/list`, every `resources/read`, and every `tools/call` — is spaced against
+    /// and charged to the permit's registrable domain, because the permit lives inside the
+    /// agent and the agent is the only thing that can send.
+    ///
+    /// [`Permit`]: discovery::Permit
+    #[must_use]
+    pub fn paced(endpoint: impl Into<String>, timeout: Duration, permit: Permit) -> Self {
+        Self::over(endpoint, permit.into_agent(timeout, STATUS_HANDLING))
+    }
+
+    fn over(endpoint: impl Into<String>, agent: PacedAgent) -> Self {
         Self { endpoint: endpoint.into(), agent, next_id: 0, negotiated_version: None }
     }
 
@@ -187,16 +219,16 @@ impl ProbeClient {
     }
 
     fn post(&self, body: &[u8]) -> Result<ureq::http::Response<ureq::Body>, ProbeError> {
-        let mut builder = self
-            .agent
-            .post(&self.endpoint)
-            .header("Content-Type", "application/json")
-            .header("Accept", "application/json, text/event-stream")
-            .header("User-Agent", USER_AGENT);
+        let mut headers: Vec<(&str, &str)> = Vec::with_capacity(4);
+        headers.push(("Content-Type", "application/json"));
+        headers.push(("Accept", "application/json, text/event-stream"));
+        headers.push(("User-Agent", USER_AGENT));
         if let Some(v) = &self.negotiated_version {
-            builder = builder.header("MCP-Protocol-Version", v);
+            headers.push(("MCP-Protocol-Version", v));
         }
-        builder.send(body).map_err(|e| ProbeError::Transport(e.to_string()))
+        self.agent
+            .post(&self.endpoint, &headers, body)
+            .map_err(|e| ProbeError::Transport(e.to_string()))
     }
 }
 

@@ -1100,6 +1100,22 @@ producing numbers that will be compared against those papers — and read O-01's
 block on sweep pacing, 429 categorisation and `failure_detail` before the sweep is launched,
 not after.
 
+**Sweep conduct: no longer outstanding.** (1) is fixed by
+[P0-11](#p0-11-correct-dual-era-discovery-for-mcp-2026-07-28) and the conduct prerequisites
+P0-11 and O-01 both recorded — an intra-host request delay and a request budget keyed on
+eTLD+1 — are fixed by [P0-12](#p0-12-intra-host-pacing-and-an-etld1-request-budget)
+([ADR-014](adr/014-request-pacing-and-domain-budget.md)): 500 ms between consecutive requests
+to one registrable domain across the *whole* sequence a host sees, a hard 120-request budget
+per registrable domain whose refusals are their own failure category rather than a silent skip,
+and both the policy and the accounting published in the results header so the politeness of a
+published sweep is checkable. July comparability is preserved deliberately — `transport`,
+`protocol`, `rate_limited` and the tool-weighted fields are unchanged in meaning, and the
+refusal bucket is new and subtractable. Projected over this very file's 1,000 entries: 2,163
+requests instead of 2,345, 91 refusals (all on the one 149-entry host), and ≤ ~13 minutes of
+added wall-clock. **(2), pagination, is still outstanding and is still its own task** — and
+note it will overshoot P0-12's per-discovery request reservation when it lands, which that
+task's limitations spell out.
+
 - [x] Throughput profile suitable for the corpus size — sequential requests (never
       concurrent — unrelated third-party hosts, no reason to burst them), 12s per-request
       timeout tuned down from the 30s default after the 100-server sample showed responsive
@@ -1698,6 +1714,13 @@ delay and the eTLD+1 request budget is a **prerequisite** for the next ≥1,000-
 a nice-to-have: it is what makes "polite client" true rather than aspirational. Note also that
 the defence of modern-first rests on *"the newer revision of the same protocol prescribes this
 ordering"*, **not** on a MUST — see the fourth blocking finding above.
+**Satisfied by [P0-12](#p0-12-intra-host-pacing-and-an-etld1-request-budget)**
+([ADR-014](adr/014-request-pacing-and-domain-budget.md)): the intra-host delay now covers the
+*whole* sequence a host sees — this extra pre-handshake request included, since the hook sits
+at the one point every HTTP request is built — and the eTLD+1 budget is a hard per-registrable
+-domain cap whose refusals are recorded as their own failure category. The extra round trip
+disclosed here is unchanged in count; what changed is that it is now spaced from its
+neighbours and counted in a published header.
 
 **⚑ Three further findings recorded in [ADR-013](adr/013-era-negotiation.md)'s "Flagged"
 section rather than fixed:** the `{400,404}` × SSE taxonomy asymmetry (lands in `protocol`
@@ -1768,8 +1791,377 @@ server-reachable on the live path today.
   as a hole for when a second modern revision ships.
 - **No census sweep was run.** Nothing in `results/` changed. The failure-category split, the
   `rate_limited` bucket and the era provenance are all proven by test, not yet by corpus data.
-- **The two carry-forward items from §1.4.1 are still carry-forward:** an intra-host request
-  delay and an eTLD+1 request budget for the census re-run.
+- ~~**The two carry-forward items from §1.4.1 are still carry-forward:** an intra-host request
+  delay and an eTLD+1 request budget for the census re-run.~~ **Both landed in
+  [P0-12](#p0-12-intra-host-pacing-and-an-etld1-request-budget)** — 500 ms between requests to
+  one registrable domain, a hard 120-request budget per registrable domain, refusals recorded
+  as their own failure category, and policy plus accounting published in the results header.
+
+---
+
+### P0-12 Intra-host pacing and an eTLD+1 request budget
+
+**Depends on:** P0-11, O-01
+**Exit:** A minimum delay applies between consecutive requests to one host, across the whole
+sequence that host sees and not merely between hosts; a request budget keyed on the
+registrable domain rather than the host constrains sequential and concurrent load, and a host
+whose budget is exhausted is recorded distinguishably rather than skipped; the configured
+policy and the resulting accounting both appear in the results file, so a published sweep's
+politeness can be audited rather than trusted.
+**Status:** Done — [ADR-014](adr/014-request-pacing-and-domain-budget.md). New module
+`crates/discovery/src/pace.rs`, a hook in `HttpTransport::post`, a paced constructor on
+`DiscoveryClient`, and wiring plus a published `pacing` block in
+`xtask/src/{cli.rs,census_stage1.rs,census_report.rs,class_a_stage2.rs,pin_stability.rs,probe_stage1.rs}`.
+**No sweep was run and nothing in `results/` changed** — every number below is either a test
+assertion or a projection computed over the *committed* July data, labelled as which.
+
+**Two review passes found two blocking defects and seven smaller ones; all are fixed. The
+first was a real SSRF, not a conduct issue.**
+
+1. **⚑ The pacing hook was bypassable, because `ureq`'s redirect loop lived below it.**
+   Neither HTTP client set `max_redirects`, so the default of 10 applied *inside* the call,
+   under the hook. Measured: one `post` under a 302 chain produced **11 network requests in
+   ~20 ms with zero spacing**; a cross-host 302 returned HTTP 200 carrying the other host's
+   bytes; and with this harness's exact agent configuration a `Location` header reached and
+   read a JSON body from a service on the operator's own machine that no registry entry
+   named — reachable from a sweep's vantage point along with loopback, the WSL subnet,
+   RFC1918, `169.254.169.254` and the local public /21. Narrower than it sounds, and stated
+   that way in the ADR: GET-only and body-less (301/302/303 convert the method and drop the
+   body), 307/308 fail because `ureq` cannot replay a consumed POST body, non-HTTP schemes
+   are rejected, and `timeout_global` does bound a whole chain. The damage was still
+   fivefold: architecture.md §1's "evidence, never instruction" violated on the one server
+   input the census path *acted* on; P0-02's pin able to attest to the **wrong principal**;
+   the 120-request cap permitting up to **1,320**; `pacing.requests_sent` understating real
+   load ~11x with the redirect target under **no key at all** (undetectable by
+   `verify_pacing_self_consistent`, which cross-checks two views of the same undercount);
+   and foreign bytes entering the evidence store at a server's direction.
+   **Fixed structurally, not at the call sites:** agent construction moved into `pace`, so
+   obtaining a configured `ureq::Agent` now *requires* a `Permit` (`Permit::into_agent`
+   consumes it, never hands the agent back, and `PacedAgent::post` is the only way to send),
+   with `max_redirects(0)` baked in. An explicitly-named `PacedAgent::unpaced` remains for
+   local-fake tests and is still redirect-free. That fixed `discovery` and `probe` in one
+   place and makes an unpaced or redirect-following client hard to *write*.
+   `no_agent_this_module_builds_will_follow_a_redirect` asserts against `ureq`'s own config
+   getter rather than the builder call — the defect was precisely that the call was *absent*.
+   `a_redirect_is_not_followed_costs_one_request_and_surfaces_as_a_status` drives a real
+   client at a real 302 pointing at a second listener and asserts the target is never
+   contacted, that exactly one request was sent, and that it was charged exactly once.
+   **July comparability holds:** a 3xx now surfaces as `HttpStatus { status: 30x }` and
+   `http_status_category` maps it to `transport` — the same bucket the committed file's 15
+   `redirect failed` entries occupy. Only the detail string changes. `max_redirects` is
+   published in the policy block. The hop-by-hop design for ever following a redirect is
+   **recorded, not built** (ADR-014 §1).
+2. **⚑ Two timing assertions failed deterministically under load, and the doc comment that
+   licensed them was wrong.** `accounting.waited >= 3 * INTERVAL - 30ms` failed **3/3** at
+   full CPU saturation (observed 291–310 ms against a 330 ms bound) and 9/10 at 2x
+   oversubscription. The file's own doc comment claimed one-sided "at least N intervals"
+   assertions cannot flake on a loaded machine — true for **wall clock** and **exactly
+   inverted for accounted wait**, which sums `max(0, slot − now)` and therefore gets
+   *smaller* as the machine slows. The test was asserting the negation of the property the
+   module advertises three lines above it ("a slow host costs no extra spacing at all").
+   Both assertions are now `> Duration::ZERO`; the real claim — three intervals of wall
+   clock — was already asserted robustly 15 lines earlier. The doc comment's reasoning is
+   corrected in both the test file and on `before_request` itself, where a future test
+   author will read it. **Re-verified under saturation:** 5/5 passes at 24 busy loops and
+   5/5 at 48 on this 24-core host, and the *pre-fix* assertion reinstated under 48 loops
+   failed 3/3 (accounted wait 320–325 ms), so the fix is necessary rather than cosmetic.
+3. **`census-pin-stability` and `probe-stage1` are paced.** `pin_stability` was the worst of
+   the three by rate and the likeliest to run next (P0-06 and P0-07 both ran it on Stage 1's
+   output as methodology): two full sequences back to back, up to 8 requests at ~4/s —
+   *above* the rate that cost this project a 429 — against precisely the subset of hosts
+   already known to answer. One permit now covers both of a candidate's sequences through one
+   re-entrant client, reserved at `2 × MAX_REQUESTS_PER_DISCOVERY`, which also keeps one
+   permit to one server record. `probe` is the higher-consequence client (its job is
+   `tools/call` against live third parties): `ProbeClient::paced` takes a `Permit`,
+   `ProbeTarget` carries one, and each protocol run reserves `probe::MAX_REQUESTS_PER_PROBE`
+   (26) rather than discovery's five, since one run is a handshake plus two
+   `resources/read` sweeps plus two invocations — `Pacer::admit_with_reservation` exists for
+   exactly that, and admitting a probe against a five-request reservation would have left the
+   cap soft for whatever ran next on the domain. Both publish the same `pacing` block.
+   ADR-014's `probe`-is-unpaced flag is closed.
+4. **The sample selection is salted with a per-run seed, published in the header.** Keyless
+   `DefaultHasher` made sweep membership *and order* precomputable offline: measured, a name
+   guaranteed to be in a 1,000-of-8,294 sample was found in **7 tries**, guaranteed into the
+   first 10 positions in **225**, the whole search under a millisecond. With the
+   shared-hosting over-grouping that is a starvation primitive — ~24 ground names under one
+   suffix fill the 24-sequence headroom and spend that suffix's whole budget for the price of
+   ~24 registry entries. Now seeded, published as `sample_seed` (a hex **string**: a `u64`
+   above 2^53 would be silently rounded by a double-backed reader, and a seed that cannot
+   reproduce its own sample is worse than none), and accepted back via `--sample-seed`.
+   Admission order within the sample is shuffled under the same seed with a different salt,
+   because selection and order leak separately. **And the victim-targeted variant is
+   confirmed available, from committed data:** the registry does *not* bind `remotes[].url`
+   to the publisher's verified namespace — 518 of the July file's 1,000 entries use
+   `io.github.*` namespaces (verified against a GitHub account, not the URL's domain) with
+   endpoints on arbitrary unrelated hosts — so anyone with a GitHub account can charge a
+   third party's domain budget and starve its genuine servers out of the sweep. What limits
+   it is kept and credited: refusals are their own recorded category naming domain/charged/cap,
+   per-domain rows carry admitted and refused counts, and records carry the publisher
+   namespace, so starvation is visible *and attributable*. Keying the budget on **(publisher
+   namespace, registrable domain)** is recorded as the better fix than tightening the key, and
+   is **not implemented** — it needs its own task and review.
+5. **The comparability claim pointed at the wrong field.** The success *rate* is unchanged
+   (exactly 25.0%, matching P0-07), but only because all 149 `pipeworx.io` entries were
+   `protocol` failures in July. What moves is `failure_categories.protocol`: **312 → 221**.
+   That is the comparison a reader makes — *"SSE-only dropped by 91, did the ecosystem
+   change?"* — and the answer is no, 91 of those hosts were never contacted. ADR-014 §4 and
+   `results/census/README.md` now state that a refusal **displaces** whatever category the
+   host would otherwise have landed in, so refusals must be added back before comparing any
+   category count to July.
+6. **The number a conduct reviewer will ask about is now stated.** Under the default cap the
+   second-most-loaded July group, `server.smithery.ai`, is **22 entries all on one host**,
+   admitted in full because the admission floor was chosen so 22-entry groups are not
+   refused. ADR-014's consequences give three figures with their models: **120** (what the
+   cap permits to one registrable domain, and so to one host when the domain is one host),
+   **110** (22 sequences × the 5-request reservation), and **106** (projected from the
+   entries' actual July statuses). Defensible; unstated was worse than defended.
+7. **`verify_pacing_self_consistent` checks six fields, not three, and
+   `census-rederive` exits non-zero.** The three added are derivable from the per-server
+   records and were published unchecked, including the **headline politeness number**
+   `max_requests_to_one_registrable_domain` — the one that substantiates "no third party
+   received more than N requests" — plus `registrable_domains_contacted` and
+   `overshoot_requests`. A live sweep still only prints loudly (its data is worth keeping and
+   its third-party contact is already spent); the offline audit path now fails, because it has
+   nothing at risk and is the path a reader auditing a published file uses.
+8. **One hostile entry can no longer discard a whole sweep.** `sweep::run_bounded`'s
+   `thread::scope` re-panics on join, so a worker panic unwound past the header insert and
+   `finish()`: nothing written, up to 1,000 hosts of third-party contact spent for no
+   artifact. No reachable panic on server-controlled data was found, so this was latent — but
+   it was a single point of total loss on a sweep about to run. Every attempt now runs under
+   `catch_unwind` and produces a `harness_panic` record (its own harness-side, subtractable
+   category, like `BUDGET_EXHAUSTED` and P0-10's `evidence_store_error`), with the payload
+   sanitised and length-bounded because a panic message can embed server-supplied bytes and
+   this lands in a published file. The pacer's four lock sites and the sweep pool's six now
+   use `PoisonError::into_inner` rather than `expect` — most urgently the one in
+   `Permit::drop`, where a panic during unwinding would `abort`. The two
+   `store.into_inner().map_err(…)?` calls went the same way: a poisoned evidence-store lock
+   would otherwise have failed `finish()` itself and re-created the total loss one layer up.
+9. **Small but real.** `sanitise_key` kept the **first** 253 bytes while the registrable
+   domain is the *suffix*, so "every step can only make the grouping coarser" was false in
+   direction — it split one registrant into many keys, each with its own full budget. Now
+   keeps the **last** 253 bytes, and the claim says "unreachable" (253 bytes *is* the DNS
+   presentation limit) rather than "coarser". Added `an_at_sign_in_the_path_does_not_reach_
+   the_host` for the `https://server.smithery.ai/@blbl147/xhs-mcp/mcp` shape, which occurs
+   **22 times** in the corpus and is the live case where getting the parse order wrong would
+   silently shred the key into 22 separate budgets. And a comment on the latent trap that the
+   permit lives in the *transport*, so a future paced stdio client's `respawn_stdio` would
+   drop it and leave the rest of the sequence unpaced *and uncharged* — safe today only
+   because `http_paced` sets `respawn: None`.
+
+**Also recorded rather than fixed** (ADR-014's flagged list): that the budget is a politeness
+control and **not** an anti-abuse one, since splitting across registrable domains is free by
+design and no key can fix it (`0x7f.0.0.1` → `0.1`, `2130706433` → its own key,
+`127.0.0.1.nip.io` → `nip.io`) — the parser was deliberately **not** tightened in response;
+that §2's "published map key" wording was wrong, the key being a *value* under
+`"registrable_domain"`, which is the safer shape; that `RunHeader.evidence_store` publishes an
+absolute `/home/<user>/…` path (pre-existing from P0-10); that there is no overall sweep
+deadline, only per-request timeouts and the disk floor; and that `intake::registry`'s client
+is outside the `pace` agent and still follows redirects — a different risk class (one
+configured first-party endpoint, GET, already trusted to choose every URL the sweep
+contacts), where routing it through `pace` would create an `intake → discovery` crate edge
+architecture.md §8 does not want.
+
+**Gates after the fix pass:** `cargo build --workspace`, `cargo test --workspace` (**390
+passed**, 0 failed, up from 379), `cargo clippy --workspace --all-targets -- -D warnings`, and
+`cargo purity` all clean.
+
+Two review passes recorded these controls as **prerequisites** for the next ≥1,000-host sweep
+(P0-11's ⚑ conduct disclosure and O-01's 2026-10-07 carry-forward block), on three of this
+project's own measurements rather than on general principle: `census_stage1.rs` had no
+intra-host delay at all, so a host's 2–4 requests went out back to back and P0-11's
+modern-first ordering had just added a fourth to the ~75% legacy majority; the O-01 probe had
+already **lost a transcript to an HTTP 429** caused by three requests inside one second, and
+P0-11's live verification therefore imposed a 1.2 s floor *by hand* that the sweep code did not
+have; and the committed `results/census/class_b_annotation_coverage.json` already holds two
+`http status: 429` records.
+
+- [x] **A minimum interval between consecutive requests to one host, covering the whole
+      sequence.** Enforced in `HttpTransport::post` — the single function `call_raw` and
+      `notify` both send through — so the modern probe, the legacy `initialize`, the
+      `notifications/initialized` POST and `tools/list` are all spaced, and so would be any
+      request a later task adds. Pacing in the sweep loop would have spaced only the gap
+      between one `discover()` and the next, which was never the problem.
+      `every_request_of_a_legacy_fallback_sequence_is_spaced` drives a real client against a
+      real `TcpListener`, asserts the four requests arrived in the right order, and asserts
+      three intervals of observed wall-clock. The wait is taken *before* `ureq` gets the body,
+      so it is outside the agent's `timeout_global` and the previous request's time on the wire
+      counts toward the interval — a slow host costs no extra spacing.
+- [x] **500 ms, the top of the 250–500 ms range, with the reason.** 250 ms permits four
+      requests per second; **three inside one second is the rate that actually provoked a 429
+      against a real host in this project's own history**, so the bottom of the range is a rate
+      already observed to fail. 500 ms permits two per second and is still 2.4× looser than the
+      1.2 s floor P0-11 imposed by hand — the gap an operator closes with `--min-interval-ms`
+      on a run small enough to afford it.
+- [x] **A budget keyed on the registrable domain, not the host, because the host is the wrong
+      unit.** The July corpus's 1,000 Class B entries are 774 hosts but **619 registrable
+      domains**, and the case a per-host budget cannot see at all is right there in the data:
+      **18 entries on 18 distinct hosts** under `klymax402.com` (`barcode-generator.api.…`,
+      `base64-codec.api.…`, …), plus `alpic.live` (10), `wishpool.app` (9), `clauxel.com` (8),
+      `mcpize.run` (7). Every per-host budget stays satisfied while the vendor absorbs tens of
+      requests. The key comes from a documented heuristic, **not** a vendored public-suffix
+      list — ADR-014 §2 gives the full argument and a table of exactly what it gets wrong, the
+      short version being that a list this harness cannot checksum-verify would repeat P0-09's
+      mistake of presenting an extrapolated artifact as a checked one, that every realistic
+      error is in the *coarser* (fewer requests) direction, and that the grouping is auditable
+      from the published per-domain accounting so it can be upgraded from a real sweep's data
+      rather than a guess. Named `heuristic-v1` in the results header so a change to it is a
+      visible version bump, not a silent redefinition of every published row.
+- [x] **The budget constrains sequential and concurrent load, and the cap is hard.**
+      `Pacer::admit` reserves `MAX_REQUESTS_PER_DISCOVERY` (5, equal to `discover()`'s own
+      documented bound) atomically before the client exists, so two admissions cannot both see
+      the same headroom and no sequence can overshoot by spending its whole allowance.
+      `the_cap_is_never_overshot_even_when_every_sequence_spends_its_whole_allowance` (24
+      sequences, 120 requests, zero overshoot) and
+      `concurrent_sequences_against_one_domain_respect_both_controls` (8 threads, cap 20 —
+      *how many* get in is scheduling-dependent so that is asserted as a range, while the cap
+      holding, every refusal being counted, and every request still being spaced are not).
+      `dropping_a_permit_releases_its_reservation` proves an abandoned sequence cannot strand
+      budget.
+- [x] **120 requests per domain, derived from the committed corpus rather than picked.** After
+      the one outlier the largest July group holds 22 entries, and a cap of 120 with a
+      5-request reservation admits at least 24 full sequences —
+      `the_default_cap_admits_every_other_july_group_in_full`. So the cap binds on exactly one
+      group, `gateway.pipeworx.io` (149 entries on one host):
+      `the_julys_149_entry_outlier_is_cut_off_at_the_default_cap` asserts **58 admitted, 91
+      refused, 116 requests**, against ~298 unbudgeted. A tighter cap would have cost data
+      rather than bought safety: replaying this corpus through the same admission arithmetic
+      gives **cap 120 → 91 refused across 1 domain; 100 → 103 across 2; 60 → 135 across 3;
+      40 → 169 across 8; 20 → 240 across 13; 10 → 311 across 26**. Below ~60 the refusals stop
+      being the one real outlier and start being distinct registrants behind a shared-hosting
+      suffix the heuristic over-groups (ADR-014 §2–§3). 120 is the point where exactly one
+      domain binds.
+- [x] **A refused host is recorded, never skipped, and costs no connection.** Its record
+      carries `failure_category: "registrable_domain_budget_exhausted"` and a detail naming the
+      domain, the counts, the cap and the words *no request was made to this host*.
+      `a_refused_attempt_sends_no_request_at_all` scripts a listener with **zero** replies and
+      asserts it served nothing;
+      `an_admitted_attempt_records_its_pacing_and_a_refused_one_records_the_refusal` drives the
+      real Stage 1 worker body against a local fake through both branches.
+- [x] **July comparability preserved, which was the thing most easily broken.** A refusal is a
+      **new** category; `transport`, `protocol`, `rate_limited` and the tool-weighted fields
+      keep their meaning exactly, and the refusal bucket is subtractable because it is
+      harness-side rather than a finding about a server (the same posture as P0-10's
+      `evidence_store_error`).
+      `a_budget_refusal_is_its_own_category_and_leaves_the_july_buckets_untouched` builds a
+      report from a 429, a 401, an SSE-only `protocol` failure and a refusal, and asserts all
+      four buckets are present, correct and **unmerged** (`categories.len() == 4`).
+      `an_unpaced_client_sends_the_same_sequence_with_no_delay`, plus every pre-existing
+      request-count test in `crates/discovery/tests/http_discovery.rs` passing unchanged, is
+      what pins that pacing altered a sweep's timing and nothing else.
+- [x] **Stage 1 stays sequential and Stage 2's `--jobs` is untouched.** `jobs = 1` is still not
+      configurable for Stage 1; the pacer is correct under concurrency anyway, deliberately, so
+      that it is never the reason Stage 1 stays sequential. The two stages' option sets are
+      disjoint and each **rejects** the other's flags —
+      `each_stage_rejects_the_other_stages_flags` — because a flag that silently does nothing is
+      worse than one that errors.
+- [x] **Observable in the results, because a claim nobody can check is not a finding.** A
+      top-level `pacing` block carries the policy (`min_interval_ms`,
+      `max_requests_per_registrable_domain`, `per_discovery_reservation`, `grouping`) *and* the
+      accounting (`requests_sent`, `waited_ms_total`, `registrable_domains_contacted`,
+      `max_requests_to_one_registrable_domain`, `sequences_denied_by_budget`,
+      `overshoot_requests`, and the 25 most-loaded `registrable_domains` rows with their
+      admitted/refused counts). Every server record carries its own `pacing`
+      (`registrable_domain`, `requests_sent`, `waited_ms`) plus a top-level
+      `registrable_domain` identity field. `census_report::verify_pacing_self_consistent` then
+      checks the header against those records — the three totals must be exactly the per-server
+      sums — and runs both when a sweep writes a file and when `census-rederive` reads one back
+      offline. It is **independent of the code that builds the block**, in the shape B-03's
+      `verify_report_matches_records` established, and
+      `the_pacing_guard_accepts_a_consistent_report_and_names_an_inflated_field` proves it has
+      teeth in both directions, including the understated-requests case that would make a sweep
+      look politer than it was.
+- [x] **P0-10's byte-for-byte re-derivation still holds.** Per-server pacing accounting is
+      wall-clock-dependent, so it rides as a carried-through observation rather than a derived
+      value — the treatment `generated_at_unix` already gets — and
+      `a_results_file_with_pacing_records_rederives_byte_for_byte` proves it: a file with
+      per-server pacing blocks and a refusal record regenerates identically from stored
+      evidence, with no network.
+- [x] **The controls cannot be switched off by a value that reads like a default.**
+      `--min-interval-ms 0` is rejected (zero spacing must be spelled `1`, a visible number in
+      the published header), 60 s is the ceiling, and a cap below the per-discovery reservation
+      is rejected because it would refuse every host sampled —
+      `the_pacing_controls_cannot_be_disabled_by_an_out_of_range_value`.
+
+**Projected cost at 1,000 hosts — computed over the committed July corpus, not estimated.**
+Replaying its 1,000 Class B entries through the implemented admission arithmetic, with
+per-entry request counts projected from each record's actual July outcome under modern-first
+(1 for a connection-level failure or a non-era-signalling status, 2 for an SSE-only or
+`server_error` outcome, 4 for a success or a 400, 5 for a 404):
+
+| | without the controls | with them |
+|---|---|---|
+| requests sent | 2,345 | **2,163** (182 fewer) |
+| entries attempted | 1,000 | **909** (91 refused, all `pipeworx.io`) |
+| most-loaded registrable domain | 298 requests | **116** |
+| registrable-domain groups contacted | — | 619 |
+
+Added wall-clock is bounded by `(requests − groups contacted) × interval` =
+`(2163 − 619) × 500 ms` ≈ **772 s ≈ 12.9 minutes**, against the "well inside an hour" P0-07
+measured. That bound assumes *zero* request latency; the real figure is
+`Σ max(0, interval − latency)`, because the interval is measured from the previous request's
+slot, so a host answering in ~500 ms or more costs no spacing at all — and the budget removes
+182 requests, so the net change could be near zero. The 58/91/116 figures are asserted in Rust
+(`the_julys_149_entry_outlier_is_cut_off_at_the_default_cap`) and reproduced independently by
+the projection, which is the cross-check.
+
+**Conclusion on Stage 2: pacing does not apply, and the file says so.** Stage 2 speaks stdio
+to a local container; there is no HTTP request to a third-party MCP server in its sequence, so
+the request pacer has nothing to pace. Its header carries
+`pacing: {"applies": false, "reason": …}` rather than no block, because an absent block and a
+block saying "not applicable" are different claims about a file — the distinction P0-11 drew
+between `unrecorded` and `no_response` probe evidence. **The politeness question Stage 2 does
+have is a different one and is named rather than quietly omitted:** `npx`/`uvx` inside each
+container fetch from npm and PyPI, `--jobs` allows up to 8 of those at once, that is real
+third-party load this harness causes, and it is outside the harness's own request path. The
+right control for it is a package cache or a registry mirror, not a request pacer; recorded as
+a limitation, not fixed.
+
+**Gates.** `cargo build --workspace`, `cargo test --workspace`,
+`cargo clippy --workspace --all-targets -- -D warnings`, `cargo purity` — all clean.
+**Workspace: 379 passed, 0 failed** (baseline 345 at `86756d6`; +34 — 18 `pace` unit tests, 6
+`crates/discovery/tests/pacing.rs` integration tests, 5 `census_report`, 3 `census_stage1`, and
+2 net in `cli`). `discovery` is 101 tests (63 unit — 18 of them `pace` — plus 17 HTTP, 6
+pacing, 13 stdio, 2 pin); `xtask` 52 lib + 6 purity + 1 reason-codes.
+`normalise`/`verdict` closures untouched — `discovery` was never on the purity allowlist.
+
+**Limitations, disclosed rather than hidden:**
+
+- **`probe` (Track B) is not paced.** It is the one crate whose job is to *invoke* tools
+  against live third-party servers, and B-01's own run log records `401`/`429`/`400` arriving
+  mid-protocol. `Permit::before_request` is public precisely so `probe` can take the same
+  control without a second implementation, but the wiring and the matching accounting in
+  `results/conformance/` are not done here. Until they are, `probe-stage1` is paced by nothing
+  but its one-tool-per-server bound.
+- **`tools/list` pagination will overshoot the per-discovery reservation.** Pagination is still
+  unfollowed (P0-11's limitation) and adds *unbounded* requests when it lands, which would push
+  a sequence past the 5-request reservation the hard-cap property assumes and erode the cap for
+  later hosts on the same domain. Rather than guess a larger reservation, the excess is counted
+  and `overshoot_requests` is published, so it surfaces as a non-zero number in a results file
+  instead of a quietly weakened control
+  (`a_sequence_that_exceeds_its_reservation_is_counted_as_overshoot`). Whoever lands pagination
+  must revisit the reservation.
+- **The heuristic over-groups shared-hosting suffixes**, and that is the one error direction
+  that can cost data rather than just requests: `*.vercel.app` (22 July entries),
+  `*.workers.dev` (18), `*.railway.app` (15), `*.onrender.com` (14) and four more are ~95
+  entries grouped into 8 pseudo-vendors. At the default cap none of them bind (the largest is
+  22, the floor is 24), but a tighter cap would refuse legitimate distinct registrants. Pinned
+  as a recorded property by `shared_hosting_suffixes_over_group_and_that_is_recorded` rather
+  than left to surprise a sweep.
+- **The delay is keyed on the registrable domain, broader than this task required.** Strictly
+  stronger (a host's requests all share its domain key) and one concept instead of two, but it
+  serialises 22 distinct `*.vercel.app` registrants against each other — ~22 s across a whole
+  sweep at 500 ms and ~2 requests each. A cost, not a correctness problem.
+- **The 500 ms floor is this project's choice, not a rate any server published.** Nothing reads
+  a server's own rate policy, and `Retry-After` is still used only to *skip* a host within a
+  run, never to sleep and retry — P0-11's rule, unchanged.
+- **No sweep was run, so none of the projected numbers are observed ones.** The policy, the
+  accounting, the refusal record and the July comparability are all proven by test; the
+  2,163-requests / 91-refusals / 12.9-minutes figures are a projection over July data and will
+  differ, because P0-11 made part of July's SSE-only population reachable and because outcomes
+  drift.
+- **`bounded()` limits characters rather than bytes** (P0-10's disclosed wart) still applies to
+  the refusal detail — which is harness-authored and therefore ASCII, so the bound holds here
+  for a reason rather than by luck.
 
 ---
 
@@ -3491,6 +3883,18 @@ relevant work is picked up; none is a defect in anything already landed except w
   request budget keyed on **eTLD+1 rather than host** — at 1,000 servers one vendor behind
   many registry entries can absorb hundreds of requests while every per-host budget stays
   satisfied.
+  **All four of these are now implemented**, and this bullet is kept for the record rather
+  than as outstanding work. The 429 category and `Retry-After` capture landed in
+  [P0-11](#p0-11-correct-dual-era-discovery-for-mcp-2026-07-28); the delay and the eTLD+1
+  budget landed in [P0-12](#p0-12-intra-host-pacing-and-an-etld1-request-budget)
+  ([ADR-014](adr/014-request-pacing-and-domain-budget.md)) at 500 ms — the *top* of the range
+  above, because 250 ms permits four requests per second and three per second is the rate that
+  produced the 429 described here — with a hard 120-request cap per registrable domain, a
+  refusal recorded as its own failure category rather than a skipped host, and the policy and
+  accounting published so the claim is checkable. This bullet's *first* observation, that
+  "pagination adds unbounded ones", is **still open**: pagination remains unfollowed, and when
+  it lands it will overshoot P0-12's per-discovery request reservation, which that task
+  publishes as `overshoot_requests` rather than absorbing silently.
 - **`ttlMs`/`cacheScope` are a new rug-pull surface, and the harness is immune only by
   accident.** A server can declare a long TTL with `cacheScope: "public"` so caches hold one
   tool list while a revalidating client sees another — cache divergence as a rug-pull

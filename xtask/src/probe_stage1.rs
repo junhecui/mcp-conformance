@@ -19,20 +19,32 @@
 //!
 //! Sequential requests, not concurrent — same posture as `census_stage1`, for the same
 //! reason: unrelated third-party hosts, no reason to burst them.
+//!
+//! P0-12: and sequential was never sufficient. Every request this script sends — the
+//! discovery handshake *and* every request of both probe protocols, invocations included
+//! — now runs under a run-wide [`Pacer`] with the same policy and the same
+//! registrable-domain budget `census_stage1` uses. This is the higher-consequence of the two
+//! sweeps: discovery does what any MCP client does on connect, while a probe *calls a tool*.
+//! Its reservation is [`MAX_REQUESTS_PER_PROBE`] rather than discovery's five, because one
+//! probe protocol is a handshake plus two `resources/read` sweeps plus two invocations, and
+//! admitting it against a five-request reservation would leave the cap soft for whatever ran
+//! next on the same domain.
 
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use std::sync::Arc;
+
 use datamodel::{Annotation, ContainabilityClass};
-use discovery::{DiscoveryClient, DiscoveryError};
+use discovery::{DiscoveryClient, DiscoveryError, PacePolicy, Pacer};
 use intake::catalogue;
 use intake::registry::RegistryClient;
-use probe::{ProbeError, ProbeTarget};
+use probe::{MAX_REQUESTS_PER_PROBE, ProbeError, ProbeTarget};
 use serde_json::Value;
 use store::aggregate::{self, VerdictSummary};
 use store::db::{self, ServerRecord, ToolSnapshotRecord, VerdictProvenance, VerdictRecord};
 
-use crate::census_stage1::{Candidate, class_b_candidate, stable_hash};
+use crate::census_stage1::{Candidate, class_b_candidate, resolve_sample_seed, stable_hash};
 
 /// Per-request timeout, tuned the same way `census_stage1` tuned its own: short enough
 /// that a handful of unresponsive hosts don't dominate total run time at sample sizes in
@@ -77,8 +89,8 @@ enum DiscoverOutcome {
     Failed { category: &'static str, detail: String },
 }
 
-fn discover(url: &str) -> DiscoverOutcome {
-    let mut client = DiscoveryClient::http_with_timeout(url.to_string(), REQUEST_TIMEOUT);
+fn discover(url: &str, permit: discovery::Permit) -> DiscoverOutcome {
+    let mut client = DiscoveryClient::http_paced(url.to_string(), REQUEST_TIMEOUT, permit);
     match client.discover() {
         Ok(discovery) => match parse_tools(&discovery.tools_list_raw) {
             Ok(tools) => DiscoverOutcome::Success {
@@ -202,7 +214,12 @@ pub fn run(sample_size: usize) -> Result<(), Box<dyn std::error::Error>> {
          (same methodology as census_stage1)...",
         all_class_b.len()
     );
-    all_class_b.sort_by_key(|c| stable_hash(&c.name));
+    // Seeded, same as `census_stage1` — and this is the sweep where it matters most,
+    // because landing in *this* sample means having a tool invoked, not merely being
+    // discovered.
+    let sample_seed = resolve_sample_seed(None);
+    eprintln!("probe-stage1: sample seed {sample_seed:#018x} (published in the results file)");
+    all_class_b.sort_by_key(|c| stable_hash(&c.name, sample_seed));
     let candidates: Vec<Candidate> = all_class_b.into_iter().take(sample_size).collect();
 
     let db_path = Path::new("results/conformance/track_b_probe.sqlite3");
@@ -210,6 +227,21 @@ pub fn run(sample_size: usize) -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(db_path.parent().expect("has a parent"))?;
     let conn = db::open_and_migrate(db_path.to_str().expect("utf8 path"))?;
 
+    // Same policy and the same per-domain budget `census_stage1` runs under, so the two
+    // sweeps' conduct is comparable and a domain cannot be hit hard by one just because the
+    // other was polite to it. Not operator-configurable here: `probe-stage1` takes a single
+    // positional argument, and a politeness control that applies only when someone remembers
+    // a flag is not a control.
+    let pacer = Arc::new(Pacer::new(PacePolicy::CENSUS_DEFAULT));
+    eprintln!(
+        "probe-stage1: pacing {} ms between requests to one registrable domain, cap {} \
+         requests/domain (reservation {} for discovery, {MAX_REQUESTS_PER_PROBE} per probe)",
+        PacePolicy::CENSUS_DEFAULT.min_interval.as_millis(),
+        PacePolicy::CENSUS_DEFAULT.max_requests_per_registrable_domain,
+        discovery::MAX_REQUESTS_PER_DISCOVERY,
+    );
+
+    let mut budget_refusals = 0usize;
     let mut discovery_attempted = 0usize;
     let mut discovery_succeeded = 0usize;
     let mut discovery_failure_categories: std::collections::BTreeMap<&'static str, usize> = std::collections::BTreeMap::new();
@@ -223,7 +255,27 @@ pub fn run(sample_size: usize) -> Result<(), Box<dyn std::error::Error>> {
         discovery_attempted += 1;
         eprintln!("probe-stage1: [{}/{}] {} ({})", i + 1, candidates.len(), candidate.name, candidate.url);
 
-        let outcome = discover(&candidate.url);
+        // Admitted before a client exists, so a domain whose budget is spent costs no
+        // connection at all — and is recorded, never dropped from the sample.
+        let outcome = match pacer.admit(&candidate.url) {
+            Ok(permit) => discover(&candidate.url, permit),
+            Err(denied) => {
+                eprintln!("probe-stage1:   refused: {denied}");
+                budget_refusals += 1;
+                *discovery_failure_categories
+                    .entry("registrable_domain_budget_exhausted")
+                    .or_insert(0) += 1;
+                server_reports.push(serde_json::json!({
+                    "name": candidate.name,
+                    "url": candidate.url,
+                    "registrable_domain":
+                        discovery::registrable_domain_of_endpoint(&candidate.url),
+                    "outcome": "refused_by_domain_budget",
+                    "detail": denied.to_string(),
+                }));
+                continue;
+            }
+        };
         let (tools_list_raw, spec_revision, tools) = match outcome {
             DiscoverOutcome::Success { tools_list_raw, spec_revision, tools } => {
                 discovery_succeeded += 1;
@@ -310,17 +362,30 @@ pub fn run(sample_size: usize) -> Result<(), Box<dyn std::error::Error>> {
         let declared_read_only = declared_bool(&probed_tool.annotations, "readOnlyHint");
         let declared_idempotent = declared_bool(&probed_tool.annotations, "idempotentHint");
 
+        // One permit per protocol run, admitted against this crate's own request bound.
+        // A refusal here is not a probe failure: no request was made, so it is logged and
+        // counted as a refusal rather than coerced into a verdict or into an error.
+        let ro_permit = pacer.admit_with_reservation(&candidate.url, MAX_REQUESTS_PER_PROBE);
+        let idem_permit = pacer.admit_with_reservation(&candidate.url, MAX_REQUESTS_PER_PROBE);
+        for denied in
+            [ro_permit.as_ref().err(), idem_permit.as_ref().err()].into_iter().flatten()
+        {
+            eprintln!("probe-stage1:     refused before probing: {denied}");
+            budget_refusals += 1;
+        }
+
         let ro_target = ProbeTarget {
             endpoint: &candidate.url,
             tool_name: &probed_tool.name,
             input_schema: &probed_tool.input_schema,
             timeout: REQUEST_TIMEOUT,
+            permit: ro_permit.ok(),
         };
         run_and_record(
             &conn,
             "readOnlyHint",
             &spec_revision,
-            || probe::probe_read_only_hint(&ro_target, declared_read_only),
+            || probe::probe_read_only_hint(ro_target, declared_read_only),
             &snapshot_id,
             Annotation::ReadOnlyHint,
             declared_read_only,
@@ -334,12 +399,13 @@ pub fn run(sample_size: usize) -> Result<(), Box<dyn std::error::Error>> {
             tool_name: &probed_tool.name,
             input_schema: &probed_tool.input_schema,
             timeout: REQUEST_TIMEOUT,
+            permit: idem_permit.ok(),
         };
         run_and_record(
             &conn,
             "idempotentHint",
             &spec_revision,
-            || probe::probe_idempotent_hint(&idem_target, declared_idempotent),
+            || probe::probe_idempotent_hint(idem_target, declared_idempotent),
             &snapshot_id,
             Annotation::IdempotentHint,
             declared_idempotent,
@@ -385,6 +451,7 @@ pub fn run(sample_size: usize) -> Result<(), Box<dyn std::error::Error>> {
         "generated_at_unix": generated_at_unix,
         "track": "B — protocol-probe oracle (B-01/B-02/B-03 validation)",
         "sample_size_requested": sample_size,
+        "sample_seed": format!("{sample_seed:#018x}"),
         "class_b_candidates_found": candidates.len(),
         "discovery_attempted": discovery_attempted,
         "discovery_succeeded": discovery_succeeded,
@@ -392,6 +459,11 @@ pub fn run(sample_size: usize) -> Result<(), Box<dyn std::error::Error>> {
         "servers_with_zero_tools": servers_with_zero_tools,
         "servers_probed": servers_probed,
         "probe_protocols_run": invocations_attempted,
+        // The same `pacing` block `census_stage1` publishes, built by the same function, so
+        // Track B's conduct is auditable from its own results file rather than asserted.
+        // ADR-014 flagged `probe` as unpaced; this is that flag closed.
+        "pacing": crate::census_report::pacing_header(&pacer.accounting()),
+        "sequences_refused_by_domain_budget": budget_refusals,
         // Every axis the aggregation guard groups on is disclosed in the published row,
         // `declared` included: a `holds` count that does not say what was declared pools a
         // verified read-only tool with one that merely admitted it writes (B-03's invariant,

@@ -47,7 +47,7 @@ use crate::sweep::{self, DiskGuard, StopFlag};
 
 // Shared with the other sweeps rather than re-derived: sampling comparability across
 // Stage 1 / Stage 2 / Track B depends on all of them selecting by the *same* stable hash.
-use crate::census_stage1::stable_hash;
+use crate::census_stage1::{resolve_sample_seed, stable_hash};
 
 const STAGE: &str = "2 — containerized execution (docker run) against live Class A servers";
 const DEFAULT_OUT: &str = "results/census/class_a_annotation_coverage.json";
@@ -330,7 +330,12 @@ pub fn run(args: &SweepArgs) -> Result<(), Box<dyn std::error::Error>> {
         "census-stage2-class-a: {} Class A candidates found; selecting {sample_size} by stable hash...",
         all_class_a.len()
     );
-    all_class_a.sort_by_key(|c| stable_hash(&c.name));
+    // Seeded, for the same reason Stage 1's is: an unsalted, keyless hash makes sample
+    // membership precomputable offline by anyone, which is what makes a targeted starvation
+    // of the budget practical. The seed is published in this stage's header too.
+    let sample_seed = resolve_sample_seed(args.sample_seed);
+    eprintln!("census-stage2-class-a: sample seed {sample_seed:#018x} (published in the header)");
+    all_class_a.sort_by_key(|c| stable_hash(&c.name, sample_seed));
     let candidates: Vec<Candidate> = all_class_a.into_iter().take(sample_size).collect();
     // After the pre-pull, before any attempt: an `oci` reference Docker reports absent now
     // can only be on the host later because an attempt pulled it.
@@ -369,10 +374,18 @@ pub fn run(args: &SweepArgs) -> Result<(), Box<dyn std::error::Error>> {
             // see its doc comment. The candidate index makes it unique within this sweep
             // however many attempts run concurrently; sweep_id makes it unique across sweeps.
             let container_name = format!("mcp-conf-stage2-{sweep_id}-{i}");
-            ServerObservation {
-                identity: identity(candidate),
-                observation: observe(candidate, &container_name, &store, &stop, &hygiene),
+            // Per attempt, so one panicking entry costs one record rather than the whole
+            // results file -- see . Identity is reattached
+            // after, because the guard cannot know it.
+            let mut observed =
+                census_report::guard_attempt("census-stage2-class-a", || ServerObservation {
+                    identity: identity(candidate),
+                    observation: observe(candidate, &container_name, &store, &stop, &hygiene),
+                });
+            if observed.identity.is_empty() {
+                observed.identity = identity(candidate);
             }
+            observed
         },
     );
 
@@ -383,6 +396,7 @@ pub fn run(args: &SweepArgs) -> Result<(), Box<dyn std::error::Error>> {
         attempted: pool.completed.len(),
         stop_reason: pool.stop_reason,
         evidence_store: &evidence_dir,
+        sample_seed: Some(sample_seed),
     }
     .into_map()?;
     header.insert("execution_provenance".into(), "containerized_docker".into());
@@ -390,7 +404,24 @@ pub fn run(args: &SweepArgs) -> Result<(), Box<dyn std::error::Error>> {
     // Header, not derived: carried verbatim through `census-rederive` (it describes what the
     // sweep did to the host, not anything the evidence says).
     header.insert("image_hygiene".into(), hygiene.finish());
-    let store = store.into_inner().map_err(|_| "evidence store lock poisoned")?;
+    // P0-12, stated rather than left absent: this stage sends no HTTP request to any
+    // third-party *MCP server*, so there is nothing for the request pacer to pace. The
+    // politeness question Stage 2 does have is a different one, and is named here rather
+    // than quietly omitted — see this module's doc comment and tasks.md P0-12.
+    header.insert(
+        "pacing".into(),
+        census_report::pacing_not_applicable(
+            "Stage 2 discovers over stdio to a local container, not over HTTP to a \
+             third-party endpoint, so the P0-12 request pacer has nothing to pace. The \
+             third-party load this stage does cause is package-registry traffic from \
+             `npx`/`uvx` inside the container, which is outside the harness's own request \
+             path and is not governed here; see tasks.md P0-12.",
+        ),
+    );
+    //  on poison rather than an error: a panicking attempt poisons this lock,
+    // and failing here would discard the results file for every server already executed --
+    // re-creating, one layer up, the total loss  was added to stop.
+    let store = store.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner);
     census_report::finish("census-stage2-class-a", header, &store, &pool.completed, &out_path)
 }
 

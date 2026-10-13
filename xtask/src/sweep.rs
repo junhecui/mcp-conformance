@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 
 /// Below this much free space on any volume the sweep writes to, no new attempt launches.
 ///
@@ -31,7 +31,7 @@ impl StopFlag {
     /// Record `reason`, unless an earlier reason already tripped the flag (first one wins —
     /// it is the cause; later ones are usually its consequences).
     pub(crate) fn trip(&self, reason: String) {
-        let mut slot = self.0.lock().expect("stop flag lock poisoned");
+        let mut slot = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         if slot.is_none() {
             *slot = Some(reason);
         }
@@ -39,7 +39,7 @@ impl StopFlag {
 
     /// `Err(reason)` once tripped, for use directly as (part of) a pool preflight.
     pub(crate) fn check(&self) -> Result<(), String> {
-        match &*self.0.lock().expect("stop flag lock poisoned") {
+        match &*self.0.lock().unwrap_or_else(PoisonError::into_inner) {
             Some(reason) => Err(reason.clone()),
             None => Ok(()),
         }
@@ -126,6 +126,17 @@ fn parse_df_available_kib(output: &str) -> Option<u64> {
     })
 }
 
+/// Every lock in this module is read back with `PoisonError::into_inner` rather than
+/// `expect`.
+///
+/// Poisoning here means some *other* attempt panicked. The state behind each of these locks
+/// is a counter, a stop reason or a result slot — none of it is left structurally
+/// invalid by an interrupted write — and refusing to read it would escalate one lost
+/// attempt into a lost results file, which is the exact failure
+/// [`crate::census_report::guard_attempt`] exists to prevent. The `expect` that remains is
+/// on a slot being *filled*, which is an invariant of this module's own claim/fill protocol
+/// and not something another thread's panic can falsify.
+///
 /// What [`run_bounded`] got through.
 pub(crate) struct PoolOutcome<T> {
     /// One result per attempted item, in *input* order — always items `0..completed.len()`.
@@ -167,7 +178,8 @@ where
             scope.spawn(|| {
                 loop {
                     let index = {
-                        let mut claims = claims.lock().expect("claims lock poisoned");
+                        let mut claims =
+                            claims.lock().unwrap_or_else(PoisonError::into_inner);
                         if claims.stop_reason.is_some() || claims.next >= items.len() {
                             return;
                         }
@@ -179,19 +191,20 @@ where
                         claims.next - 1
                     };
                     let result = work(index, &items[index]);
-                    *slots[index].lock().expect("slot lock poisoned") = Some(result);
+                    *slots[index].lock().unwrap_or_else(PoisonError::into_inner) =
+                        Some(result);
                 }
             });
         }
     });
 
-    let claims = claims.into_inner().expect("claims lock poisoned");
+    let claims = claims.into_inner().unwrap_or_else(PoisonError::into_inner);
     let completed = slots
         .into_iter()
         .take(claims.next)
         .map(|slot| {
             slot.into_inner()
-                .expect("slot lock poisoned")
+                .unwrap_or_else(PoisonError::into_inner)
                 .expect("every claimed index is filled before its worker exits")
         })
         .collect();

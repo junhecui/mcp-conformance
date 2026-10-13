@@ -513,6 +513,28 @@ impl DiscoveryClient {
         }
     }
 
+    /// [`Self::http_with_timeout`], governed by a P0-12 pacing [`Permit`].
+    ///
+    /// The permit is taken from the run's [`Pacer`] *before* this client is built, so a host
+    /// whose registrable-domain budget is already spent is refused without a connection
+    /// being opened — and recorded by the caller as a refusal, never skipped. Every request
+    /// the sequence then sends is spaced against that domain and charged to it, including
+    /// the modern probe and every step of a legacy fallback.
+    ///
+    /// [`Permit`]: crate::pace::Permit
+    /// [`Pacer`]: crate::pace::Pacer
+    #[must_use]
+    pub fn http_paced(
+        endpoint: impl Into<String>,
+        timeout: Duration,
+        permit: crate::pace::Permit,
+    ) -> Self {
+        Self {
+            transport: Box::new(HttpTransport::paced(endpoint.into(), timeout, permit)),
+            respawn: None,
+        }
+    }
+
     /// Run the full discovery sequence and capture its evidence. Never calls a tool.
     ///
     /// Modern-first, per the module doc comment: `server/discover`, then either
@@ -810,6 +832,16 @@ impl DiscoveryClient {
     ///
     /// One shot, and only from [`Self::discover_legacy`]: `discover` calls that function at
     /// most once, so this cannot loop no matter what a server does.
+    /// **Latent P0-12 trap, for whoever makes a reconnecting transport paced.** This replaces
+    /// `self.transport` wholesale, and a paced transport owns its [`crate::Permit`] (the
+    /// permit lives inside the agent, because the agent is the only thing that can send).
+    /// Rebuilding the transport would therefore *drop* the permit and leave the rest of the
+    /// sequence both unpaced and **uncharged** — an undercount, the direction that hides load
+    /// rather than overstating it, and invisible in the published accounting because the
+    /// requests simply never appear. Safe today only because the stdio transport is never
+    /// paced and [`Self::http_paced`] sets `respawn: None`, so the two features cannot meet.
+    /// A respawn that must keep pacing has to carry the permit across rather than rebuild
+    /// around it.
     fn respawn_stdio(&mut self) -> Result<(), DiscoveryError> {
         let Some(recipe) = &self.respawn else { return Ok(()) };
         let args: Vec<&str> = recipe.args.iter().map(String::as_str).collect();

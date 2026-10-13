@@ -42,5 +42,5 @@ pub use client::{ProbeClient, ProbeError};
 pub use protocol::{
     ProbeAssessment, assess_idempotent, assess_read_only, invocation_failed, no_probe_surface,
 };
-pub use runner::{ProbeTarget, probe_idempotent_hint, probe_read_only_hint};
+pub use runner::{MAX_REQUESTS_PER_PROBE, ProbeTarget, probe_idempotent_hint, probe_read_only_hint};
 pub use snapshot::{ProbeSurface, ResourceRef, discover_surface, snapshot_state};

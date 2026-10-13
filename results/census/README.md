@@ -3,6 +3,63 @@
 The JSON files here are the curated, committed census artifacts. Every number in them is
 re-derivable offline from the evidence store by `cargo xtask census-rederive`.
 
+## `pacing`, and how to check it
+
+A Stage 1 results file carries a top-level `pacing` block (P0-12,
+[ADR-014](../../docs/adr/014-request-pacing-and-domain-budget.md)) holding both the policy the
+sweep ran under — the minimum interval between consecutive requests to one registrable domain,
+the per-domain request cap, the per-discovery reservation, `max_redirects`, and the named key
+derivation — and what that policy actually produced: requests sent, time waited, domains
+contacted, the most-loaded domain, refusals, overshoot, and the 25 most-loaded per-domain
+rows. Each server record carries its own `pacing` (`registrable_domain`, `requests_sent`,
+`waited_ms`).
+
+`max_redirects` is `0`, and it belongs with the policy rather than as trivia: a followed
+redirect would be a request the accounting below it cannot see. No HTTP client in this harness
+follows one, so the request counts in this block are the requests the sweep actually sent. A
+server answering a 3xx is not followed; its status lands in the `transport` bucket with the
+detail `http status: 30x`, the same bucket the July file's 15 `redirect failed` entries
+already occupy.
+
+The two halves are meant to be cross-checked rather than believed. Six header fields must
+equal what the per-server records give: `requests_sent`, `waited_ms_total`,
+`sequences_denied_by_budget`, `registrable_domains_contacted`, `overshoot_requests`, and —
+the one that substantiates "no third party received more than N requests" —
+`max_requests_to_one_registrable_domain`, derived by grouping per-server `requests_sent` by
+per-server `registrable_domain` and taking the maximum. A live sweep prints
+`PACING ACCOUNTING INCONSISTENT` and keeps its data; `cargo xtask census-rederive` prints the
+same and **exits non-zero**, because the offline audit path has nothing at risk and is the
+path a reader auditing a published file uses.
+
+`failure_category: "registrable_domain_budget_exhausted"` is a **harness-side** outcome, not a
+finding about the server: that host's registrable domain had spent its request budget, so no
+request was made to it at all. It is a bucket of its own precisely so a reader can subtract it
+— `transport`, `protocol`, `rate_limited` and the tool-weighted fields mean exactly what they
+meant in the July files beside it. A Stage 2 file carries `pacing: {"applies": false, …}`,
+because it discovers over stdio to a local container and so has no HTTP request to pace.
+
+**Comparing a paced sweep to July: add the refusals back first.** A refusal is subtractable
+from the *total*, but against a per-category count it is a **displacement** — it replaces
+whatever category that host would otherwise have landed in. Worked example, projected over the
+committed July corpus: the success rate is unchanged at exactly 25.0%, because all 149
+`pipeworx.io` entries were `protocol` failures in July, but `failure_categories.protocol` moves
+**312 → 221**. A reader who sees that and asks *"SSE-only dropped by 91, did the ecosystem
+change?"* has been misled: 91 of those hosts were never contacted. The refusal record cannot
+say which category it displaced, because by construction nothing was learned about that host —
+which is why the refused hosts are listed individually and why the July file is worth keeping
+beside the new one.
+
+`sample_seed` in the header is the seed the sample selection and admission order were drawn
+under, as a hex string (never a JSON number — a `u64` above 2^53 would be silently rounded,
+and a seed that does not reproduce its own sample is worse than no seed). Pass it back as
+`--sample-seed` to reproduce a sweep's exact sample. It exists because a keyless hash made
+sample membership and position precomputable offline, which made starving a chosen domain out
+of the census practical; see ADR-014 §3a, including the measured finding that the registry
+does not bind an entry's URL to its publisher's verified namespace.
+
+`failure_detail` holds server-authored text in the general case and is length-bounded for that
+reason; a budget-refusal detail is written by the harness.
+
 ## `evidence/` is untrusted and deliberately uncommitted
 
 `evidence/` (git-ignored; see the repo root `.gitignore`) is P0-10's content-addressed

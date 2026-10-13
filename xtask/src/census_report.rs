@@ -363,6 +363,12 @@ pub(crate) fn http_status_detail(status: u16, retry_after: Option<&str>) -> Stri
 pub(crate) struct ServerObservation {
     /// Stage-specific identity fields (name, endpoint or package, execution provenance),
     /// opaque to derivation and carried into the record verbatim.
+    ///
+    /// P0-12's per-server `pacing` block rides here too. It is an observation of the
+    /// *harness's own conduct* rather than of the server, so there is nothing in the
+    /// evidence store to recompute it from, and carrying it verbatim is what lets
+    /// [`rederive`] reproduce it byte for byte — the same treatment `generated_at_unix`
+    /// gets in the header.
     pub(crate) identity: Map<String, Value>,
     /// What the attempt observed.
     pub(crate) observation: Observation,
@@ -407,7 +413,14 @@ pub(crate) fn persist(store: &BlobStore, discovery: &Discovery) -> Result<Observ
 /// `evidence_store_error` failure for this server (honestly — its bytes were not kept) and
 /// trips `stop`, so no further attempt launches into a store that cannot keep its evidence.
 pub(crate) fn record_discovery(store: &Mutex<BlobStore>, discovery: &Discovery, stop: &StopFlag) -> Observation {
-    let result = persist(&store.lock().expect("evidence store lock poisoned"), discovery);
+    // `into_inner` on poison, not `expect`: an attempt that panicked while holding this
+    // lock must cost that one attempt, not every later one *and* the results file. The blob
+    // store behind it is append-only and content-addressed, so a half-finished `put` leaves
+    // no observable state to be confused by (F-05 writes temp-then-rename).
+    let result = persist(
+        &store.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
+        discovery,
+    );
     result.unwrap_or_else(|e| {
         stop.trip(format!("evidence store write failed: {e}"));
         Observation::failed("evidence_store_error", &e.to_string())
@@ -438,6 +451,13 @@ pub(crate) struct RunHeader<'a> {
     pub(crate) stop_reason: Option<String>,
     /// The evidence store root this run wrote to.
     pub(crate) evidence_store: &'a Path,
+    /// The seed the sample selection and admission order were drawn under, for a stage that
+    /// samples. `None` for a stage that does not.
+    ///
+    /// Published because it is the whole point: a sweep must stay exactly reproducible for
+    /// anyone holding this file, while not being precomputable by anyone before it ran. An
+    /// unpublished seed would buy the second property by destroying the first.
+    pub(crate) sample_seed: Option<u64>,
 }
 
 impl RunHeader<'_> {
@@ -453,12 +473,265 @@ impl RunHeader<'_> {
             "incomplete_reason": self.stop_reason,
             "not_attempted": self.candidates_selected - self.attempted,
             "evidence_store": self.evidence_store.display().to_string(),
+            // Rendered as a decimal string, not a JSON number: a `u64` seed can exceed
+            // 2^53 and would then be silently rounded by any JSON reader backed by doubles,
+            // which would make the published seed fail to reproduce the sample it describes.
+            "sample_seed": self.sample_seed.map(|s| format!("{s:#018x}")),
         }) else {
             unreachable!("json! of an object literal is an object")
         };
         Ok(map)
     }
 }
+
+// ---- P0-12: pacing, made auditable rather than asserted ----
+
+/// How many per-domain rows a results file lists under `pacing.registrable_domains`.
+///
+/// Bounded because the key is server-influenceable: at 1,000 hosts the tail is hundreds of
+/// rows with one request each, which says nothing a reader needs. The rows that matter for
+/// auditing a politeness claim are the most-loaded ones, and `max_requests_to_one_
+/// registrable_domain` plus `requests_sent` already bound the whole distribution.
+const MAX_LISTED_DOMAINS: usize = 25;
+
+/// The `pacing` header block for a sweep that paced its requests.
+///
+/// Both halves are here on purpose. The *policy* (interval, cap, reservation, how the key is
+/// derived) is what a reader needs to know what was promised; the *accounting* (requests
+/// sent, time waited, domains contacted, the most-loaded domains, every refusal) is what
+/// they need to check it was kept. This project's convention is that a claim nobody can
+/// check is not a finding, and "the sweep was polite" is exactly such a claim.
+pub(crate) fn pacing_header(accounting: &discovery::Accounting) -> Value {
+    let domains: Vec<Value> = accounting
+        .domains
+        .iter()
+        .take(MAX_LISTED_DOMAINS)
+        .map(|d| {
+            json!({
+                "registrable_domain": d.registrable_domain,
+                "requests": d.requests,
+                "sequences_admitted": d.sequences_admitted,
+                "sequences_denied": d.sequences_denied,
+            })
+        })
+        .collect();
+    json!({
+        "applies": true,
+        "grouping": PACE_GROUPING,
+        "min_interval_ms": millis(accounting.policy.min_interval),
+        "max_requests_per_registrable_domain":
+            accounting.policy.max_requests_per_registrable_domain,
+        "per_discovery_reservation": accounting.per_discovery_reservation,
+        // Part of the policy, not a curiosity: a followed redirect is a request this block
+        // cannot see. ureq's default is 10, so before B1 one POST could become 11 requests
+        // with no spacing between them and only the first charged, which would make every
+        // number below an undercount of real load by up to 11x. Published so that the
+        // claim "these counts are the requests this sweep sent" is checkable rather than
+        // assumed.
+        "max_redirects": discovery::MAX_REDIRECTS,
+        "requests_sent": accounting.requests_sent,
+        "waited_ms_total": millis(accounting.waited),
+        "registrable_domains_contacted": accounting.registrable_domains_contacted,
+        "registrable_domains_seen": accounting.domains.len(),
+        "max_requests_to_one_registrable_domain":
+            accounting.max_requests_to_one_registrable_domain,
+        "sequences_denied_by_budget": accounting.sequences_denied,
+        "overshoot_requests": accounting.overshoot_requests,
+        "registrable_domains_listed": domains.len(),
+        "registrable_domains": domains,
+    })
+}
+
+/// How [`discovery::registrable_domain`] derives its key, named in the results header so a
+/// reader can reproduce the grouping without reading the source. Versioned, because changing
+/// the derivation changes what every published per-domain row means.
+const PACE_GROUPING: &str = "heuristic-v1 (ADR-014): last two host labels, or three when the \
+                             second-to-last is a generic registry second level; an IP literal \
+                             is its own key";
+
+/// The `pacing` header block for a sweep where request pacing does not apply, with the
+/// reason stated rather than the block merely absent.
+///
+/// An absent block and a block saying "not applicable" are different claims about a results
+/// file — the same distinction P0-11 drew for probe evidence (`unrecorded` versus
+/// `no_response`). A reader auditing politeness across both census stages must be able to
+/// tell "this sweep paced nothing" from "this sweep is older than pacing".
+pub(crate) fn pacing_not_applicable(reason: &str) -> Value {
+    json!({ "applies": false, "reason": reason })
+}
+
+/// A duration in whole milliseconds as a `u64`.
+///
+/// `Duration::as_millis` is a `u128`, and `serde_json` *fails to serialise* a `u128` above
+/// `u64::MAX` — which would abort the write of an entire results file rather than record one
+/// odd number. Saturating here keeps that impossible by construction.
+fn millis(d: std::time::Duration) -> u64 {
+    u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
+}
+
+/// One server's pacing accounting, for its record in the results file.
+pub(crate) fn pacing_record(
+    registrable_domain: &str,
+    requests: usize,
+    waited: std::time::Duration,
+) -> Value {
+    json!({
+        "registrable_domain": registrable_domain,
+        "requests_sent": requests,
+        "waited_ms": millis(waited),
+    })
+}
+
+/// Check a results file's `pacing` header against its own per-server records.
+///
+/// `Ok(())` when there is no pacing block, when pacing does not apply, or when every header
+/// field that is **derivable** from the per-server rows matches them exactly. Otherwise the
+/// mismatches, named.
+///
+/// Six fields are checked, not three. The three totals (`requests_sent`, `waited_ms_total`,
+/// `sequences_denied_by_budget`) were always checked; the three added here are the ones a
+/// reader actually quotes:
+///
+/// - **`max_requests_to_one_registrable_domain`** — the headline politeness number, the
+///   one that substantiates "no third party received more than N requests". It was published
+///   unchecked, which is the worst combination: load-bearing in a summary and unverified
+///   against the data beneath it. It is the maximum, over domains, of the per-server
+///   `requests_sent` grouped by per-server `registrable_domain`.
+/// - **`registrable_domains_contacted`** — distinct domains with at least one request.
+/// - **`overshoot_requests`** — `Σ max(0, requests_sent − per_discovery_reservation)`
+///   over the records. This is the number that is supposed to go non-zero the day
+///   `tools/list` pagination lands, so a published zero needs to mean something.
+///
+/// The overshoot derivation assumes **one permit per server record**, which every sweep
+/// writing this block holds by construction (Stage 1 admits once per candidate;
+/// `pin_stability` deliberately covers both its sequences with a single permit for exactly
+/// this reason). A file that ever breaks that assumption must not publish this block
+/// unchanged.
+///
+/// Deliberately independent of [`pacing_header`], in the shape B-03's
+/// `verify_report_matches_records` established: a checker that shares the aggregator's code
+/// can only confirm the aggregator is self-consistent, never that the published numbers
+/// describe the records beneath them.
+pub(crate) fn verify_pacing_self_consistent(report: &Value) -> Result<(), Vec<String>> {
+    let Some(pacing) = report.get("pacing") else { return Ok(()) };
+    if pacing.get("applies").and_then(Value::as_bool) != Some(true) {
+        return Ok(());
+    }
+    let servers = report.get("servers").and_then(Value::as_array).map_or(&[][..], |a| a.as_slice());
+    let reservation =
+        pacing.get("per_discovery_reservation").and_then(Value::as_u64).unwrap_or(0);
+
+    let mut requests = 0u128;
+    let mut waited = 0u128;
+    let mut denied = 0u128;
+    let mut overshoot = 0u128;
+    let mut per_domain: BTreeMap<&str, u128> = BTreeMap::new();
+    for server in servers {
+        let n = |key: &str| {
+            server.pointer(&format!("/pacing/{key}")).and_then(Value::as_u64).unwrap_or(0)
+        };
+        let sent = n("requests_sent");
+        requests += u128::from(sent);
+        waited += u128::from(n("waited_ms"));
+        overshoot += u128::from(sent.saturating_sub(reservation));
+        if let Some(domain) =
+            server.pointer("/pacing/registrable_domain").and_then(Value::as_str)
+        {
+            *per_domain.entry(domain).or_insert(0) += u128::from(sent);
+        }
+        if server.get("failure_category").and_then(Value::as_str) == Some(BUDGET_EXHAUSTED) {
+            denied += 1;
+        }
+    }
+    let max_to_one_domain = per_domain.values().copied().max().unwrap_or(0);
+    let domains_contacted = per_domain.values().filter(|n| **n > 0).count() as u128;
+
+    let mut problems = Vec::new();
+    let claimed = |key: &str| pacing.get(key).and_then(Value::as_u64).map(u128::from);
+    for (key, summed) in [
+        ("requests_sent", requests),
+        ("waited_ms_total", waited),
+        ("sequences_denied_by_budget", denied),
+        ("max_requests_to_one_registrable_domain", max_to_one_domain),
+        ("registrable_domains_contacted", domains_contacted),
+        ("overshoot_requests", overshoot),
+    ] {
+        match claimed(key) {
+            Some(value) if value == summed => {}
+            Some(value) => problems.push(format!(
+                "pacing.{key} is {value} but the per-server records give {summed}"
+            )),
+            None => problems.push(format!("pacing.{key} is missing or not a number")),
+        }
+    }
+    if problems.is_empty() { Ok(()) } else { Err(problems) }
+}
+
+/// Failure category for a host refused because its registrable domain's request budget is
+/// spent (P0-12).
+///
+/// A **new** category, which is what keeps July comparability: `transport`, `protocol`,
+/// `rate_limited` and the tool-weighted fields all keep their meaning, and a refusal lands
+/// in a bucket July never had rather than being pooled into one it did. It is also a
+/// harness-side decision rather than a finding about the server — the same kind of thing as
+/// P0-10's `evidence_store_error` — so a reader must be able to subtract it, which a
+/// distinct name is what makes possible.
+pub(crate) const BUDGET_EXHAUSTED: &str = "registrable_domain_budget_exhausted";
+
+/// Failure category for an attempt whose worker panicked.
+///
+/// Like [`BUDGET_EXHAUSTED`] and P0-10's `evidence_store_error`, this is a **harness-side**
+/// outcome rather than a finding about the server, so it is its own subtractable bucket and
+/// never pooled into one July had.
+///
+/// It exists because the alternative was losing the run. `sweep::run_bounded` runs its
+/// workers in a `thread::scope`, which re-panics on join: a panic in one attempt unwound
+/// past the header insert and past [`finish`], so nothing was written at all and every host
+/// contacted up to that point was contacted for no artifact. Catching per attempt turns a
+/// single point of total loss into one record saying what happened — which, for a
+/// harness whose inputs are assumed hostile (design.md §3), is the only acceptable shape
+/// even though no reachable panic on server-controlled data is known today.
+pub(crate) const HARNESS_PANIC: &str = "harness_panic";
+
+/// Run one attempt, converting a panic into a [`HARNESS_PANIC`] observation.
+///
+/// The payload is sanitised and length-bounded exactly as server-authored text is
+/// elsewhere in this module: a panic message can embed bytes a server supplied (a formatted
+/// URL, a response fragment), and this string lands in a published results file.
+///
+/// The default panic hook still prints its own, unsanitised line to stderr before this sees
+/// anything; that is pre-existing and out of scope here, and the same hazard
+/// `discovery::transport`'s child-stderr relay already addresses for the one stream where
+/// server text was known to flow.
+pub(crate) fn guard_attempt(
+    label: &str,
+    attempt: impl FnOnce() -> ServerObservation,
+) -> ServerObservation {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(attempt)) {
+        Ok(observation) => observation,
+        Err(payload) => {
+            let raw = payload
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "panic payload was not a string".to_string());
+            let safe: String = raw
+                .chars()
+                .filter(|c| *c == ' ' || *c == '\t' || (c.is_ascii_graphic()))
+                .take(MAX_PANIC_DETAIL_CHARS)
+                .collect();
+            eprintln!("{label}: ATTEMPT PANICKED, recorded as {HARNESS_PANIC} — {safe}");
+            ServerObservation {
+                identity: Map::new(),
+                observation: Observation::failed(HARNESS_PANIC, &safe),
+            }
+        }
+    }
+}
+
+/// Bound on a recorded panic detail, for the same reason `failure_detail` is bounded in
+/// general: the text may be server-influenced and it is published.
+const MAX_PANIC_DETAIL_CHARS: usize = 300;
 
 /// Build a complete results file from `header` and `servers`, reading every response back
 /// out of `store`. The single derivation path: the live sweeps and [`rederive`] both end here.
@@ -868,6 +1141,29 @@ pub(crate) fn finish(
         n("/evidence_summary/distinct_blobs"),
         n("/evidence_summary/bytes_referenced") as f64 / with_evidence.max(1) as f64,
     );
+    if report.pointer("/pacing/applies").and_then(Value::as_bool) == Some(true) {
+        eprintln!(
+            "{label}: pacing — {} requests over {} registrable domains at {} ms spacing \
+             (cap {}/domain), {} ms waited, most-loaded domain {} requests, {} host(s) refused \
+             for budget",
+            n("/pacing/requests_sent"),
+            n("/pacing/registrable_domains_contacted"),
+            n("/pacing/min_interval_ms"),
+            n("/pacing/max_requests_per_registrable_domain"),
+            n("/pacing/waited_ms_total"),
+            n("/pacing/max_requests_to_one_registrable_domain"),
+            n("/pacing/sequences_denied_by_budget"),
+        );
+    }
+    // Checked here as well as in `run_rederive`, so a published file's politeness claim is
+    // verified against its own records before the file is written, not only if someone later
+    // thinks to re-derive it. A mismatch is a harness bug, so it is loud and does not fail
+    // the sweep — the data already collected is worth keeping.
+    if let Err(problems) = verify_pacing_self_consistent(&report) {
+        for problem in problems {
+            eprintln!("{label}: PACING ACCOUNTING INCONSISTENT — {problem}");
+        }
+    }
     if let Some(reason) = report["incomplete_reason"].as_str() {
         eprintln!("{label}: INCOMPLETE — {reason}");
     }
@@ -948,6 +1244,25 @@ pub fn run_rederive(args: &crate::cli::RederiveArgs) -> Result<bool, Box<dyn std
         std::fs::write(out, &outcome.regenerated)?;
         eprintln!("census-rederive: wrote {}", out.display());
     }
+    // Independent of whether the file reproduces: a pacing claim that does not match the
+    // records beneath it is wrong whichever way the byte comparison went, and an offline
+    // re-derivation is exactly where a reader auditing a published sweep would look.
+    //
+    // **And here it fails the command**, unlike in `finish`. The asymmetry is deliberate:
+    // not failing a *live sweep* is right, because the data already collected is worth
+    // keeping and third-party contact has already been spent. The offline audit path has
+    // nothing at risk, and returning success while printing
+    // `PACING ACCOUNTING INCONSISTENT` means a CI job or a reviewer's script checking a
+    // published file would pass on a file whose politeness claim is demonstrably wrong.
+    let mut pacing_consistent = true;
+    if let Err(problems) =
+        verify_pacing_self_consistent(&serde_json::from_str(&outcome.regenerated)?)
+    {
+        pacing_consistent = false;
+        for problem in problems {
+            eprintln!("census-rederive: PACING ACCOUNTING INCONSISTENT — {problem}");
+        }
+    }
     if outcome.byte_identical {
         eprintln!(
             "census-rederive: {} reproduces byte-for-byte from stored evidence ({} servers, {} with evidence)",
@@ -961,7 +1276,9 @@ pub fn run_rederive(args: &crate::cli::RederiveArgs) -> Result<bool, Box<dyn std
             eprintln!("census-rederive:   {difference}");
         }
     }
-    Ok(outcome.byte_identical)
+    // Both conditions, not just reproduction: a file whose published pacing does not
+    // describe its own records fails this command even when the bytes reproduce exactly.
+    Ok(outcome.byte_identical && pacing_consistent)
 }
 
 /// Split a parsed results file into its header and its per-server observations.
@@ -1210,6 +1527,7 @@ mod tests {
             attempted: servers.len(),
             stop_reason: None,
             evidence_store: &evidence_dir,
+            sample_seed: None,
         }
         .into_map()
         .expect("clock");
@@ -1300,6 +1618,7 @@ mod tests {
             attempted: pool.completed.len(),
             stop_reason: None,
             evidence_store: &evidence_dir,
+            sample_seed: None,
         }
         .into_map()
         .expect("clock");
@@ -1498,6 +1817,26 @@ mod tests {
         // And the sweeps must agree on the name, since they share one mapping.
         assert_eq!(http_status_category(429), "rate_limited");
         assert_eq!(http_status_category(503), "transport");
+        // B1: no HTTP client in this harness follows a redirect any more, so a 3xx arrives
+        // as an ordinary response and fails `call_raw`'s status gate. It must land in
+        // `transport` — which is where the committed July file's 15 `redirect failed`
+        // entries already sit, inside its 435 `transport` failures. Only the detail string
+        // changes, from `redirect failed` to `http status: 30x`, so the July split (435
+        // transport against 312 protocol) keeps its meaning.
+        for status in [301, 302, 303, 307, 308] {
+            assert_eq!(
+                http_status_category(status),
+                "transport",
+                "an unfollowed {status} must stay in the bucket a `redirect failed` was in"
+            );
+            assert_eq!(http_status_detail(status, None), format!("http status: {status}"));
+            // No `Retry-After` suffix outside 429, so a 3xx that happens to carry the
+            // header cannot produce a detail July never produced.
+            assert_eq!(
+                http_status_detail(status, Some("30")),
+                format!("http status: {status}")
+            );
+        }
     }
 
     /// The `Retry-After` suffix belongs to `429` and nothing else.
@@ -1708,11 +2047,16 @@ mod tests {
             attempted: 4,
             stop_reason: Some("free disk space ... under the 3 GiB floor".into()),
             evidence_store: Path::new("ev"),
+            sample_seed: Some(0x1234_5678_9abc_def0),
         }
         .into_map()
         .expect("clock");
         assert_eq!(header["complete"], false);
         assert_eq!(header["not_attempted"], 6);
+        // Published as a hex *string*, never a JSON number: a seed above 2^53 would be
+        // silently rounded by any reader backed by doubles, and a seed that does not
+        // reproduce its own sample is worse than no seed at all.
+        assert_eq!(header["sample_seed"], "0x123456789abcdef0");
         assert!(header["incomplete_reason"].as_str().is_some_and(|r| r.contains("floor")));
     }
 
@@ -1723,5 +2067,415 @@ mod tests {
         assert_eq!(resolve_evidence_dir(None, Some("/env".into())), PathBuf::from("/env"));
         assert_eq!(resolve_evidence_dir(None, Some("".into())), PathBuf::from(DEFAULT_EVIDENCE_DIR));
         assert_eq!(resolve_evidence_dir(None, None), PathBuf::from(DEFAULT_EVIDENCE_DIR));
+    }
+
+    // ---- P0-12: the pacing block, and whether a reader can check it ----
+
+    /// A results header must carry the policy *and* the accounting, because the policy alone
+    /// is a promise and the accounting alone is a number with no claim attached.
+    /// A panicking attempt becomes one record, not a lost results file.
+    ///
+    /// This is the whole point of `guard_attempt`: `sweep::run_bounded` runs workers in a
+    /// `thread::scope`, which re-panics on join, so before this a single panic unwound past
+    /// the header insert and past `finish` — nothing written, and every host contacted
+    /// up to that point contacted for no artifact.
+    #[test]
+    fn a_panicking_attempt_becomes_a_harness_panic_record_rather_than_losing_the_run() {
+        let failure = |observed: ServerObservation| match observed.observation {
+            Observation::Failed { category, detail } => (category, detail),
+            Observation::Discovered { .. } => panic!("expected a failure observation"),
+        };
+
+        let (category, detail) = failure(guard_attempt("test", || panic!("worker exploded")));
+        assert_eq!(category, HARNESS_PANIC, "a panic must land in its own harness-side bucket");
+        assert!(detail.contains("exploded"), "the detail must say what happened: {detail:?}");
+
+        // A non-string payload is still a record, not a second panic.
+        let (category, _) = failure(guard_attempt("test", || std::panic::panic_any(7u32)));
+        assert_eq!(category, HARNESS_PANIC);
+
+        // And the happy path is untouched.
+        let (category, detail) = failure(guard_attempt("test", || ServerObservation {
+            identity: Map::new(),
+            observation: Observation::failed("transport", "http status: 503"),
+        }));
+        assert_eq!((category.as_str(), detail.as_str()), ("transport", "http status: 503"));
+    }
+
+    /// A panic detail is server-influenceable text in a published file, so it is sanitised
+    /// and bounded the same way `failure_detail` is in general — no escape introducers,
+    /// no unbounded length.
+    #[test]
+    fn a_panic_detail_is_sanitised_and_bounded_before_it_is_recorded() {
+        let payload = format!(
+            "start\u{1b}[31m\u{9b}2K\nnewline\u{0}nul{}",
+            "A".repeat(5_000)
+        );
+        let hostile = guard_attempt("test", || panic!("{payload}"));
+        let Observation::Failed { detail, .. } = hostile.observation else {
+            panic!("expected a failure observation")
+        };
+        assert!(
+            detail.chars().count() <= MAX_PANIC_DETAIL_CHARS,
+            "detail is {} chars, unbounded in a published file",
+            detail.chars().count()
+        );
+        assert!(
+            detail.chars().all(|c| c == ' ' || c == '\t' || c.is_ascii_graphic()),
+            "detail still carries control bytes: {detail:?}"
+        );
+        assert!(detail.starts_with("start"), "the useful prefix survives: {detail:?}");
+        assert!(
+            !detail.contains('\u{1b}') && !detail.contains('\u{9b}'),
+            "an escape introducer survived into a published detail: {detail:?}"
+        );
+    }
+
+    #[test]
+    fn the_pacing_header_reports_both_the_policy_and_the_accounting() {
+        let pacer = std::sync::Arc::new(discovery::Pacer::new(discovery::PacePolicy {
+            min_interval: std::time::Duration::ZERO,
+            max_requests_per_registrable_domain: 10,
+        }));
+        for host in ["https://a.vendor.test/mcp", "https://b.vendor.test/mcp"] {
+            let permit = pacer.admit(host).expect("budget");
+            for _ in 0..4 {
+                permit.before_request();
+            }
+        }
+        // Cap 10, 8 charged: a third sequence cannot reserve 5 and is refused.
+        pacer.admit("https://c.vendor.test/mcp").expect_err("budget spent");
+
+        let block = pacing_header(&pacer.accounting());
+        assert_eq!(block["applies"], true);
+        assert_eq!(block["min_interval_ms"], 0);
+        assert_eq!(block["max_requests_per_registrable_domain"], 10);
+        assert_eq!(block["per_discovery_reservation"], discovery::MAX_REQUESTS_PER_DISCOVERY);
+        assert_eq!(
+            block["max_redirects"], 0,
+            "a followed redirect would be a request this block cannot see"
+        );
+        assert_eq!(block["requests_sent"], 8);
+        assert_eq!(block["sequences_denied_by_budget"], 1);
+        assert_eq!(block["max_requests_to_one_registrable_domain"], 8);
+        assert_eq!(block["registrable_domains_contacted"], 1, "all three share one key");
+        assert_eq!(block["overshoot_requests"], 0);
+        assert!(block["grouping"].as_str().is_some_and(|g| g.contains("ADR-014")));
+        let rows = block["registrable_domains"].as_array().expect("per-domain rows");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["registrable_domain"], "vendor.test");
+        assert_eq!(rows[0]["sequences_admitted"], 2);
+        assert_eq!(rows[0]["sequences_denied"], 1);
+    }
+
+    /// Pacing accounting must be checkable *against the records beneath it*, not merely
+    /// internally consistent — the discipline B-03 set for cross-oracle aggregation. Both
+    /// directions: the guard accepts a report whose header matches its records, and names
+    /// the field when it does not.
+    #[test]
+    fn the_pacing_guard_accepts_a_consistent_report_and_names_an_inflated_field() {
+        let consistent = json!({
+            "pacing": {
+                "applies": true,
+                "per_discovery_reservation": 5,
+                "requests_sent": 6,
+                "waited_ms_total": 1_500,
+                "sequences_denied_by_budget": 1,
+                "max_requests_to_one_registrable_domain": 4,
+                "registrable_domains_contacted": 2,
+                "overshoot_requests": 0,
+            },
+            "servers": [
+                {
+                    "name": "a",
+                    "pacing": {
+                        "registrable_domain": "one.test",
+                        "requests_sent": 4,
+                        "waited_ms": 1_000,
+                    },
+                },
+                {
+                    "name": "b",
+                    "pacing": {
+                        "registrable_domain": "two.test",
+                        "requests_sent": 2,
+                        "waited_ms": 500,
+                    },
+                },
+                {
+                    "name": "c",
+                    "outcome": "failed",
+                    "failure_category": BUDGET_EXHAUSTED,
+                    "pacing": {
+                        "registrable_domain": "one.test",
+                        "requests_sent": 0,
+                        "waited_ms": 0,
+                    },
+                },
+            ],
+        });
+        assert_eq!(verify_pacing_self_consistent(&consistent), Ok(()));
+
+        // A header claiming fewer requests than were made — the direction that would make a
+        // sweep look politer than it was, which is the one worth catching.
+        let mut understated = consistent.clone();
+        understated["pacing"]["requests_sent"] = json!(2);
+        let problems = verify_pacing_self_consistent(&understated).expect_err("must be caught");
+        assert_eq!(problems.len(), 1);
+        assert!(problems[0].contains("requests_sent is 2"), "{problems:?}");
+        assert!(problems[0].contains("give 6"), "{problems:?}");
+
+        // A refusal dropped from the header's count.
+        let mut hidden_refusal = consistent.clone();
+        hidden_refusal["pacing"]["sequences_denied_by_budget"] = json!(0);
+        let problems = verify_pacing_self_consistent(&hidden_refusal).expect_err("must be caught");
+        assert!(problems[0].contains("sequences_denied_by_budget"), "{problems:?}");
+
+        // **The headline politeness number.** `max_requests_to_one_registrable_domain` is
+        // the field that substantiates "no third party received more than N requests", and
+        // it was published without ever being checked against the records. Understating it
+        // is the direction that matters: it is the claim a reader quotes.
+        let mut understated_max = consistent.clone();
+        understated_max["pacing"]["max_requests_to_one_registrable_domain"] = json!(2);
+        let problems =
+            verify_pacing_self_consistent(&understated_max).expect_err("must be caught");
+        assert!(
+            problems[0].contains("max_requests_to_one_registrable_domain is 2")
+                && problems[0].contains("give 4"),
+            "{problems:?}"
+        );
+
+        // Grouping is by registrable domain, not per record: `one.test` appears on two
+        // records and must be summed, not maxed per record.
+        let mut two_records_one_domain = consistent.clone();
+        two_records_one_domain["servers"][2]["pacing"]["requests_sent"] = json!(3);
+        two_records_one_domain["pacing"]["requests_sent"] = json!(9);
+        let problems =
+            verify_pacing_self_consistent(&two_records_one_domain).expect_err("must be caught");
+        assert!(
+            problems.iter().any(|p| p.contains("max_requests_to_one_registrable_domain is 4")
+                && p.contains("give 7")),
+            "two records on one domain must sum to 7, not stay at 4: {problems:?}"
+        );
+
+        // Domains contacted counts domains with at least one request, so the refused host's
+        // zero does not inflate it.
+        let mut wrong_domain_count = consistent.clone();
+        wrong_domain_count["pacing"]["registrable_domains_contacted"] = json!(3);
+        assert!(
+            verify_pacing_self_consistent(&wrong_domain_count)
+                .expect_err("must be caught")
+                .iter()
+                .any(|p| p.contains("registrable_domains_contacted is 3")),
+        );
+
+        // Overshoot is `Σ max(0, requests_sent − reservation)`, the number that is supposed
+        // to go non-zero the day `tools/list` pagination lands. A published zero has to mean
+        // something, so a record that overshot and a header that says zero is a mismatch.
+        let mut overshot = consistent.clone();
+        overshot["servers"][0]["pacing"]["requests_sent"] = json!(8);
+        overshot["pacing"]["requests_sent"] = json!(10);
+        overshot["pacing"]["max_requests_to_one_registrable_domain"] = json!(8);
+        let problems = verify_pacing_self_consistent(&overshot).expect_err("must be caught");
+        assert!(
+            problems.iter().any(|p| p.contains("overshoot_requests is 0") && p.contains("give 3")),
+            "{problems:?}"
+        );
+
+        // A missing field is a problem, not a zero.
+        let mut missing = consistent.clone();
+        missing["pacing"].as_object_mut().expect("object").remove("waited_ms_total");
+        assert!(
+            verify_pacing_self_consistent(&missing)
+                .expect_err("must be caught")
+                .iter()
+                .any(|p| p.contains("waited_ms_total is missing")),
+        );
+        let mut missing_max = consistent.clone();
+        missing_max["pacing"]
+            .as_object_mut()
+            .expect("object")
+            .remove("max_requests_to_one_registrable_domain");
+        assert!(
+            verify_pacing_self_consistent(&missing_max)
+                .expect_err("must be caught")
+                .iter()
+                .any(|p| p.contains("max_requests_to_one_registrable_domain is missing")),
+        );
+    }
+
+    /// A sweep that did not pace says so, and the guard does not invent a claim to check.
+    #[test]
+    fn a_sweep_where_pacing_does_not_apply_records_that_rather_than_omitting_it() {
+        let block = pacing_not_applicable("stdio to a local container");
+        assert_eq!(block["applies"], false);
+        assert_eq!(block["reason"], "stdio to a local container");
+        let report = json!({ "pacing": block, "servers": [] });
+        assert_eq!(verify_pacing_self_consistent(&report), Ok(()));
+        // And a file written before P0-12 has no block at all, which is not an error.
+        assert_eq!(verify_pacing_self_consistent(&json!({ "servers": [] })), Ok(()));
+    }
+
+    /// **July comparability.** A budget refusal is its own category: the `transport`,
+    /// `protocol` and `rate_limited` counts a re-run produces still mean exactly what they
+    /// meant in July, and the harness-side refusals are a bucket a reader can subtract.
+    #[test]
+    fn a_budget_refusal_is_its_own_category_and_leaves_the_july_buckets_untouched() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let evidence_dir = dir.path().join("evidence");
+        let store = BlobStore::open(&evidence_dir).expect("store");
+
+        let servers = vec![
+            ServerObservation {
+                identity: identity("throttled"),
+                observation: Observation::from_discovery_error(
+                    DiscoveryError::HttpStatus { status: 429, retry_after: None },
+                    "io",
+                ),
+            },
+            ServerObservation {
+                identity: identity("auth-gated"),
+                observation: Observation::from_discovery_error(
+                    DiscoveryError::HttpStatus { status: 401, retry_after: None },
+                    "io",
+                ),
+            },
+            ServerObservation {
+                identity: identity("sse-only"),
+                observation: Observation::from_discovery_error(
+                    DiscoveryError::Protocol("server responded with an SSE stream".into()),
+                    "io",
+                ),
+            },
+            ServerObservation {
+                identity: identity("refused"),
+                observation: Observation::failed(
+                    BUDGET_EXHAUSTED,
+                    "registrable-domain request budget exhausted for vendor.test: 120 sent, \
+                     0 reserved, cap 120 (no request was made to this host)",
+                ),
+            },
+        ];
+        let header = RunHeader {
+            stage: "test",
+            sample_size_requested: 4,
+            candidates_selected: 4,
+            attempted: 4,
+            stop_reason: None,
+            evidence_store: &evidence_dir,
+            sample_seed: None,
+        }
+        .into_map()
+        .expect("clock");
+        let report = build_report(&store, header, &servers).expect("build");
+
+        let categories = report["failure_categories"].as_object().expect("categories");
+        assert_eq!(categories["rate_limited"], 1, "429 keeps its own P0-11 bucket");
+        assert_eq!(categories["transport"], 1, "401 is still `transport`, as in July");
+        assert_eq!(categories["protocol"], 1, "an SSE upgrade is still `protocol`");
+        assert_eq!(categories[BUDGET_EXHAUSTED], 1, "the refusal is in a bucket of its own");
+        assert_eq!(categories.len(), 4, "no bucket was merged: {categories:?}");
+        // And the refusal says why, in the record, rather than the host simply being absent.
+        let refused = &report["servers"][3];
+        assert_eq!(refused["outcome"], "failed");
+        assert!(
+            refused["failure_detail"]
+                .as_str()
+                .is_some_and(|d| d.contains("no request was made to this host")),
+            "{refused}"
+        );
+    }
+
+    /// A results file carrying per-server pacing accounting still re-derives byte for byte.
+    /// The accounting is wall-clock-dependent, so it rides as carried-through observation
+    /// rather than a derived value — and this is what proves the choice actually holds.
+    #[test]
+    fn a_results_file_with_pacing_records_rederives_byte_for_byte() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let evidence_dir = dir.path().join("evidence");
+        let store = Mutex::new(BlobStore::open(&evidence_dir).expect("store"));
+        let stop = StopFlag::default();
+
+        let mut servers = Vec::new();
+        for (i, (name, requests, waited_ms)) in
+            [("paced-a", 4, 1_500u64), ("paced-b", 2, 500)].into_iter().enumerate()
+        {
+            let mut ident = identity(name);
+            let waited = std::time::Duration::from_millis(waited_ms);
+            ident.insert("pacing".into(), pacing_record("example.test", requests, waited));
+            let observation = if i == 0 {
+                record_discovery(
+                    &store,
+                    &discovery(DiscoveryPath::Initialize, "2025-11-25", ALL),
+                    &stop,
+                )
+            } else {
+                record_discovery(
+                    &store,
+                    &discovery(DiscoveryPath::ServerDiscover, "2026-07-28", NONE),
+                    &stop,
+                )
+            };
+            servers.push(ServerObservation { identity: ident, observation });
+        }
+        let mut refused = identity("refused");
+        refused.insert(
+            "pacing".into(),
+            pacing_record("example.test", 0, std::time::Duration::ZERO),
+        );
+        servers.push(ServerObservation {
+            identity: refused,
+            observation: Observation::failed(BUDGET_EXHAUSTED, "budget exhausted for example.test"),
+        });
+
+        let mut header = RunHeader {
+            stage: "test",
+            sample_size_requested: 3,
+            candidates_selected: 3,
+            attempted: 3,
+            stop_reason: None,
+            evidence_store: &evidence_dir,
+            sample_seed: None,
+        }
+        .into_map()
+        .expect("clock");
+        header.insert(
+            "pacing".into(),
+            json!({
+                "applies": true,
+                "grouping": PACE_GROUPING,
+                "min_interval_ms": 500,
+                "max_requests_per_registrable_domain": 120,
+                "per_discovery_reservation": discovery::MAX_REQUESTS_PER_DISCOVERY,
+                "requests_sent": 6,
+                "waited_ms_total": 2_000,
+                "registrable_domains_contacted": 1,
+                "registrable_domains_seen": 1,
+                "max_requests_to_one_registrable_domain": 6,
+                "sequences_denied_by_budget": 1,
+                "overshoot_requests": 0,
+                "registrable_domains_listed": 1,
+                "registrable_domains": [{
+                    "registrable_domain": "example.test",
+                    "requests": 6,
+                    "sequences_admitted": 2,
+                    "sequences_denied": 1,
+                }],
+            }),
+        );
+        let report =
+            build_report(&store.into_inner().expect("lock"), header, &servers).expect("build");
+        let results = dir.path().join("results.json");
+        write_report(&results, &report).expect("write");
+
+        // The published header's claim matches the records beneath it...
+        assert_eq!(verify_pacing_self_consistent(&read(&results)), Ok(()));
+        // ...and an offline re-derivation reproduces the whole file, pacing included.
+        let outcome = rederive(&results, None).expect("rederive");
+        assert!(outcome.byte_identical, "differs at {:?}", outcome.differences);
+        let regenerated: Value = serde_json::from_str(&outcome.regenerated).expect("json");
+        assert_eq!(regenerated["servers"][0]["pacing"]["requests_sent"], 4);
+        assert_eq!(regenerated["servers"][2]["pacing"]["requests_sent"], 0);
+        assert_eq!(regenerated["pacing"]["requests_sent"], 6);
     }
 }

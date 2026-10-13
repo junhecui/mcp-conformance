@@ -9,11 +9,15 @@
 //! **Must not:** Call any tool. This is enforced structurally: no tool-call method exists
 //! on the client type (P0-01) — see the `client` module's source for exactly how.
 //!
+//! Request pacing and the per-registrable-domain request budget a sweep runs under live in
+//! [`pace`] (P0-12), enforced at the one point every HTTP request this crate sends is built.
+//!
 //! Contract: [architecture.md §3.1].
 
 mod client;
 pub mod era;
 pub mod jsonrpc;
+pub mod pace;
 mod pin;
 mod transport;
 
@@ -22,4 +26,9 @@ pub use client::{
     ProbeEvidence, RevisionSource, negotiated_spec_revision,
 };
 pub use era::{Era, FallbackReason};
+pub use pace::{
+    Accounting, Denied, DomainAccounting, MAX_REDIRECTS, MAX_REQUESTS_PER_DISCOVERY, PacePolicy,
+    PacedAgent, Pacer, Permit, PermitStats, StatusHandling, registrable_domain,
+    registrable_domain_of_endpoint,
+};
 pub use pin::{PinError, ToolPin, pin_tools};

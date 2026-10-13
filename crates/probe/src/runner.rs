@@ -13,12 +13,27 @@
 
 use std::time::Duration;
 
+use discovery::Permit;
 use serde_json::Value;
 
 use crate::argsynth_min::synthesize_arguments;
 use crate::client::{ProbeClient, ProbeError};
 use crate::protocol::{self, ProbeAssessment};
 use crate::snapshot::{self, ProbeSurface};
+
+/// Requests one probe protocol may send, the bound a caller reserves against a registrable
+/// domain's budget before running one (`Pacer::admit_with_reservation`).
+///
+/// The worst case is [`probe_idempotent_hint`]: `initialize`, `notifications/initialized`,
+/// `resources/list`, a `tools/call`, a full `resources/read` sweep, a second `tools/call`,
+/// and a second sweep. A sweep is bounded by `snapshot`'s own `MAX_RESOURCES` (10), so the
+/// total is `4 + 1 + 10 + 1 + 10 = 26`.
+///
+/// Five times `discovery`'s own bound, and that asymmetry is the point: this crate invokes
+/// tools on live third-party infrastructure, so admitting it against a discovery-shaped
+/// reservation would let one probe quietly spend five sequences' worth of a domain's budget
+/// and leave the cap soft for whatever ran next.
+pub const MAX_REQUESTS_PER_PROBE: usize = 26;
 
 /// Everything needed to run a probe against one tool on one live Class B server.
 pub struct ProbeTarget<'a> {
@@ -32,6 +47,28 @@ pub struct ProbeTarget<'a> {
     /// `discovery::DiscoveryClient::http_with_timeout` takes for a sweep over many
     /// third-party hosts where a handful of slow ones must not dominate total run time.
     pub timeout: Duration,
+    /// P0-12 pacing permit, admitted against [`MAX_REQUESTS_PER_PROBE`] before this target
+    /// was built. `Some` for any run against live infrastructure; `None` only for a unit
+    /// test driving a local fake.
+    ///
+    /// One permit covers one protocol run, because one protocol run is one client and one
+    /// client holds one permit. A caller probing two annotations against the same server
+    /// therefore admits twice -- which is correct, not wasteful: the two runs are two
+    /// independent sequences of real requests to that host.
+    pub permit: Option<Permit>,
+}
+
+impl ProbeTarget<'_> {
+    /// The client this target's protocol run will use -- paced when a permit was supplied.
+    ///
+    /// Takes the permit by value because `ProbeClient` must own it: the permit lives inside
+    /// the agent, and the agent is the only thing in the workspace that can send a request.
+    fn client(self) -> ProbeClient {
+        match self.permit {
+            Some(permit) => ProbeClient::paced(self.endpoint.to_string(), self.timeout, permit),
+            None => ProbeClient::new(self.endpoint.to_string(), self.timeout),
+        }
+    }
 }
 
 /// Run the `readOnlyHint` protocol: probe, invoke once, probe again.
@@ -44,10 +81,12 @@ pub struct ProbeTarget<'a> {
 /// surface discovery / state reading fails for a reason other than "no surface." A failed
 /// *invocation* is not an error here — it becomes `Ok(`[`protocol::invocation_failed`]`)`.
 pub fn probe_read_only_hint(
-    target: &ProbeTarget,
+    target: ProbeTarget<'_>,
     declared: bool,
 ) -> Result<ProbeAssessment, ProbeError> {
-    let mut client = ProbeClient::new(target.endpoint.to_string(), target.timeout);
+    let tool_name = target.tool_name;
+    let input_schema = target.input_schema;
+    let mut client = target.client();
     client.initialize()?;
 
     let surface = snapshot::discover_surface(&mut client)?;
@@ -57,8 +96,8 @@ pub fn probe_read_only_hint(
 
     let before = snapshot::snapshot_state(&mut client, &surface)?;
 
-    let args = synthesize_arguments(target.input_schema);
-    if invoke(&mut client, target.tool_name, args).is_err() {
+    let args = synthesize_arguments(input_schema);
+    if invoke(&mut client, tool_name, args).is_err() {
         return Ok(protocol::invocation_failed());
     }
 
@@ -71,10 +110,12 @@ pub fn probe_read_only_hint(
 ///
 /// Same error/outcome split as [`probe_read_only_hint`].
 pub fn probe_idempotent_hint(
-    target: &ProbeTarget,
+    target: ProbeTarget<'_>,
     declared: bool,
 ) -> Result<ProbeAssessment, ProbeError> {
-    let mut client = ProbeClient::new(target.endpoint.to_string(), target.timeout);
+    let tool_name = target.tool_name;
+    let input_schema = target.input_schema;
+    let mut client = target.client();
     client.initialize()?;
 
     let surface = snapshot::discover_surface(&mut client)?;
@@ -82,14 +123,14 @@ pub fn probe_idempotent_hint(
         return Ok(protocol::no_probe_surface());
     }
 
-    let args = synthesize_arguments(target.input_schema);
+    let args = synthesize_arguments(input_schema);
 
-    if invoke(&mut client, target.tool_name, args.clone()).is_err() {
+    if invoke(&mut client, tool_name, args.clone()).is_err() {
         return Ok(protocol::invocation_failed());
     }
     let s1 = snapshot::snapshot_state(&mut client, &surface)?;
 
-    if invoke(&mut client, target.tool_name, args).is_err() {
+    if invoke(&mut client, tool_name, args).is_err() {
         return Ok(protocol::invocation_failed());
     }
     let s2 = snapshot::snapshot_state(&mut client, &surface)?;
@@ -219,6 +260,9 @@ mod tests {
             tool_name: "some_tool",
             input_schema: schema,
             timeout: Duration::from_secs(5),
+            // Unpaced: these drive a local fake, so there is no third party to be polite
+            // to. A live run goes through  -- see .
+            permit: None,
         }
     }
 
@@ -245,7 +289,7 @@ mod tests {
         );
 
         let schema = serde_json::json!({"type": "object"});
-        let result = probe_read_only_hint(&target(&endpoint, &schema), true).expect("probe");
+        let result = probe_read_only_hint(target(&endpoint, &schema), true).expect("probe");
         assert_eq!(result.outcome, Outcome::Holds);
         server.join().expect("server thread");
     }
@@ -267,7 +311,7 @@ mod tests {
         );
 
         let schema = serde_json::json!({"type": "object"});
-        let result = probe_read_only_hint(&target(&endpoint, &schema), true).expect("probe");
+        let result = probe_read_only_hint(target(&endpoint, &schema), true).expect("probe");
         assert_eq!(result.outcome, Outcome::Violated);
         server.join().expect("server thread");
     }
@@ -283,7 +327,7 @@ mod tests {
         let server = scripted_server(listener, vec![init_response(0), ack(), resources_list(1, &[])]);
 
         let schema = serde_json::json!({"type": "object"});
-        let result = probe_read_only_hint(&target(&endpoint, &schema), true).expect("probe");
+        let result = probe_read_only_hint(target(&endpoint, &schema), true).expect("probe");
         assert_eq!(result.outcome, Outcome::Unverifiable);
         assert_eq!(result.reason, Some(ReasonCode("no_probe_surface".to_string())));
         server.join().expect("server thread");
@@ -305,7 +349,7 @@ mod tests {
         );
 
         let schema = serde_json::json!({"type": "object"});
-        let result = probe_read_only_hint(&target(&endpoint, &schema), true).expect("probe must still return Ok");
+        let result = probe_read_only_hint(target(&endpoint, &schema), true).expect("probe must still return Ok");
         assert_eq!(result.outcome, Outcome::Unverifiable);
         assert_eq!(result.reason, Some(ReasonCode("invocation_failed".to_string())));
         server.join().expect("server thread");
@@ -333,7 +377,7 @@ mod tests {
         );
 
         let schema = serde_json::json!({"type": "object"});
-        let result = probe_read_only_hint(&target(&endpoint, &schema), true).expect("probe");
+        let result = probe_read_only_hint(target(&endpoint, &schema), true).expect("probe");
         assert_eq!(result.outcome, Outcome::Unverifiable);
         assert_eq!(result.reason, Some(ReasonCode("invocation_failed".to_string())));
         server.join().expect("server thread");
@@ -361,7 +405,7 @@ mod tests {
         );
 
         let schema = serde_json::json!({"type": "object"});
-        let result = probe_idempotent_hint(&target(&endpoint, &schema), true).expect("probe");
+        let result = probe_idempotent_hint(target(&endpoint, &schema), true).expect("probe");
         assert_eq!(result.outcome, Outcome::Holds);
         server.join().expect("server thread");
     }
@@ -384,7 +428,7 @@ mod tests {
         );
 
         let schema = serde_json::json!({"type": "object"});
-        let result = probe_idempotent_hint(&target(&endpoint, &schema), true).expect("probe");
+        let result = probe_idempotent_hint(target(&endpoint, &schema), true).expect("probe");
         assert_eq!(result.outcome, Outcome::Violated);
         server.join().expect("server thread");
     }
