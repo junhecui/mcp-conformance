@@ -74,10 +74,26 @@ impl RegistryClient {
     }
 
     /// A client against an arbitrary base URL — for tests, a local fake server.
+    ///
+    /// **`max_redirects(0)`, configured here rather than through `discovery::pace`.** P0-12
+    /// closed the redirect-following defect class everywhere else by making agent
+    /// construction require a `Permit` with the no-redirect policy baked in, and left this
+    /// one client alone for two reasons: routing it through `pace` would create an
+    /// `intake → discovery` crate edge architecture.md §8 does not want, and tightening
+    /// redirects on the one client a sweep cannot start without would have been an untested
+    /// behavioural change on the eve of a sweep. The second objection is resolved — the
+    /// registry endpoint was verified to answer `GET /v0.1/servers?limit=1` with HTTP/2 200
+    /// directly, no redirect — so the flag is set directly and the crate edge is not
+    /// created. The reasoning for *why* zero (see `discovery::MAX_REDIRECTS` and ADR-014 §1)
+    /// applies unchanged: a followed `Location` is a server-chosen request made below any
+    /// pacing or accounting hook, and the risk here is narrower only because this is one
+    /// first-party endpoint rather than ~1,000 hosts under test — narrower is not a reason
+    /// to leave ten hops reachable.
     #[must_use]
     pub fn with_base_url(base_url: impl Into<String>) -> Self {
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .timeout_global(Some(Duration::from_secs(30)))
+            .max_redirects(0)
             .build()
             .into();
         Self { agent, base_url: base_url.into() }
@@ -332,6 +348,97 @@ mod tests {
         server.join().expect("server thread");
 
         assert_eq!(pages_seen, 1);
+    }
+
+    /// The one remaining `ureq` agent in the tree that still followed redirects (ureq's
+    /// default of 10). Asserted against `ureq`'s own config getter rather than the builder
+    /// call, because the defect P0-12 measured elsewhere was precisely that the call was
+    /// *absent* — a test that re-reads the builder line would pass for a client that never
+    /// set it.
+    #[test]
+    fn the_registry_agent_will_not_follow_a_redirect() {
+        let client = RegistryClient::with_base_url("http://127.0.0.1:1");
+        assert_eq!(
+            client.agent.config().max_redirects(),
+            0,
+            "the registry client would follow a redirect"
+        );
+        // The live client, not only the test constructor, since `new()` is what a sweep uses.
+        assert_eq!(RegistryClient::new().agent.config().max_redirects(), 0);
+    }
+
+    /// The behavioural half: a real 302 pointing at a second real listener costs exactly one
+    /// request and the target is never contacted. Scripted and counted on both sides, in the
+    /// shape `discovery`'s own redirect test established.
+    #[test]
+    fn a_registry_redirect_is_not_followed_and_the_target_is_never_contacted() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let elsewhere = TcpListener::bind("127.0.0.1:0").expect("bind target");
+        let elsewhere_url = format!("http://{}", elsewhere.local_addr().expect("addr"));
+        let elsewhere_hits = Arc::new(AtomicUsize::new(0));
+        {
+            let hits = Arc::clone(&elsewhere_hits);
+            elsewhere.set_nonblocking(true).expect("nonblocking");
+            thread::spawn(move || {
+                let deadline = std::time::Instant::now() + Duration::from_secs(2);
+                while std::time::Instant::now() < deadline {
+                    if let Ok((mut stream, _)) = elsewhere.accept() {
+                        hits.fetch_add(1, Ordering::SeqCst);
+                        let _ = read_one_http_request(&mut stream);
+                        write_json_response(&mut stream, b"{\"servers\":[],\"metadata\":{}}");
+                    }
+                    thread::sleep(Duration::from_millis(5));
+                }
+            });
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind redirector");
+        let base_url = format!("http://{}", listener.local_addr().expect("addr"));
+        let redirector = thread::spawn(move || {
+            let mut seen = 0usize;
+            // Accept up to three, so a client that *did* follow would be counted rather
+            // than deadlocking this test.
+            listener.set_nonblocking(true).expect("nonblocking");
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while seen < 3 && std::time::Instant::now() < deadline {
+                if let Ok((mut stream, _)) = listener.accept() {
+                    seen += 1;
+                    let _ = read_one_http_request(&mut stream);
+                    let header = format!(
+                        "HTTP/1.1 302 Found\r\nLocation: {elsewhere_url}/v0.1/servers\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                    let _ = stream.write_all(header.as_bytes());
+                    let _ = stream.flush();
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+            seen
+        });
+
+        let client = RegistryClient::with_base_url(base_url);
+        let err = client.fetch_page(None, 1).expect_err("a 302 is not a registry page");
+
+        let hits_here = redirector.join().expect("redirector thread");
+        assert_eq!(hits_here, 1, "a 302 must cost exactly one request, not a chain of them");
+        assert_eq!(
+            elsewhere_hits.load(Ordering::SeqCst),
+            0,
+            "the redirect target must never be contacted"
+        );
+        // Whatever the label, no page is produced from a redirect — which is the property
+        // that matters. Disclosed rather than asserted away: `ureq`'s
+        // `http_status_as_error` covers 4xx and 5xx only, so an unfollowed 3xx arrives as an
+        // ordinary response with an empty body and this client reports it as `Malformed`
+        // rather than naming the status. That is a worse *label* than `discovery` produces
+        // (which checks the status itself), and it is deliberately left alone here: giving
+        // this client a status check is a behavioural change beyond the redirect fix, and
+        // the fix's whole point is that nothing a `Location` names is ever contacted.
+        assert!(
+            matches!(err, RegistryError::Malformed(_) | RegistryError::Transport(_)),
+            "a redirect must never yield a page: {err:?}"
+        );
     }
 
     #[test]
