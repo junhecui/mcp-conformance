@@ -179,7 +179,9 @@ struct DomainState {
 struct State {
     domains: BTreeMap<String, DomainState>,
     requests: usize,
-    waited: Duration,
+    /// Total wait, in whole microseconds, as the sum of the **same** per-request integers
+    /// each [`PermitStats`] accumulates. See [`Permit::before_request`].
+    waited_micros: u64,
     denials: usize,
     extension_denials: usize,
     overshoot: usize,
@@ -296,7 +298,7 @@ impl Pacer {
             max_reservation_per_sequence: MAX_REQUESTS_PER_DISCOVERY
                 .max(self.policy.max_requests_per_registrable_domain / MAX_SEQUENCE_SHARE_DIVISOR),
             requests_sent: state.requests,
-            waited: state.waited,
+            waited: Duration::from_micros(state.waited_micros),
             sequences_denied: state.denials,
             page_extensions_denied: state.extension_denials,
             overshoot_requests: state.overshoot,
@@ -504,7 +506,7 @@ impl Permit {
     /// so it does not widen P0-01's structural guarantee that no caller outside this crate
     /// can name an MCP method.
     pub fn before_request(&self) {
-        let wait = {
+        let (wait, wait_micros) = {
             let mut state = self.pacer.state.lock().unwrap_or_else(PoisonError::into_inner);
             let interval = self.pacer.policy.min_interval;
             state.requests += 1;
@@ -521,14 +523,20 @@ impl Permit {
             // file, so the one-line defence is worth having at the source.
             entry.next_allowed = at.checked_add(interval).or(entry.next_allowed);
             let wait = at.saturating_duration_since(now);
-            state.waited += wait;
-            wait
+            // One truncation, to whole microseconds, **here and only here**, and the same
+            // integer is added to the run-wide total and to this permit's own counter below.
+            // That makes the run total exactly the sum of the per-permit totals whenever every
+            // permit's wait is attributed to a record — the same exact correspondence the
+            // integer `requests` counters already have. Before this, the run total summed raw
+            // nanoseconds while each permit summed truncated microseconds, and a results file
+            // then truncated each side to milliseconds separately, so header and records
+            // disagreed by up to 1 ms per record on a perfectly correct sweep.
+            let wait_micros = u64::try_from(wait.as_micros()).unwrap_or(u64::MAX);
+            state.waited_micros = state.waited_micros.saturating_add(wait_micros);
+            (wait, wait_micros)
         };
         self.stats.requests.fetch_add(1, Ordering::Relaxed);
-        self.stats.waited_micros.fetch_add(
-            u64::try_from(wait.as_micros()).unwrap_or(u64::MAX),
-            Ordering::Relaxed,
-        );
+        self.stats.waited_micros.fetch_add(wait_micros, Ordering::Relaxed);
         if !wait.is_zero() {
             std::thread::sleep(wait);
         }
@@ -774,6 +782,13 @@ pub struct Accounting {
     /// Requests sent under all permits.
     pub requests_sent: usize,
     /// Total time spent waiting for the minimum interval.
+    ///
+    /// A whole number of microseconds, and exactly the sum of every permit's
+    /// [`PermitStats::waited`]: each request's wait is truncated to microseconds once, in
+    /// [`Permit::before_request`], and that one integer is added to both. So the published
+    /// header total and the per-server records beneath it agree exactly, with no tolerance,
+    /// whenever every permit's wait was written to a record. (Each wait loses under 1 µs to
+    /// that truncation — under 2 ms across a 2,000-request sweep.)
     pub waited: Duration,
     /// Discovery sequences refused for want of budget.
     pub sequences_denied: usize,
@@ -1118,6 +1133,31 @@ mod tests {
             start.elapsed()
         );
         assert_eq!(pacer.accounting().waited, Duration::ZERO);
+    }
+
+    /// The run-wide wait is **exactly** the sum of the per-permit waits — not within a
+    /// tolerance — because each request's wait is truncated to microseconds once and the
+    /// same integer is added to both. This is the property that lets a results file's
+    /// `pacing.waited_us_total` be checked exactly against its per-server records; without
+    /// it the header and the records truncate independently and disagree on a correct sweep.
+    #[test]
+    fn the_run_wide_wait_is_exactly_the_sum_of_the_per_permit_waits() {
+        let pacer = pacer(7, 100);
+        let permits: Vec<Permit> = (0..3)
+            .map(|i| pacer.admit(&format!("https://h{i}.vendor.test/mcp")).expect("budget"))
+            .collect();
+        // Interleaved across permits on one domain, so every permit's waits are fractional
+        // and arrive in a different order from the run-wide accumulator's.
+        for _ in 0..3 {
+            for permit in &permits {
+                permit.before_request();
+            }
+        }
+        let per_permit: Duration = permits.iter().map(Permit::waited).sum();
+        let total = pacer.accounting().waited;
+        assert!(total > Duration::ZERO, "nine spaced requests on one domain must wait");
+        assert_eq!(total, per_permit, "run total must equal the per-permit sum exactly");
+        assert_eq!(total.as_nanos() % 1_000, 0, "whole microseconds, truncated once");
     }
 
     /// Two registry entries on *different hosts of one vendor* are spaced from each other.

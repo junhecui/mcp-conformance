@@ -361,6 +361,49 @@ this block holds that by construction — Stage 1 admits once per candidate, and
 permit reserved at `2 × MAX_REQUESTS_PER_DISCOVERY` for exactly this reason. A future file
 that breaks the assumption must not publish this block unchanged.
 
+**Amendment (after the October census): the wait total is not an integer counter, and was
+checked as if it were.** The header published `⌊Σ waits⌋` in milliseconds — one truncation of
+the summed duration — while each record published `⌊its own waits⌋`, and the guard demanded
+`Σ⌊dᵢ⌋ = ⌊Σdᵢ⌋`. Those differ by up to 1 ms per record on a correct sweep. The October Class B
+file reproduces byte for byte from its evidence, yet publishes 231,793 ms against a record sum
+of 231,557 ms (236 ms over 463 visibly-waiting records, the ~0.5 ms per term uniform truncation
+predicts), and `census-rederive` exited 1 on it. Of the six checked fields this was the only
+summed duration; the other five are integer counts and remain exact.
+
+The fix makes the wait an integer counter at its source rather than widening the check.
+`Permit::before_request` truncates each wait to whole microseconds **once** and adds that same
+integer to both the run-wide accumulator and the permit's own, so new files publish
+`pacing.waited_us_total` and per-record `waited_us` that agree **exactly** whenever every wait
+was attributed to a record — with the header still an independent accumulator, not a re-sum of
+the records, so an unattributed wait of 1 µs or more is a mismatch. The presence of
+`waited_us_total` marks the convention; the millisecond fields stay, each required to be the
+whole milliseconds of its microsecond counterpart; and a file whose records carry `waited_us`
+under a header that lacks it (or the reverse) is rejected, so no file can fall back to the
+looser check by losing one field. Presence means the key exists: a `waited_us` that is
+present but not an integer is reported as malformed, not read as absent, and every record's
+`waited_ms` must be a present integer under both conventions. The fallback is still selected
+by field *absence*, though, and a results file carries no harness version that would date it,
+so any file that drops every microsecond field can claim the legacy check.
+
+Files without the marker were written before this change, and nothing finer than their
+published milliseconds exists, so they are checked against what truncation can produce and no
+more: `Σ waited_ms ≤ waited_ms_total` and `1000 × gap < 999 × R + Q`, with `R` the records
+that sent a request and `Q` the requests. `R`, not "records with non-zero `waited_ms`": a
+record that waited 0.6 ms publishes `0` and still contributes to the gap. This legacy check
+**cannot** see an unattributed wait that fits in its slack — up to roughly `R` milliseconds,
+for the October file (`R` = 936, observed gap 236) about 700 ms. The committed file was not
+edited; it passes because its numbers are what a correct sweep produces, and the slack it
+leaves is stated rather than hidden. Neither convention can see a wait charged to the wrong
+record (the sum is conserved) or a request that bypassed `before_request` entirely — the same
+blind spot `requests_sent` has.
+
+**What the guard is, and is not.** It is a self-consistency check on what a file asserts, not
+an authenticity check. A file with `pacing` absent or `applies: false` skips it entirely, and
+`census-rederive` copies pacing through verbatim rather than re-deriving it, because pacing is
+not recorded in the evidence store — so a file whose header and records were fabricated
+together, consistently, passes. This is an open limitation (tracked under P0-12 in
+`docs/tasks.md`), not something this amendment fixes.
+
 **`census-rederive` now exits non-zero on an inconsistency**, where a live sweep still only
 prints loudly. The asymmetry is deliberate: a live sweep has already spent its third-party
 contact and the data it collected is worth keeping, whereas the offline audit path has

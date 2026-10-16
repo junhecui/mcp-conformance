@@ -12,7 +12,7 @@ the per-domain request cap, the per-discovery reservation, `max_redirects`, and 
 derivation — and what that policy actually produced: requests sent, time waited, domains
 contacted, the most-loaded domain, refusals, overshoot, and the 25 most-loaded per-domain
 rows. Each server record carries its own `pacing` (`registrable_domain`, `requests_sent`,
-`waited_ms`).
+`waited_ms`, `reservation`, and — in files written after the October census — `waited_us`).
 
 `max_redirects` is `0`, and it belongs with the policy rather than as trivia: a followed
 redirect would be a request the accounting below it cannot see. No HTTP client in this harness
@@ -21,12 +21,40 @@ server answering a 3xx is not followed; its status lands in the `transport` buck
 detail `http status: 30x`, the same bucket the July file's 15 `redirect failed` entries
 already occupy.
 
-The two halves are meant to be cross-checked rather than believed. Six header fields must
-equal what the per-server records give: `requests_sent`, `waited_ms_total`,
-`sequences_denied_by_budget`, `registrable_domains_contacted`, `overshoot_requests`, and —
-the one that substantiates "no third party received more than N requests" —
-`max_requests_to_one_registrable_domain`, derived by grouping per-server `requests_sent` by
-per-server `registrable_domain` and taking the maximum. A live sweep prints
+The two halves are meant to be cross-checked rather than believed. Five integer header fields
+must equal what the per-server records give: `requests_sent`, `sequences_denied_by_budget`,
+`registrable_domains_contacted`, `overshoot_requests`, and — the one that substantiates "no
+third party received more than N requests" — `max_requests_to_one_registrable_domain`, derived
+by grouping per-server `requests_sent` by per-server `registrable_domain` and taking the
+maximum.
+
+The sixth, time waited, is a summed duration, and a millisecond total cannot in general equal
+a sum of per-record millisecond truncations — the October Class B file
+(`class_b_annotation_coverage_2026-10.json`) is correct and publishes 231,793 ms against a
+record sum of 231,557 ms. So it is checked two ways, chosen by the file's own content:
+
+- **Files written since that was fixed** also carry `pacing.waited_us_total` and a per-record
+  `waited_us`, in whole microseconds. The pacer truncates each wait to microseconds once and
+  adds the same integer to the run total and to the record's own counter, so the header must
+  equal `Σ waited_us` **exactly** — 1 µs off is a failure — and every `waited_ms` must be the
+  whole milliseconds of its own `waited_us`.
+- **Files without `waited_us_total`** (the October file is one) can only be checked against
+  what truncation allows: `Σ waited_ms ≤ waited_ms_total` and
+  `1000 × (waited_ms_total − Σ waited_ms) < 999 × R + Q`, where `R` is the records with
+  `requests_sent > 0` and `Q` is `Σ requests_sent`. This cannot see an unattributed wait that
+  fits inside that slack — for the October file, up to roughly 700 ms beyond its observed
+  236 ms gap.
+
+Which check applies is decided by whether the microsecond fields are present, and a file
+carries no harness version that would date it, so any file that drops every microsecond field
+gets the legacy check.
+
+This guard is a self-consistency check on what a file asserts, not an authenticity check. A
+file with `pacing` absent or `applies: false` skips it, and `census-rederive` copies pacing
+through verbatim rather than re-deriving it from evidence, because pacing is not recorded in
+evidence. A header and records fabricated together, consistently, would pass.
+
+A live sweep prints
 `PACING ACCOUNTING INCONSISTENT` and keeps its data; `cargo xtask census-rederive` prints the
 same and **exits non-zero**, because the offline audit path has nothing at risk and is the
 path a reader auditing a published file uses.

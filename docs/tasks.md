@@ -2205,6 +2205,32 @@ pacing, 13 stdio, 2 pin); `xtask` 52 lib + 6 purity + 1 reason-codes.
   the refusal detail — which is harness-authored and therefore ASCII, so the bound holds here
   for a reason rather than by luck.
 
+**Fixed after the October census: the wait-total check rejected a correct file.**
+`class_b_annotation_coverage_2026-10.json` reproduces byte for byte from its evidence, yet
+`census-rederive` exited 1 on it — `waited_ms_total` 231,793 against a record sum of 231,557 —
+because the header truncated the summed duration once while each record truncated its own, and
+the guard compared the two exactly. It was the only summed-duration field among the six
+checked; the five integer counters were never affected. Fix (ADR-014 §5 amendment): the pacer
+truncates each wait to microseconds once and adds that integer to both accumulators; new files
+publish `waited_us_total`/`waited_us`, checked **exactly** (1 µs off fails; the field's
+presence is the marker; a file cannot shed one µs field to get the looser check, though one
+that sheds all of them can — see below); files without it are
+checked against the exact truncation bound `Σ waited_ms ≤ waited_ms_total`,
+`1000 × gap < 999 × R + Q` (`R` records that sent a request, `Q` requests), which cannot see an
+unattributed wait inside that slack — about 700 ms for the October file. The committed file was
+not edited; `census-rederive` on it now exits **0**. `census-pin-stability` runs the same guard
+on its live output and picks up the new convention automatically (the committed
+`pin_stability.json` predates pacing and has no block). `probe-stage1` does **not** run the
+guard and writes no per-server `pacing` records, so its header — `waited_us_total` included —
+remains an uncheckable claim, as it was before.
+
+- **Known limitation, open follow-up (not fixed here): the pacing guard checks self-consistency,
+  not authenticity.** A file with `pacing` absent or `applies: false` skips it; pacing is copied
+  through `census-rederive` verbatim, not re-derived, because it is not recorded in evidence;
+  and the legacy wait check is selected by the absence of the µs fields, with no harness
+  version in the file to date it, so any file can claim it. A consistently fabricated pacing
+  block passes.
+
 ---
 
 ### P0-13 Follow `tools/list` pagination

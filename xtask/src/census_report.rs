@@ -671,7 +671,15 @@ pub(crate) fn pacing_header(accounting: &discovery::Accounting) -> Value {
         // assumed.
         "max_redirects": discovery::MAX_REDIRECTS,
         "requests_sent": accounting.requests_sent,
+        // Kept for readers and for comparison with the October file, but no longer the
+        // figure the guard checks exactly: a truncated millisecond total cannot in general
+        // equal a sum of per-record millisecond truncations. `waited_us_total` is the checked
+        // figure, and its presence is the marker that this file follows the exact convention
+        // (see `verify_pacing_self_consistent`). `Pacer` makes it, by construction, exactly
+        // the sum of the per-record `waited_us` — an independent accumulator, not a re-sum of
+        // the records, so an unattributed wait still shows as a mismatch.
         "waited_ms_total": millis(accounting.waited),
+        "waited_us_total": micros(accounting.waited),
         "registrable_domains_contacted": accounting.registrable_domains_contacted,
         "registrable_domains_seen": accounting.domains.len(),
         "max_requests_to_one_registrable_domain":
@@ -718,6 +726,16 @@ fn millis(d: std::time::Duration) -> u64 {
     u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
 }
 
+/// A duration in whole microseconds as a `u64`, saturating for the same reason as
+/// [`millis`].
+///
+/// Microseconds are the unit pacing waits are accumulated in
+/// (`discovery::Permit::before_request` truncates each wait once, to microseconds), so for a
+/// pacer's waits this is exact rather than a further truncation.
+fn micros(d: std::time::Duration) -> u64 {
+    u64::try_from(d.as_micros()).unwrap_or(u64::MAX)
+}
+
 /// One server's pacing accounting, for its record in the results file.
 ///
 /// `reservation` is new in P0-13 and is what keeps the header's `overshoot_requests`
@@ -737,6 +755,7 @@ pub(crate) fn pacing_record(
         "registrable_domain": registrable_domain,
         "requests_sent": requests,
         "waited_ms": millis(waited),
+        "waited_us": micros(waited),
         "reservation": reservation,
     })
 }
@@ -749,7 +768,9 @@ pub(crate) fn pacing_record(
 ///
 /// Six fields are checked, not three. The three totals (`requests_sent`, `waited_ms_total`,
 /// `sequences_denied_by_budget`) were always checked; the three added here are the ones a
-/// reader actually quotes:
+/// reader actually quotes. Every one of them is an integer count checked exactly, **except
+/// the wait total**, which is a summed `Duration` and is checked by [`verify_waited`] — see
+/// there for why an exact millisecond equality was wrong and what replaced it:
 ///
 /// - **`max_requests_to_one_registrable_domain`** — the headline politeness number, the
 ///   one that substantiates "no third party received more than N requests". It was published
@@ -800,7 +821,6 @@ pub(crate) fn verify_pacing_self_consistent(report: &Value) -> Result<(), Vec<St
         pacing.get("per_discovery_reservation").and_then(Value::as_u64).unwrap_or(0);
 
     let mut requests = 0u128;
-    let mut waited = 0u128;
     let mut denied = 0u128;
     let mut overshoot = 0u128;
     let mut pages_refused = 0u128;
@@ -811,7 +831,6 @@ pub(crate) fn verify_pacing_self_consistent(report: &Value) -> Result<(), Vec<St
         };
         let sent = n("requests_sent");
         requests += u128::from(sent);
-        waited += u128::from(n("waited_ms"));
         // The sequence's *own* reservation (P0-13), falling back to the header constant for a
         // P0-12-era file that has no per-server value. A paginating walk extends its
         // reservation, so subtracting the constant would count every extra page as overshoot
@@ -844,7 +863,6 @@ pub(crate) fn verify_pacing_self_consistent(report: &Value) -> Result<(), Vec<St
     let claimed = |key: &str| pacing.get(key).and_then(Value::as_u64).map(u128::from);
     for (key, summed) in [
         ("requests_sent", requests),
-        ("waited_ms_total", waited),
         ("sequences_denied_by_budget", denied),
         ("max_requests_to_one_registrable_domain", max_to_one_domain),
         ("registrable_domains_contacted", domains_contacted),
@@ -866,7 +884,204 @@ pub(crate) fn verify_pacing_self_consistent(report: &Value) -> Result<(), Vec<St
         )),
         None => problems.push("pacing.page_extensions_denied is missing or not a number".into()),
     }
+    problems.extend(verify_waited(pacing, servers));
     if problems.is_empty() { Ok(()) } else { Err(problems) }
+}
+
+/// The wait-total half of [`verify_pacing_self_consistent`]: the one checked field that is a
+/// summed **duration** rather than an integer count, and so the one an exact equality on
+/// published milliseconds got wrong.
+///
+/// **The bug this replaces.** Before this check, the header published
+/// `millis(Σ waits)` — one truncation of the summed `Duration` — while each record published
+/// `millis(own waits)`, and the guard demanded `Σ⌊dᵢ⌋ = ⌊Σdᵢ⌋`. Those differ by up to 1 ms
+/// per record on a perfectly correct sweep: the October Class B file reproduces byte for byte
+/// yet its header says 231,793 ms against a record sum of 231,557 — 236 ms over 463 records
+/// with a non-zero `waited_ms`, the half-a-millisecond-per-term that uniform truncation
+/// predicts — and `census-rederive` exited 1 on it.
+///
+/// **Two conventions, told apart by the header's own content.**
+///
+/// - **Exact (files written since this fix).** The header carries `waited_us_total`, and
+///   that field's presence is the marker. `Pacer` truncates each request's wait to whole
+///   microseconds **once** and adds that same integer to both the run-wide total and the
+///   permit's own counter, so the header is an *independent* accumulator — not a re-sum of the
+///   records — that equals `Σ waited_us` exactly whenever every permit's wait reached a record.
+///   Checked with no tolerance at all: a header off by 1 µs is rejected. Each record's
+///   `waited_ms` must also be exactly `⌊waited_us / 1000⌋`, and the header's `waited_ms_total`
+///   exactly `⌊waited_us_total / 1000⌋`, so the human-readable figures cannot drift from the
+///   checked ones. A pacing record lacking `waited_us`, or records carrying it under a header
+///   that lacks it, is rejected: a file must not be able to fall back to the looser legacy
+///   check by losing one field. Presence is `get(..).is_some()` on both sides, so a field that
+///   is present but not a `u64` (`null`, `"600"`, `1.5`) still selects this convention and is
+///   reported as malformed rather than read as absent.
+/// - **Legacy (files written before it — the committed October file is one).** No
+///   microsecond field anywhere, so only the published millisecond truncations are
+///   available, and the strongest exact statement about them is checked. Let `S = Σ
+///   waited_ms`, `H = waited_ms_total`, `R` the records with `requests_sent > 0` and `Q =
+///   Σ requests_sent`. Then `S ≤ H`, and `1000·(H − S) < 999·R + Q` (or `H = S` when `R = 0`):
+///   each record's millisecond floor drops at most 0.999 ms (its value is a whole number of
+///   microseconds), only a record that sent a request can have waited at all, and the old
+///   header summed raw nanoseconds where the records summed per-wait microsecond truncations,
+///   which adds under 1 µs per request. `R` and not "records with a non-zero `waited_ms`" on
+///   purpose: a record that waited 0.6 ms publishes `0` and still contributes 0.6 to the gap,
+///   so counting only visibly-waiting records would reject correct files.
+///
+/// Under both, every pacing record's `waited_ms` must be present and a `u64`: a missing or
+/// malformed one is reported, never summed as `0`.
+///
+/// **What each can detect.** Exact: any unattributed wait of 1 µs or more — a wait charged to
+/// the run but written to no record, a record whose counters were read before its sequence
+/// finished, a dropped record — and any record whose millisecond figure disagrees with its
+/// own microsecond figure. Legacy: a header *below* the record sum (impossible under
+/// truncation, so always a real bug), and an unattributed wait large enough to push the gap
+/// past the bound; it **cannot** see an unattributed wait that fits in the remaining slack,
+/// which is up to roughly `R` milliseconds (for the October file, `R` = 936, so any
+/// unattributed total under ~700 ms beyond the observed 236 ms gap is invisible). Neither can
+/// see a wait charged to the *wrong* record (the sum is conserved), a request that bypassed
+/// `Permit::before_request` entirely (neither accumulator saw it — the same blind spot the
+/// `requests_sent` check has), or the sub-microsecond remainder each wait loses at source
+/// (dropped from both sides identically, under 1 µs per request).
+///
+/// **The convention is selected by field absence**, and nothing in a results file dates it
+/// (there is no harness version in the header), so a file that drops *every* microsecond
+/// field gets the legacy check. This guard is a self-consistency check on what the file
+/// asserts, not an authenticity check.
+fn verify_waited(pacing: &Value, servers: &[Value]) -> Vec<String> {
+    let mut problems = Vec::new();
+    let mut waited_ms = 0u128;
+    let mut waited_us = 0u128;
+    let mut requests = 0u128;
+    let mut records_that_sent = 0u128;
+    let mut records_with_us = 0usize;
+    let mut records_without_us = Vec::new();
+    let mut us_not_numeric = Vec::new();
+    let mut ms_not_numeric = Vec::new();
+    let mut ms_disagreeing_with_us = Vec::new();
+    for (i, server) in servers.iter().enumerate() {
+        let Some(record) = server.get("pacing") else { continue };
+        let name = || server_label(server, i);
+        let sent = record.get("requests_sent").and_then(Value::as_u64).unwrap_or(0);
+        requests += u128::from(sent);
+        if sent > 0 {
+            records_that_sent += 1;
+        }
+        // Never `unwrap_or(0)`: a record with no usable `waited_ms` would otherwise lower the
+        // record sum silently, under either convention.
+        let ms = record.get("waited_ms").and_then(Value::as_u64);
+        match ms {
+            Some(ms) => waited_ms += u128::from(ms),
+            None => ms_not_numeric.push(name()),
+        }
+        // Presence by `get`, as on the header side: a `waited_us` that is present but not a
+        // `u64` must not count as absent, or it could route the file to the legacy check.
+        match record.get("waited_us") {
+            None => records_without_us.push(name()),
+            Some(field) => {
+                records_with_us += 1;
+                match field.as_u64() {
+                    Some(us) => {
+                        waited_us += u128::from(us);
+                        if ms.is_some_and(|ms| ms != us / 1000) {
+                            ms_disagreeing_with_us.push(name());
+                        }
+                    }
+                    None => us_not_numeric.push(name()),
+                }
+            }
+        }
+    }
+    let named = |problems: &mut Vec<String>, records: &[String], what: &str| {
+        if let Some(first) = records.first() {
+            problems.push(format!(
+                "{} per-server pacing record(s) {what} (first: {first})",
+                records.len()
+            ));
+        }
+    };
+    named(&mut problems, &ms_not_numeric, "have a waited_ms that is missing or not a number");
+    named(&mut problems, &us_not_numeric, "have a waited_us that is not a number");
+    let claimed = |key: &str| pacing.get(key).and_then(Value::as_u64).map(u128::from);
+    let header_ms = claimed("waited_ms_total");
+
+    match pacing.get("waited_us_total") {
+        // The exact convention.
+        Some(field) => {
+            let Some(header_us) = field.as_u64().map(u128::from) else {
+                problems.push("pacing.waited_us_total is not a number".into());
+                return problems;
+            };
+            if header_us != waited_us {
+                problems.push(format!(
+                    "pacing.waited_us_total is {header_us} but the per-server records give \
+                     {waited_us}"
+                ));
+            }
+            match header_ms {
+                Some(ms) if ms == header_us / 1000 => {}
+                Some(ms) => problems.push(format!(
+                    "pacing.waited_ms_total is {ms} but pacing.waited_us_total is {header_us}, \
+                     whose whole milliseconds are {}",
+                    header_us / 1000
+                )),
+                None => problems.push("pacing.waited_ms_total is missing or not a number".into()),
+            }
+            named(
+                &mut problems,
+                &records_without_us,
+                "lack waited_us under a header that carries waited_us_total",
+            );
+            named(
+                &mut problems,
+                &ms_disagreeing_with_us,
+                "have a waited_ms that is not the whole milliseconds of their own waited_us",
+            );
+        }
+        // The legacy convention — only if nothing in the file uses the exact one.
+        None if records_with_us > 0 => problems.push(format!(
+            "{records_with_us} per-server pacing record(s) carry waited_us but the header has \
+             no waited_us_total, so the exact wait check cannot be applied"
+        )),
+        None => match header_ms {
+            None => problems.push("pacing.waited_ms_total is missing or not a number".into()),
+            Some(header) if header < waited_ms => problems.push(format!(
+                "pacing.waited_ms_total is {header} but the per-server records give \
+                 {waited_ms}, and a header total can never be below the sum of truncated \
+                 per-record values"
+            )),
+            Some(header) => {
+                let gap = header - waited_ms;
+                let slack = 999 * records_that_sent + requests;
+                if gap > 0 && 1000 * gap >= slack {
+                    problems.push(format!(
+                        "pacing.waited_ms_total is {header} but the per-server records give \
+                         {waited_ms}: a gap of {gap} ms, more than millisecond truncation \
+                         across {records_that_sent} requesting records and {requests} requests \
+                         can produce (1000 × gap must be below {slack})"
+                    ));
+                }
+            }
+        },
+    }
+    problems
+}
+
+/// The most of a server-controlled string [`quoted`] puts into one problem or stderr line.
+const MAX_QUOTED_CHARS: usize = 200;
+
+/// A server-controlled string — a registry `server.name` — made safe to quote in a problem
+/// string that reaches `eprintln!`. Registry names are untrusted (design.md §3), so control
+/// characters and other non-printables are escaped (`escape_debug`), which means a name
+/// cannot carry a terminal escape sequence, and the result is bounded, with the cut stated.
+fn quoted(text: &str) -> String {
+    let mut escaped = text.escape_debug();
+    let head: String = escaped.by_ref().take(MAX_QUOTED_CHARS).collect();
+    if escaped.next().is_none() { head } else { format!("{head}… [cut at {MAX_QUOTED_CHARS} chars]") }
+}
+
+/// How a problem string names server record `i`: its [`quoted`] `name`, or `#i` without one.
+fn server_label(server: &Value, i: usize) -> String {
+    server.get("name").and_then(Value::as_str).map_or_else(|| format!("#{i}"), quoted)
 }
 
 /// Failure category for a host refused because its registrable domain's request budget is
@@ -1962,7 +2177,7 @@ fn split_results(value: Value) -> Result<(Map<String, Value>, Vec<ServerObservat
                 return Err(format!("servers[{i}] is not an object"));
             };
             let observation = observation_of(&record).map_err(|e| {
-                let name = record.get("name").and_then(Value::as_str).unwrap_or("?");
+                let name = record.get("name").and_then(Value::as_str).map_or_else(|| "?".into(), quoted);
                 format!("servers[{i}] ({name}): {e}")
             })?;
             for key in SERVER_NON_IDENTITY_KEYS {
@@ -3078,6 +3293,368 @@ mod tests {
         assert_eq!(verify_pacing_self_consistent(&json!({ "servers": [] })), Ok(()));
     }
 
+    // ---- The wait total: exact for new files, bounded truncation for legacy ones ----
+
+    /// A minimal paced report: every integer counter consistent with `records`, so only the
+    /// wait fields are under test. Each record is `(requests_sent, pacing extras)`.
+    fn wait_report(header_extra: Value, records: Vec<(u64, Value)>) -> Value {
+        let requests: u64 = records.iter().map(|(sent, _)| sent).sum();
+        let servers: Vec<Value> = records
+            .into_iter()
+            .enumerate()
+            .map(|(i, (sent, extra))| {
+                let mut pacing = json!({
+                    "registrable_domain": format!("d{i}.test"),
+                    "requests_sent": sent,
+                    "reservation": 5,
+                });
+                pacing.as_object_mut().expect("object").extend(
+                    extra.as_object().expect("object").clone(),
+                );
+                json!({ "name": format!("s{i}"), "pacing": pacing })
+            })
+            .collect();
+        let contacted = servers
+            .iter()
+            .filter(|s| s["pacing"]["requests_sent"].as_u64() > Some(0))
+            .count();
+        let max = servers.iter().filter_map(|s| s["pacing"]["requests_sent"].as_u64()).max();
+        let mut pacing = json!({
+            "applies": true,
+            "per_discovery_reservation": 5,
+            "requests_sent": requests,
+            "sequences_denied_by_budget": 0,
+            "max_requests_to_one_registrable_domain": max.unwrap_or(0),
+            "registrable_domains_contacted": contacted,
+            "overshoot_requests": 0,
+            "page_extensions_denied": 0,
+        });
+        pacing.as_object_mut().expect("object").extend(
+            header_extra.as_object().expect("object").clone(),
+        );
+        json!({ "pacing": pacing, "servers": servers })
+    }
+
+    /// The exact shape of the committed October Class B file: header 231,793 ms, records
+    /// summing to 231,557 ms, 463 records with a non-zero `waited_ms`, 936 that sent a
+    /// request, 1,958 requests. The old exact-millisecond guard rejected it; it is a correct
+    /// file, so the legacy check must accept it — and must still be a bound, not a pass.
+    fn october_shaped(header_ms: u64) -> Value {
+        let records = (0..1000u64)
+            .map(|i| {
+                // 936 requesting records, 1,958 requests: 2 each plus one more on 86 of them.
+                let sent = if i < 936 { 2 + u64::from(i < 86) } else { 0 };
+                // 463 visibly-waiting records summing to 231,557 ms.
+                let waited = if i < 463 { 500 + u64::from(i < 57) } else { 0 };
+                (sent, json!({ "waited_ms": waited }))
+            })
+            .collect();
+        wait_report(json!({ "waited_ms_total": header_ms }), records)
+    }
+
+    #[test]
+    fn a_legacy_file_with_octobers_truncation_gap_passes_and_the_gap_is_still_bounded() {
+        let report = october_shaped(231_793);
+        let summed: u64 = report["servers"]
+            .as_array()
+            .expect("servers")
+            .iter()
+            .map(|s| s["pacing"]["waited_ms"].as_u64().expect("number"))
+            .sum();
+        assert_eq!(summed, 231_557, "the fixture reproduces October's record sum");
+        assert_eq!(report["pacing"]["requests_sent"], 1958);
+        assert_eq!(verify_pacing_self_consistent(&report), Ok(()));
+
+        // The bound is exact arithmetic, not a free pass: 936 requesting records and 1,958
+        // requests allow `1000 × gap < 999 × 936 + 1958 = 937,022`, so a gap of 937 ms is
+        // the most truncation can produce and 938 ms is a real, unattributed wait.
+        assert_eq!(verify_pacing_self_consistent(&october_shaped(231_557 + 937)), Ok(()));
+        let problems = verify_pacing_self_consistent(&october_shaped(231_557 + 938))
+            .expect_err("a gap past the truncation bound must be caught");
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("gap of 938 ms"), "{problems:?}");
+
+        // Below the record sum is impossible under truncation in either direction of
+        // rounding, so even 1 ms under is rejected.
+        let problems = verify_pacing_self_consistent(&october_shaped(231_556))
+            .expect_err("a header below its records must be caught");
+        assert!(problems[0].contains("can never be below"), "{problems:?}");
+    }
+
+    /// Why the legacy bound counts records that *sent* rather than records that visibly
+    /// *waited*: two records that each waited 0.6 ms publish `waited_ms: 0` but a header of
+    /// `⌊1.2⌋ = 1`. A bound built on "records with non-zero waited_ms" (here zero of them)
+    /// would reject that correct file.
+    #[test]
+    fn the_legacy_bound_counts_sub_millisecond_waits_and_nothing_more() {
+        let two_tiny_waits = |header: u64| {
+            wait_report(
+                json!({ "waited_ms_total": header }),
+                vec![(1, json!({ "waited_ms": 0 })), (1, json!({ "waited_ms": 0 }))],
+            )
+        };
+        assert_eq!(verify_pacing_self_consistent(&two_tiny_waits(1)), Ok(()));
+        assert!(verify_pacing_self_consistent(&two_tiny_waits(2)).is_err());
+        // One request can only have one wait, and the floor of a floor is the floor: no gap.
+        let one = |header: u64| {
+            wait_report(json!({ "waited_ms_total": header }), vec![(1, json!({ "waited_ms": 3 }))])
+        };
+        assert_eq!(verify_pacing_self_consistent(&one(3)), Ok(()));
+        assert!(verify_pacing_self_consistent(&one(4)).is_err());
+        // And a record that sent nothing leaves no room at all.
+        let silent =
+            wait_report(json!({ "waited_ms_total": 1 }), vec![(0, json!({ "waited_ms": 0 }))]);
+        assert!(verify_pacing_self_consistent(&silent).is_err());
+    }
+
+    /// The committed October Class B file itself passes. `census-rederive` checks the guard on
+    /// the *regenerated* file, which reproduces this one byte for byte, so the guard's verdict
+    /// on the committed bytes is its verdict on the re-derivation — and this test needs only
+    /// the committed file, not the git-ignored evidence store.
+    #[test]
+    fn the_committed_october_class_b_file_passes_the_pacing_guard() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../results/census/class_b_annotation_coverage_2026-10.json");
+        let report: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("committed file"))
+                .expect("valid JSON");
+        assert_eq!(report["pacing"]["waited_ms_total"], 231_793, "the published header");
+        assert!(report["pacing"].get("waited_us_total").is_none(), "a legacy-convention file");
+        assert_eq!(verify_pacing_self_consistent(&report), Ok(()));
+    }
+
+    /// The exact convention, end to end through the real writers: a header and records built
+    /// from a real `Pacer` with fractional waits agree to the microsecond, and a header off by
+    /// a single microsecond — or a millisecond figure that drifts from its microsecond one —
+    /// is rejected. This is the check with no tolerance at all.
+    #[test]
+    fn a_new_convention_file_is_checked_exactly_to_the_microsecond() {
+        let pacer = std::sync::Arc::new(discovery::Pacer::new(discovery::PacePolicy {
+            min_interval: std::time::Duration::from_millis(3),
+            max_requests_per_registrable_domain: 100,
+        }));
+        let permits: Vec<_> = ["https://a.vendor.test/mcp", "https://b.vendor.test/mcp"]
+            .iter()
+            .map(|host| pacer.admit(host).expect("budget"))
+            .collect();
+        for _ in 0..3 {
+            for permit in &permits {
+                permit.before_request();
+            }
+        }
+        let servers: Vec<Value> = permits
+            .iter()
+            .enumerate()
+            .map(|(i, permit)| {
+                json!({
+                    "name": format!("s{i}"),
+                    "pacing": pacing_record(
+                        "vendor.test",
+                        permit.requests_sent(),
+                        permit.waited(),
+                        discovery::MAX_REQUESTS_PER_DISCOVERY,
+                    ),
+                })
+            })
+            .collect();
+        let report = json!({ "pacing": pacing_header(&pacer.accounting()), "servers": servers });
+        let total_us = report["pacing"]["waited_us_total"].as_u64().expect("the marker field");
+        assert!(total_us > 0, "six requests on one domain at 3 ms must wait");
+        assert_eq!(report["pacing"]["waited_ms_total"].as_u64(), Some(total_us / 1000));
+        assert_eq!(verify_pacing_self_consistent(&report), Ok(()));
+
+        // One microsecond either way is a real, unattributed (or invented) wait.
+        for header_us in [total_us + 1, total_us - 1] {
+            let mut off = report.clone();
+            off["pacing"]["waited_us_total"] = json!(header_us);
+            off["pacing"]["waited_ms_total"] = json!(header_us / 1000);
+            let problems = verify_pacing_self_consistent(&off).expect_err("1 µs must be caught");
+            assert!(
+                problems.iter().any(|p| p.contains(&format!("waited_us_total is {header_us}"))),
+                "{problems:?}"
+            );
+        }
+        // The human-readable figures cannot drift from the checked ones.
+        let mut header_ms_off = report.clone();
+        header_ms_off["pacing"]["waited_ms_total"] = json!(total_us / 1000 + 1);
+        assert!(verify_pacing_self_consistent(&header_ms_off).is_err());
+        let mut record_ms_off = report.clone();
+        let record_ms = record_ms_off["servers"][0]["pacing"]["waited_ms"].as_u64().expect("ms");
+        record_ms_off["servers"][0]["pacing"]["waited_ms"] = json!(record_ms + 1);
+        let problems = verify_pacing_self_consistent(&record_ms_off).expect_err("must be caught");
+        assert!(problems.iter().any(|p| p.contains("(first: s0)")), "{problems:?}");
+    }
+
+    /// A file cannot fall back to the looser legacy check by losing one field: records
+    /// carrying `waited_us` under a header without `waited_us_total` are rejected, and so is
+    /// a record without `waited_us` under a header that carries it.
+    #[test]
+    fn a_file_cannot_downgrade_itself_to_the_legacy_wait_check() {
+        let records = || {
+            vec![
+                (2, json!({ "waited_ms": 0, "waited_us": 600 })),
+                (2, json!({ "waited_ms": 0, "waited_us": 600 })),
+            ]
+        };
+        let exact = wait_report(json!({ "waited_ms_total": 1, "waited_us_total": 1200 }), records());
+        assert_eq!(verify_pacing_self_consistent(&exact), Ok(()));
+
+        let lost_marker = wait_report(json!({ "waited_ms_total": 1 }), records());
+        let problems = verify_pacing_self_consistent(&lost_marker).expect_err("must be caught");
+        assert!(problems.iter().any(|p| p.contains("no waited_us_total")), "{problems:?}");
+
+        let mut lost_record_field = exact.clone();
+        lost_record_field["servers"][1]["pacing"]
+            .as_object_mut()
+            .expect("object")
+            .remove("waited_us");
+        let problems =
+            verify_pacing_self_consistent(&lost_record_field).expect_err("must be caught");
+        assert!(problems.iter().any(|p| p.contains("lack waited_us")), "{problems:?}");
+    }
+
+    /// A `waited_us` that is present but not a `u64` is malformed, not absent: it must neither
+    /// be summed as nothing under the exact convention nor let the file reach the legacy check.
+    #[test]
+    fn a_present_but_non_numeric_waited_us_is_reported_not_treated_as_absent() {
+        for bad in [json!(null), json!("600"), json!(1.5)] {
+            let records = || {
+                vec![
+                    (2, json!({ "waited_ms": 0, "waited_us": 600 })),
+                    (2, json!({ "waited_ms": 0, "waited_us": bad.clone() })),
+                ]
+            };
+            let exact =
+                wait_report(json!({ "waited_ms_total": 0, "waited_us_total": 600 }), records());
+            let problems = verify_pacing_self_consistent(&exact).expect_err("must be caught");
+            assert!(
+                problems.iter().any(|p| p.contains("waited_us that is not a number (first: s1)")),
+                "{bad}: {problems:?}"
+            );
+            assert!(!problems.iter().any(|p| p.contains("lack waited_us")), "{bad}: {problems:?}");
+
+            // Without the header marker, the record still counts as carrying the field, so
+            // the file is refused the legacy check rather than quietly given it.
+            let legacy = wait_report(json!({ "waited_ms_total": 0 }), records());
+            let problems = verify_pacing_self_consistent(&legacy).expect_err("must be caught");
+            assert!(
+                problems.iter().any(|p| p.contains("2 per-server pacing record(s) carry waited_us")),
+                "{bad}: {problems:?}"
+            );
+        }
+    }
+
+    /// A header `waited_us_total` that is not a `u64` is rejected, not read as absent.
+    #[test]
+    fn a_non_numeric_waited_us_total_is_rejected() {
+        for bad in [json!(null), json!("600"), json!(1.5)] {
+            let report = wait_report(
+                json!({ "waited_ms_total": 0, "waited_us_total": bad.clone() }),
+                vec![(2, json!({ "waited_ms": 0, "waited_us": 600 }))],
+            );
+            let problems = verify_pacing_self_consistent(&report).expect_err("must be caught");
+            assert_eq!(problems, ["pacing.waited_us_total is not a number"], "{bad}");
+        }
+    }
+
+    /// Every record's `waited_ms` (and, under the exact convention, the header's
+    /// `waited_ms_total`) must be present and a `u64` — reported, never summed as `0`.
+    #[test]
+    fn a_missing_or_non_numeric_waited_ms_is_reported_under_both_conventions() {
+        for bad in [None, Some(json!(null)), Some(json!("0")), Some(json!(0.5))] {
+            let mut second = json!({ "waited_us": 0 });
+            if let Some(bad) = &bad {
+                second["waited_ms"] = bad.clone();
+            }
+            let exact = wait_report(
+                json!({ "waited_ms_total": 1, "waited_us_total": 1200 }),
+                vec![(2, json!({ "waited_ms": 1, "waited_us": 1200 })), (2, second.clone())],
+            );
+            let problems = verify_pacing_self_consistent(&exact).expect_err("must be caught");
+            assert_eq!(
+                problems,
+                ["1 per-server pacing record(s) have a waited_ms that is missing or not a number \
+                  (first: s1)"],
+                "{bad:?}"
+            );
+
+            second.as_object_mut().expect("object").remove("waited_us");
+            let legacy = wait_report(
+                json!({ "waited_ms_total": 1 }),
+                vec![(2, json!({ "waited_ms": 1 })), (2, second)],
+            );
+            let problems = verify_pacing_self_consistent(&legacy).expect_err("must be caught");
+            assert!(
+                problems.iter().any(|p| p.contains("waited_ms that is missing or not a number")),
+                "{bad:?}: {problems:?}"
+            );
+
+            // The header's millisecond figure, under the exact convention.
+            let mut header = json!({ "waited_us_total": 1200 });
+            if let Some(bad) = &bad {
+                header["waited_ms_total"] = bad.clone();
+            }
+            let report =
+                wait_report(header, vec![(2, json!({ "waited_ms": 1, "waited_us": 1200 }))]);
+            let problems = verify_pacing_self_consistent(&report).expect_err("must be caught");
+            assert_eq!(problems, ["pacing.waited_ms_total is missing or not a number"], "{bad:?}");
+        }
+    }
+
+    /// A paced file in which nothing sent a request (`R = 0`, `H = S = 0`) is correct under
+    /// both conventions — with a record that sent nothing, and with no records at all.
+    #[test]
+    fn a_paced_file_with_no_requests_and_no_wait_passes_under_both_conventions() {
+        let silent = || vec![(0, json!({ "waited_ms": 0, "waited_us": 0 }))];
+        let exact = wait_report(json!({ "waited_ms_total": 0, "waited_us_total": 0 }), silent());
+        assert_eq!(verify_pacing_self_consistent(&exact), Ok(()));
+        assert_eq!(
+            verify_pacing_self_consistent(&wait_report(
+                json!({ "waited_ms_total": 0, "waited_us_total": 0 }),
+                vec![]
+            )),
+            Ok(())
+        );
+        let legacy = wait_report(
+            json!({ "waited_ms_total": 0 }),
+            vec![(0, json!({ "waited_ms": 0 }))],
+        );
+        assert_eq!(verify_pacing_self_consistent(&legacy), Ok(()));
+        assert_eq!(
+            verify_pacing_self_consistent(&wait_report(json!({ "waited_ms_total": 0 }), vec![])),
+            Ok(())
+        );
+    }
+
+    /// A registry-controlled `server.name` reaches problem strings that are printed with
+    /// `eprintln!`, so it is escaped and bounded on the way in: no terminal escape survives,
+    /// and a long name is cut, saying so.
+    #[test]
+    fn a_hostile_server_name_is_escaped_and_bounded_in_problem_strings() {
+        let hostile = format!("\u{1b}]0;owned\u{7}\u{1b}[2J\u{202e}x\n{}", "a".repeat(500));
+        let label = quoted(&hostile);
+        assert!(!label.chars().any(char::is_control), "{label:?}");
+        assert!(!label.contains('\u{202e}'), "bidi override must be escaped: {label:?}");
+        assert!(label.starts_with(r"\u{1b}]0;owned\u{7}"), "{label:?}");
+        assert!(label.ends_with(&format!("… [cut at {MAX_QUOTED_CHARS} chars]")), "{label:?}");
+        assert_eq!(quoted("io.example/ok"), "io.example/ok", "ordinary names are untouched");
+
+        // Through the wait guard …
+        let mut report =
+            wait_report(json!({ "waited_ms_total": 0, "waited_us_total": 0 }), vec![(1, json!({}))]);
+        report["servers"][0]["name"] = json!(hostile);
+        let problems = verify_pacing_self_consistent(&report).expect_err("must be caught");
+        assert!(problems.iter().any(|p| p.contains(&label)), "{problems:?}");
+        assert!(problems.iter().all(|p| !p.chars().any(char::is_control)), "{problems:?}");
+
+        // … and through `split_results`' per-record error.
+        let err = split_results(json!({ "servers": [{ "name": hostile, "outcome": "bogus" }] }))
+            .err()
+            .expect("an unrecognised outcome is refused");
+        assert!(err.contains(&label), "{err:?}");
+        assert!(!err.chars().any(char::is_control), "{err:?}");
+    }
+
     /// **July comparability.** A budget refusal is its own category: the `transport`,
     /// `protocol` and `rate_limited` counts a re-run produces still mean exactly what they
     /// meant in July, and the harness-side refusals are a bucket a reader can subtract.
@@ -3214,6 +3791,7 @@ mod tests {
                 "per_discovery_reservation": discovery::MAX_REQUESTS_PER_DISCOVERY,
                 "requests_sent": 6,
                 "waited_ms_total": 2_000,
+                "waited_us_total": 2_000_000,
                 "registrable_domains_contacted": 1,
                 "registrable_domains_seen": 1,
                 "max_requests_to_one_registrable_domain": 6,
@@ -3243,6 +3821,9 @@ mod tests {
         assert_eq!(regenerated["servers"][0]["pacing"]["requests_sent"], 4);
         assert_eq!(regenerated["servers"][2]["pacing"]["requests_sent"], 0);
         assert_eq!(regenerated["pacing"]["requests_sent"], 6);
+        // The exact-convention wait fields ride through verbatim too.
+        assert_eq!(regenerated["pacing"]["waited_us_total"], 2_000_000);
+        assert_eq!(regenerated["servers"][0]["pacing"]["waited_us"], 1_500_000);
     }
 
     // ---- P0-13: pagination through the derivation path ----
