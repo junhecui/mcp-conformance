@@ -90,7 +90,7 @@ fn attempt(
     store: &Mutex<BlobStore>,
     stop: &StopFlag,
 ) -> ServerObservation {
-    let (observation, requests, waited) = observe(candidate, pacer, store, stop);
+    let (observation, requests, waited, reservation) = observe(candidate, pacer, store, stop);
     let mut identity = identity(candidate);
     identity.insert(
         "pacing".into(),
@@ -98,6 +98,7 @@ fn attempt(
             &discovery::registrable_domain_of_endpoint(&candidate.url),
             requests,
             waited,
+            reservation,
         ),
     );
     ServerObservation { identity, observation }
@@ -116,7 +117,7 @@ fn observe(
     pacer: &Arc<Pacer>,
     store: &Mutex<BlobStore>,
     stop: &StopFlag,
-) -> (Observation, usize, std::time::Duration) {
+) -> (Observation, usize, std::time::Duration, usize) {
     // The budget is consulted *before* a client exists, so a refused host costs no
     // connection at all — and is recorded, never silently dropped from the sample.
     let permit = match pacer.admit(&candidate.url) {
@@ -127,6 +128,7 @@ fn observe(
                 Observation::failed(census_report::BUDGET_EXHAUSTED, &denied.to_string()),
                 0,
                 std::time::Duration::ZERO,
+                0,
             );
         }
     };
@@ -141,7 +143,11 @@ fn observe(
     // Dropped before the counters are read, so the reservation is returned to the budget
     // before the next candidate asks for one.
     drop(client);
-    (observation, stats.requests_sent(), stats.waited())
+    // The reservation is read *after* the client is dropped but from the `stats` handle,
+    // which outlives it: a paginating walk extends the reservation as it goes (P0-13), so
+    // the value that belongs on the record is the one the sequence finished holding, not the
+    // five it was admitted with.
+    (observation, stats.requests_sent(), stats.waited(), stats.reservation())
 }
 
 fn identity(candidate: &Candidate) -> Map<String, Value> {

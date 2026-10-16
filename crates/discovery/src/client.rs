@@ -60,20 +60,25 @@ use crate::era::{
     self, CLIENT_SUPPORTED_REVISIONS, DiscoverClass, ERA_POLICY, Era, FallbackReason,
     LEGACY_PREFERRED, MODERN_PREFERRED,
 };
-use crate::transport::{ChildProcessTransport, HttpTransport, Transport};
+use crate::paginate::{self, Continuation, PaginationOutcome, StopReason};
+use crate::transport::{ChildProcessTransport, HttpTransport, RawResponse, Transport};
 
 const CLIENT_NAME: &str = "mcp-conformance-harness";
 const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Everything discovery captured about one server.
 ///
-/// `handshake_raw` and `tools_list_raw` are the only fields P0-02's metadata pin may ever
+/// `handshake_raw` and `tools_list_pages` are the only fields P0-02's metadata pin may ever
 /// hash — "the pin is over bytes, not semantics" (architecture.md §3.1). Nothing in this
-/// crate parses them any further than routing the response envelope; that's the pinner's
-/// and census's job. Pinning is unaffected by era: the pin hashes only `tools_list_raw`,
-/// and only the per-tool `(name, inputSchema, annotations, description)` fields within it,
-/// so `2026-07-28`'s new required result fields (`resultType`, `ttlMs`, `cacheScope`) sit
-/// outside the preimage and a tool's pin is identical whichever lifecycle produced it.
+/// crate parses them any further than routing the response envelope and reading the one
+/// field a pagination bound needs; interpretation is the pinner's and census's job.
+///
+/// Pinning is unaffected by era *and*, since P0-13, by page split: the pin hashes only the
+/// per-tool `(name, inputSchema, annotations, description)` fields found across
+/// `tools_list_pages`, so `2026-07-28`'s new required result fields (`resultType`, `ttlMs`,
+/// `cacheScope`) and the page framing (`nextCursor`, the boundaries themselves) all sit
+/// outside the preimage. A tool's pin is identical whichever lifecycle produced it and
+/// however the server chose to paginate — see [`crate::pin_pages`] and ADR-015.
 #[derive(Debug, Clone)]
 pub struct Discovery {
     /// The exact bytes of the handshake response, before any parsing — the
@@ -85,8 +90,25 @@ pub struct Discovery {
     /// `initialize` bytes, and a field name that says otherwise is a trap for anyone
     /// reading evidence back out of the store.
     pub handshake_raw: Vec<u8>,
-    /// The exact bytes of the `tools/list` response, before any parsing.
-    pub tools_list_raw: Vec<u8>,
+    /// The exact bytes of every `tools/list` page, in walk order, before any parsing.
+    /// Non-empty for any successful discovery.
+    ///
+    /// **A list, not one response, since P0-13.** `ListToolsResult` is a `PaginatedResult`
+    /// in both eras and this client now follows `nextCursor`, so a tool list can arrive
+    /// across N responses. There is deliberately **no** `tools_list_raw` field left and no
+    /// first-page accessor: a name that says "the `tools/list` response" while holding page
+    /// one of forty is the same trap P0-11 renamed `initialize_raw` to remove, and the whole
+    /// defect P0-13 fixes was code treating one page as the whole list. A consumer that
+    /// genuinely wants one page indexes this, visibly.
+    ///
+    /// Read [`pagination`](Self::pagination) **before** computing any coverage number from
+    /// these bytes: a walk stopped by a bound saw only part of the server's tool list, and a
+    /// partial tally filed as a complete one is the worst available failure mode for a trust
+    /// signal (design.md §8).
+    pub tools_list_pages: Vec<Vec<u8>>,
+    /// What the `tools/list` cursor walk did — how many pages it fetched, and why it stopped
+    /// (P0-13). See [`PaginationOutcome::cursors_exhausted`].
+    pub pagination: PaginationOutcome,
     /// The exact bytes of the `server/discover` probe response — the preimage of the era
     /// classification — or an explicit statement that no bytes ever existed.
     ///
@@ -426,6 +448,12 @@ impl std::error::Error for DiscoveryError {
     }
 }
 
+/// One completed `tools/list` cursor walk: its pages, and what it did.
+struct ToolsListWalk {
+    pages: Vec<Vec<u8>>,
+    outcome: PaginationOutcome,
+}
+
 /// What the modern probe concluded: proceed modern, or fall back to legacy.
 enum EraDecision {
     /// The server is modern. `handshake_raw` is the response that proved it.
@@ -541,13 +569,23 @@ impl DiscoveryClient {
     /// `tools/list` with the modern `_meta` block, or a fallback to
     /// `initialize` + `notifications/initialized` + `tools/list`.
     ///
-    /// **Request budget: at most five, and the fallback is always a single bounded step,
-    /// never a loop.** Four on an ordinary legacy fallback (probe, then the three legacy
-    /// requests); two on a modern success; five only on the one correctable path, where an
-    /// optimistic `modern_without_discover` guess spends a `tools/list` before the legacy
-    /// handshake corrects it (see [`FallbackReason::ModernWithoutDiscoverToolsListFailed`]).
-    /// A connection-level failure and any non-era-signalling HTTP status still cost exactly
-    /// one — the populations that dominate census failures are untouched.
+    /// **Request budget: at most five for the handshake half, plus one per extra `tools/list`
+    /// page.** The handshake half is unchanged and the fallback is still a single bounded
+    /// step, never a loop: four on an ordinary legacy fallback (probe, then the three legacy
+    /// requests); two on a single-page modern success; five only on the one correctable path,
+    /// where an optimistic `modern_without_discover` guess spends a `tools/list` before the
+    /// legacy handshake corrects it (see
+    /// [`FallbackReason::ModernWithoutDiscoverToolsListFailed`]). A connection-level failure
+    /// and any non-era-signalling HTTP status still cost exactly one — the populations that
+    /// dominate census failures are untouched.
+    ///
+    /// The pagination half (P0-13) adds one request per page beyond the first, bounded by
+    /// [`paginate::MAX_PAGES`] and by three other bounds in [`crate::paginate`], so the
+    /// worst case is `5 + (MAX_PAGES - 1)`. Each extra page is **bought from the registrable
+    /// domain's P0-12 budget before it is requested** ([`crate::Permit::try_extend`]), so a
+    /// paginating server cannot spend headroom reserved for later hosts on its domain; a walk
+    /// that cannot buy its next page stops with [`StopReason::BudgetExhausted`] and the
+    /// record says the tool list is incomplete.
     ///
     /// Every test that scripts HTTP responses asserts the exact request count, because this
     /// budget is part of the contract and P0-09's own regression was a doubled count that no
@@ -559,8 +597,8 @@ impl DiscoveryClient {
                 // Re-affirmed rather than assumed: `probe_modern` may have chosen a
                 // different revision than the one it probed with.
                 self.transport.configure_http_headers(Some(chosen), true);
-                let tools = match self.transport.call("tools/list", modern_params(chosen)) {
-                    Ok(tools) => tools,
+                let walk = match self.fetch_tools_list(Some(chosen)) {
+                    Ok(walk) => walk,
                     // The optimistic-modern guess, corrected. `ModernWithoutDiscover` is the
                     // only modern path reached without the server ever confirming it is
                     // modern — a 404 carrying `-32601` is also a documented
@@ -583,7 +621,8 @@ impl DiscoveryClient {
                 };
                 Ok(Discovery {
                     handshake_raw,
-                    tools_list_raw: tools.bytes,
+                    tools_list_pages: walk.pages,
+                    pagination: walk.outcome,
                     probe_raw,
                     // Only a *negotiated* revision is reported as one. On the assumed path
                     // this stays `None`, so a published record cannot claim the server named
@@ -606,6 +645,113 @@ impl DiscoveryClient {
                 self.discover_legacy(requested, offered, reason, probe_raw)
             }
         }
+    }
+
+    /// Fetch `tools/list` and follow `nextCursor` to the end, or to the first bound that
+    /// stops the walk (P0-13).
+    ///
+    /// `modern_revision` is `Some(revision)` on the modern path, where every request carries
+    /// the required `_meta` block, and `None` on the legacy one, where none of it is defined.
+    /// That is the only difference between the two eras' walks: pagination predates
+    /// `2026-07-28` and `ListToolsResult` is a `PaginatedResult` in both, so there is one
+    /// loop rather than two that could drift.
+    ///
+    /// # What fails and what truncates
+    ///
+    /// The **first** page's failure is returned as an error, so discovery fails exactly as it
+    /// did before pagination — which also keeps `ModernWithoutDiscover`'s correction path
+    /// reachable, since that path is triggered by precisely this error. Every **later** page's
+    /// failure *truncates* the walk instead: the pages already fetched are real evidence of a
+    /// real server, and throwing them away would turn a partial observation into no
+    /// observation. The record says the list is incomplete and which reason truncated it.
+    ///
+    /// # Two kinds of bound, deliberately checked in two different places
+    ///
+    /// **The tool ceiling is absolute and checked after every page, before the cursor is
+    /// even looked at.** A page offering no cursor is not thereby exempt: one page of
+    /// 20,000 tools used to be recorded as a complete, successful observation, and at the
+    /// transport's 10 MiB page cap one response can carry ~150,000 — against a whole July
+    /// corpus of 3,183 — so a single server could rewrite every tool-weighted percentage
+    /// the census publishes, *as a success*. A walk holding more than
+    /// [`paginate::MAX_TOOLS`] tools is never a usable coverage number however it ended.
+    ///
+    /// **Every other bound is checked only when a cursor was actually offered.** A walk
+    /// that reaches exactly [`paginate::MAX_PAGES`] and whose last page carries no cursor
+    /// ran out of cursors; it is not page-limited. Checking those bounds on the
+    /// continuation side of the match is what makes that true, and it matters: filing a
+    /// finished observation as truncated would discard a server's coverage numbers for no
+    /// reason, the mirror image of the failure this task exists to prevent.
+    /// `a_walk_ending_exactly_at_the_page_bound_without_a_cursor_is_not_truncated` exists
+    /// so that hoisting these checks to the top of the loop fails loudly. The precedence
+    /// that follows — an over-ceiling page is `tool_limit` even if its cursor was also
+    /// unusable — is deliberate: what was received is disqualifying on its own, whatever
+    /// the cursor said.
+    fn fetch_tools_list(
+        &mut self,
+        modern_revision: Option<&str>,
+    ) -> Result<ToolsListWalk, DiscoveryError> {
+        let mut pages: Vec<Vec<u8>> = Vec::new();
+        // Linear scan over at most `MAX_PAGES` entries, not a hash set: the values are
+        // server-controlled strings, and 40 comparisons is cheaper than hashing them.
+        let mut cursors_requested: Vec<String> = Vec::new();
+        let mut tools_total: usize = 0;
+        let mut bytes_total: usize = 0;
+        let mut cursor: Option<String> = None;
+
+        let stopped_because = loop {
+            let params = tools_list_params(modern_revision, cursor.as_deref());
+            let page: RawResponse = match self.transport.call("tools/list", params) {
+                Ok(page) => page,
+                Err(e) if pages.is_empty() => return Err(e),
+                Err(_) => break StopReason::PageRequestFailed,
+            };
+            bytes_total = bytes_total.saturating_add(page.bytes.len());
+            tools_total = tools_total.saturating_add(paginate::count_tools(&page.bytes));
+            let continuation = paginate::continuation(&page.bytes);
+            pages.push(page.bytes);
+
+            // Absolute, and ahead of the match: see "Two kinds of bound" above. Strictly
+            // greater, so a walk of exactly `MAX_TOOLS` tools with no further cursor is still
+            // usable, and the continuation-side `>=` below keeps stopping a walk that has
+            // reached the ceiling and is being offered more.
+            if tools_total > paginate::MAX_TOOLS {
+                break StopReason::ToolLimit;
+            }
+
+            match continuation {
+                Continuation::Done => break StopReason::NoCursor,
+                Continuation::Unusable(reason) => break reason,
+                Continuation::Next(next) => {
+                    if pages.len() >= paginate::MAX_PAGES {
+                        break StopReason::PageLimit;
+                    }
+                    if tools_total >= paginate::MAX_TOOLS {
+                        break StopReason::ToolLimit;
+                    }
+                    if bytes_total >= paginate::MAX_TOTAL_BYTES {
+                        break StopReason::ByteLimit;
+                    }
+                    if cursors_requested.iter().any(|seen| *seen == next) {
+                        break StopReason::CursorRepeated;
+                    }
+                    // Bought before the request is built, so a refusal costs no connection
+                    // and no spacing. The permit refuses once this sequence has spent its own
+                    // share of the domain's budget (`pace::MAX_SEQUENCE_SHARE_DIVISOR`), so
+                    // one paginating listing cannot starve the other hosts on its domain.
+                    // Over stdio there is no permit and this always grants.
+                    if !self.transport.try_extend_budget(1) {
+                        break StopReason::BudgetExhausted;
+                    }
+                    cursors_requested.push(next.clone());
+                    cursor = Some(next);
+                }
+            }
+        };
+
+        Ok(ToolsListWalk {
+            outcome: PaginationOutcome { pages_fetched: pages.len(), stopped_because },
+            pages,
+        })
     }
 
     /// Send the modern probe and decide the era from what came back, alongside the probe's
@@ -807,11 +953,12 @@ impl DiscoveryClient {
             self.transport.configure_http_headers(Some(revision), false);
         }
         self.transport.notify("notifications/initialized", json!({}))?;
-        let tools = self.transport.call("tools/list", json!({}))?;
+        let walk = self.fetch_tools_list(None)?;
 
         Ok(Discovery {
             handshake_raw: init.bytes,
-            tools_list_raw: tools.bytes,
+            tools_list_pages: walk.pages,
+            pagination: walk.outcome,
             probe_raw,
             negotiated_spec_revision: negotiated,
             discovery_path: DiscoveryPath::Initialize,
@@ -870,6 +1017,29 @@ fn modern_params(revision: &str) -> Value {
             },
         },
     })
+}
+
+/// `params` for one `tools/list` request, in either era, with or without a cursor (P0-13).
+///
+/// `ListToolsRequest.params` extends `PaginatedRequestParams`, which is the era's own
+/// `RequestParams` plus an optional `cursor`. So on the modern path a continuation request is
+/// exactly `{_meta, cursor}` — `_meta` is still required and still carries all three members
+/// — and on the legacy path it is exactly `{cursor}`, where the first request remains `{}`.
+///
+/// The cursor goes in as a `Value::String`, so `serde_json` escapes whatever the server put
+/// in it. That is what makes a hostile cursor structurally harmless: it cannot close the
+/// enclosing string, inject another member, or (over stdio, where framing is one message per
+/// line) smuggle a raw newline. Its *length* is the dimension that needed a bound, and
+/// [`paginate::continuation`] applies it before the value reaches here.
+fn tools_list_params(modern_revision: Option<&str>, cursor: Option<&str>) -> Value {
+    let mut params = match modern_revision {
+        Some(revision) => modern_params(revision),
+        None => json!({}),
+    };
+    if let (Some(cursor), Some(object)) = (cursor, params.as_object_mut()) {
+        object.insert("cursor".into(), Value::String(cursor.to_string()));
+    }
+    params
 }
 
 /// `params` for a `2025-11-25`-and-earlier `initialize`. Unchanged from P0-01.
@@ -1045,4 +1215,69 @@ mod tests {
         assert!(message.contains("2031-01-01"), "{message}");
         assert!(message.contains(MODERN_PREFERRED), "{message}");
     }
+
+    /// P0-13: a continuation request adds `cursor` to whatever the era's own params are, and
+    /// subtracts nothing.
+    ///
+    /// The modern half is the one that could go wrong quietly: `_meta` is required on
+    /// *every* `2026-07-28` request, so a continuation that replaced the params rather than
+    /// extending them would get a conformant server to answer `-32021` — and that failure
+    /// would land on page two of a walk, where no existing test looks.
+    #[test]
+    fn a_continuation_request_adds_a_cursor_without_dropping_the_era_params() {
+        let first = tools_list_params(Some("2026-07-28"), None);
+        assert_eq!(
+            first.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()),
+            Some(vec!["_meta".to_string()]),
+            "the first modern page sends no cursor at all"
+        );
+
+        let next = tools_list_params(Some("2026-07-28"), Some("opaque"));
+        let mut keys = next.as_object().expect("object").keys().cloned().collect::<Vec<_>>();
+        keys.sort();
+        assert_eq!(keys, vec!["_meta".to_string(), "cursor".to_string()]);
+        assert_eq!(next["cursor"], "opaque");
+        assert_eq!(next["_meta"]["io.modelcontextprotocol/protocolVersion"], "2026-07-28");
+        assert!(next["_meta"]["io.modelcontextprotocol/clientCapabilities"].is_object());
+
+        assert_eq!(tools_list_params(None, None), json!({}), "legacy page one is unchanged");
+        assert_eq!(
+            tools_list_params(None, Some("opaque")),
+            json!({ "cursor": "opaque" }),
+            "a legacy continuation carries only a cursor — _meta is undefined before 2026-07-28"
+        );
+    }
+
+    /// A hostile cursor is structurally harmless because it is serialised as a JSON string
+    /// rather than interpolated: it cannot close the enclosing string, add a member, or (over
+    /// stdio, where framing is one message per line) smuggle a raw newline.
+    ///
+    /// Asserted on the encoded bytes rather than on the `Value`, because the claim is about
+    /// what goes on the wire.
+    #[test]
+    fn a_hostile_cursor_cannot_break_the_request_it_rides_in() {
+        let hostile = "a\",\"_meta\":{},\"x\":\"\n\u{0}b";
+        let params = tools_list_params(Some("2026-07-28"), Some(hostile));
+        let encoded = crate::jsonrpc::encode_request(3, "tools/list", params);
+        assert!(!encoded.contains(&b'\n'), "no raw newline may reach a stdio frame");
+
+        let round_tripped: Value = serde_json::from_slice(&encoded).expect("still valid JSON");
+        assert_eq!(
+            round_tripped["params"]["cursor"], hostile,
+            "the cursor must survive as one opaque string, not be reparsed as structure"
+        );
+        let mut keys = round_tripped["params"]
+            .as_object()
+            .expect("object")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["_meta".to_string(), "cursor".to_string()],
+            "the injected `_meta` and `x` members must not have appeared as real members"
+        );
+    }
+
 }

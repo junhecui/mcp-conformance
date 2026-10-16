@@ -39,7 +39,7 @@ use std::time::{Duration, Instant};
 
 use discovery::{
     DiscoveryClient, DiscoveryError, DiscoveryPath, MAX_REQUESTS_PER_DISCOVERY, PacePolicy,
-    Pacer,
+    Pacer, StopReason,
 };
 
 /// Short enough to keep the suite fast, long enough that three of them are unambiguous
@@ -425,4 +425,237 @@ fn a_real_discovery_never_exceeds_the_per_discovery_reservation() {
         accounting.requests_sent
     );
     assert_eq!(accounting.overshoot_requests, 0);
+}
+
+// ---- P0-13: pagination against the domain budget ----
+
+/// One `tools/list` page with an optional cursor, for the pagination tests below.
+fn tools_list_page(id: u64, next_cursor: Option<&str>) -> String {
+    let cursor = match next_cursor {
+        Some(c) => format!(r#","nextCursor":"{c}""#),
+        None => String::new(),
+    };
+    format!(
+        r#"{{"jsonrpc":"2.0","id":{id},"result":{{"resultType":"complete","ttlMs":0,"cacheScope":"private","tools":[{{"name":"t{id}","inputSchema":{{}}}}]{cursor}}}}}"#
+    )
+}
+
+/// **The property the budget decision turns on.** A paginating walk *buys* each page beyond
+/// the first, so its permit's reservation grows to match what it actually spent and
+/// `overshoot_requests` stays zero.
+///
+/// Before P0-13 the only available shape was to let the walk spend past its 5-request
+/// reservation and publish the excess as `overshoot_requests` after the fact. That makes the
+/// per-domain cap soft: the extra requests are charged against headroom reserved for *later
+/// hosts on the same domain*, and the number that discloses it appears only once the requests
+/// have already gone out. Buying ahead keeps the cap hard and keeps the disclosure honest —
+/// a non-zero overshoot now means a genuine accounting bug, not "a server paginated".
+#[test]
+fn a_paginated_walk_buys_each_page_and_never_overshoots_its_reservation() {
+    let (listener, endpoint) = bind();
+    let server = serve(
+        listener,
+        vec![
+            DISCOVER_RESULT.to_string(),
+            tools_list_page(1, Some("c2")),
+            tools_list_page(2, Some("c3")),
+            tools_list_page(3, None),
+        ],
+    );
+
+    let pacer = pacer(100);
+    let permit = pacer.admit(&endpoint).expect("budget available");
+    let stats = permit.stats();
+    assert_eq!(stats.reservation(), MAX_REQUESTS_PER_DISCOVERY, "admission reserves five");
+
+    let mut client = DiscoveryClient::http_paced(endpoint, Duration::from_secs(5), permit);
+    let discovery = client.discover().expect("a paginated walk must be discoverable");
+    let requests = server.join().expect("fake server thread must not panic");
+    drop(client);
+
+    assert_eq!(requests.len(), 4, "probe plus three pages");
+    assert_eq!(discovery.pagination.pages_fetched, 3);
+    assert_eq!(stats.requests_sent(), 4, "every request on the wire must be charged");
+    assert_eq!(
+        stats.reservation(),
+        MAX_REQUESTS_PER_DISCOVERY + 2,
+        "two pages beyond the first must each have been bought, not merely spent"
+    );
+    assert_eq!(stats.overshoot(), 0);
+
+    let accounting = pacer.accounting();
+    assert_eq!(accounting.requests_sent, 4);
+    assert_eq!(accounting.overshoot_requests, 0, "a paginating walk is not overshoot");
+    assert_eq!(accounting.page_extensions_denied, 0);
+}
+
+/// A paginating server cannot quietly erode the budget for later hosts on its domain: when
+/// the cap has no room for the next page, the walk is **truncated and recorded** rather than
+/// sending the request anyway.
+///
+/// Two halves, same domain, one pacer — because the point is the interaction. The first host
+/// paginates until the budget refuses it; the second then still gets admitted, because the
+/// first could not spend headroom it had not bought.
+#[test]
+fn a_walk_that_cannot_buy_its_next_page_is_truncated_and_the_refusal_is_counted() {
+    // The *domain's* headroom must be what refuses here, not the sequence's own share
+    // (`one_sequence_cannot_buy_more_than_its_share_of_the_domain` covers that branch). So
+    // the cap is the census default — a share of 15, which this walk never approaches — and
+    // a co-tenant holds 110 of it for the whole walk. Admission takes reserved to 115; after
+    // probe + page 1 the domain shows charged 2. Page 2 needs 2 + 116 = 118 <= 120, page 3
+    // needs 3 + 117 = 120 <= 120, page 4 would need 4 + 118 = 122 > 120. Three pages, and
+    // the fourth refused.
+    let pacer = pacer(120);
+
+    let (listener, endpoint) = bind();
+    let _co_tenant = pacer.admit_with_reservation(&endpoint, 110).expect("budget available");
+    let server = serve(
+        listener,
+        vec![
+            DISCOVER_RESULT.to_string(),
+            tools_list_page(1, Some("c2")),
+            tools_list_page(2, Some("c3")),
+            tools_list_page(3, Some("c4")),
+        ],
+    );
+    let permit = pacer.admit(&endpoint).expect("budget available");
+    let stats = permit.stats();
+    let mut client = DiscoveryClient::http_paced(endpoint, Duration::from_secs(5), permit);
+    let discovery = client.discover().expect("a budget-truncated walk is still a discovery");
+    let requests = server.join().expect("fake server thread must not panic");
+    drop(client);
+
+    assert_eq!(requests.len(), 4, "the page the budget refused must never be requested");
+    assert_eq!(discovery.pagination.pages_fetched, 3);
+    assert_eq!(
+        discovery.pagination.stopped_because,
+        StopReason::BudgetExhausted,
+        "the harness's own control truncated this list, and the record must say so rather \
+         than reporting a short tool list as complete"
+    );
+    assert!(!discovery.pagination.cursors_exhausted());
+    assert_eq!(stats.overshoot(), 0, "a refused page is not an overshot one");
+
+    let accounting = pacer.accounting();
+    assert_eq!(accounting.page_extensions_denied, 1);
+    assert_eq!(
+        accounting.sequences_denied, 0,
+        "a refused page is not a refused host — the two must not share a bucket, because \
+         one means a truncated tool list and the other means no contact at all"
+    );
+    assert_eq!(accounting.overshoot_requests, 0);
+    let row = &accounting.domains[0];
+    assert_eq!(row.page_extensions_denied, 1);
+    assert_eq!(
+        row.page_extensions_denied_by_sequence_share, 0,
+        "this refusal was the domain's headroom, not the walk's own share"
+    );
+}
+
+/// **B2.** One sequence may never hold more than `cap / MAX_SEQUENCE_SHARE_DIVISOR` of its
+/// domain's budget, however much headroom the domain still has — so a paginating listing
+/// cannot spend the budget its co-tenants are admitted from.
+///
+/// At the census cap of 120 the share is 15: the 5-request admission plus ten bought pages,
+/// so eleven pages are fetched and the twelfth is refused and never requested, with the
+/// domain more than 85% empty. The refusal is published per domain as a *share* refusal, so
+/// a reader can tell "this host hit its own ceiling" from "this domain was full".
+#[test]
+fn one_sequence_cannot_buy_more_than_its_share_of_the_domain() {
+    const PAGES_GRANTED: usize = 11;
+    let pacer = pacer(120);
+    let (listener, endpoint) = bind();
+    let mut script = vec![DISCOVER_RESULT.to_string()];
+    for page in 1..=PAGES_GRANTED as u64 {
+        script.push(tools_list_page(page, Some(&format!("c{}", page + 1))));
+    }
+    let server = serve(listener, script);
+
+    let permit = pacer.admit(&endpoint).expect("budget available");
+    let stats = permit.stats();
+    let mut client = DiscoveryClient::http_paced(endpoint, Duration::from_secs(5), permit);
+    let discovery = client.discover().expect("a share-truncated walk is still a discovery");
+    let requests = server.join().expect("fake server thread must not panic");
+    drop(client);
+
+    assert_eq!(requests.len(), 1 + PAGES_GRANTED, "the page past the share is never requested");
+    assert_eq!(discovery.pagination.pages_fetched, PAGES_GRANTED);
+    assert_eq!(discovery.pagination.stopped_because, StopReason::BudgetExhausted);
+    assert_eq!(stats.reservation(), 15, "the sequence stopped exactly at its share");
+    assert_eq!(stats.overshoot(), 0);
+
+    let accounting = pacer.accounting();
+    assert_eq!(accounting.max_reservation_per_sequence, 15);
+    assert_eq!(accounting.page_extensions_denied, 1);
+    let row = &accounting.domains[0];
+    assert_eq!(row.page_extensions_granted, PAGES_GRANTED - 1);
+    assert_eq!(row.page_extensions_denied_by_sequence_share, 1);
+    assert_eq!(row.largest_sequence_reservation, 15);
+    assert!(row.requests < 120 - 100, "the domain had ample room; the share is what refused");
+}
+
+/// The budget a paginating walk bought is **returned** when its permit drops, or the walk
+/// would strand headroom and refuse later hosts for budget nobody is using.
+#[test]
+fn an_extended_reservation_is_released_with_its_permit() {
+    // Cap 48: the smallest cap whose share (48 / 8 = 6) admits the one extension this walk
+    // buys, so the release is tested rather than the share refusing it.
+    let pacer = pacer(48);
+    let (listener, endpoint) = bind();
+    let server = serve(
+        listener,
+        vec![DISCOVER_RESULT.to_string(), tools_list_page(1, Some("c2")), tools_list_page(2, None)],
+    );
+
+    let permit = pacer.admit(&endpoint).expect("budget available");
+    let mut client = DiscoveryClient::http_paced(endpoint.clone(), Duration::from_secs(5), permit);
+    client.discover().expect("discover");
+    server.join().expect("fake server thread must not panic");
+    drop(client);
+
+    // 3 requests charged, and the 6-request reservation (5 + 1 extension) fully returned, so
+    // 48 - 3 = 45 of headroom remains: exactly nine further sequences, and not a tenth.
+    let held: Vec<_> = (0..9)
+        .map(|i| {
+            pacer
+                .admit(&endpoint)
+                .unwrap_or_else(|_| panic!("sequence {i} refused: the extension was stranded"))
+        })
+        .collect();
+    assert!(held.iter().all(|p| p.reservation() == MAX_REQUESTS_PER_DISCOVERY));
+    assert!(pacer.admit(&endpoint).is_err(), "45 of headroom admits nine, not ten");
+    assert_eq!(pacer.accounting().requests_sent, 3);
+}
+
+/// Each page beyond the first is spaced like any other request, which is the cost disclosed
+/// rather than hidden: a walk of N pages is an N-interval conversation with one host.
+#[test]
+fn every_page_of_a_walk_is_spaced_like_any_other_request() {
+    let (listener, endpoint) = bind();
+    let server = serve(
+        listener,
+        vec![
+            DISCOVER_RESULT.to_string(),
+            tools_list_page(1, Some("c2")),
+            tools_list_page(2, Some("c3")),
+            tools_list_page(3, None),
+        ],
+    );
+
+    let pacer = pacer(100);
+    let permit = pacer.admit(&endpoint).expect("budget available");
+    let mut client = DiscoveryClient::http_paced(endpoint, Duration::from_secs(5), permit);
+
+    let start = Instant::now();
+    client.discover().expect("discover");
+    let elapsed = start.elapsed();
+    let requests = server.join().expect("fake server thread must not panic");
+
+    assert_eq!(requests.len(), 4);
+    // Four requests, three gaps. One-sided, per this file's own doc comment: a loaded
+    // machine can only make wall clock longer.
+    assert!(
+        elapsed >= 3 * INTERVAL,
+        "four requests to one domain must be spaced by three intervals, took {elapsed:?}"
+    );
 }

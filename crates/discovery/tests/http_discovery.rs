@@ -17,7 +17,9 @@ use std::net::{TcpListener, TcpStream};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use discovery::{DiscoveryClient, DiscoveryError, DiscoveryPath, FallbackReason, RevisionSource};
+use discovery::{
+    DiscoveryClient, DiscoveryError, DiscoveryPath, FallbackReason, RevisionSource, StopReason,
+};
 
 /// One request as the fake server received it.
 struct Recorded {
@@ -219,7 +221,7 @@ fn a_modern_only_http_server_is_discovered_through_server_discover() {
     assert_eq!(discovery.era_provenance.offered_revisions, vec!["2026-07-28".to_string()]);
 
     let tools: serde_json::Value =
-        serde_json::from_slice(&discovery.tools_list_raw).expect("valid JSON");
+        serde_json::from_slice(&discovery.tools_list_pages[0]).expect("valid JSON");
     assert_eq!(tools["result"]["tools"][0]["name"], "read_file");
 }
 
@@ -853,4 +855,462 @@ fn discover_rejects_an_sse_upgrade_it_does_not_support() {
 
     assert_eq!(requests.len(), 2, "the probe's SSE triggers one fallback attempt, no more");
     assert!(matches!(err, DiscoveryError::Protocol(_)), "got {err:?}");
+}
+
+// ---- P0-13: `tools/list` pagination ----
+
+/// One `tools/list` page: `tools_json` is the array body, `next_cursor` the continuation (or
+/// `None` for the last page).
+fn tools_list_page(id: u64, modern: bool, tools_json: &str, next_cursor: Option<&str>) -> String {
+    let extra =
+        if modern { r#""resultType":"complete","ttlMs":0,"cacheScope":"private","# } else { "" };
+    let cursor = match next_cursor {
+        Some(c) => format!(r#","nextCursor":{}"#, serde_json::Value::String(c.to_string())),
+        None => String::new(),
+    };
+    format!(r#"{{"jsonrpc":"2.0","id":{id},"result":{{{extra}"tools":[{tools_json}]{cursor}}}}}"#)
+}
+
+fn tool(name: &str) -> String {
+    format!(r#"{{"name":"{name}","inputSchema":{{"type":"object"}}}}"#)
+}
+
+/// A page whose `nextCursor` is not a string at all, which is the structure-breaking shape
+/// the spec forbids and a hostile server can send anyway.
+fn page_with_raw_cursor(id: u64, raw_cursor: &str) -> String {
+    format!(
+        r#"{{"jsonrpc":"2.0","id":{id},"result":{{"tools":[{}],"nextCursor":{raw_cursor}}}}}"#,
+        tool("a")
+    )
+}
+
+/// The headline case: a modern server splits its tool list across three pages, and every
+/// tool is collected.
+///
+/// Asserts the thing July could not: the cursor is echoed back, the pages arrive in order,
+/// the request count is exactly `1 + 3`, and a continuation request's `params` is exactly
+/// `{_meta, cursor}` — `_meta` is still required on every `2026-07-28` request, and dropping
+/// it to make room for the cursor would get a conformant server to answer `-32021`.
+#[test]
+fn a_paginated_modern_tools_list_is_followed_to_the_end() {
+    let (listener, endpoint) = bind();
+    let server = serve(
+        listener,
+        vec![
+            Reply::json(200, DISCOVER_RESULT),
+            Reply::json(200, tools_list_page(1, true, &tool("a"), Some("cursor-2"))),
+            Reply::json(200, tools_list_page(2, true, &tool("b"), Some("cursor-3"))),
+            Reply::json(200, tools_list_page(3, true, &tool("c"), None)),
+        ],
+    );
+
+    let mut client = DiscoveryClient::http(endpoint);
+    let discovery = client.discover().expect("a paginated tool list must be discoverable");
+    let requests = server.join().expect("fake server thread must not panic");
+
+    assert_eq!(requests.len(), 4, "one probe plus one request per page, and no more");
+    assert_eq!(requests[0].method(), "server/discover");
+    for request in &requests[1..] {
+        assert_eq!(request.method(), "tools/list");
+        assert!(request.has_header("mcp-method: tools/list"), "{}", request.headers);
+        assert!(request.has_header("mcp-protocol-version: 2026-07-28"), "{}", request.headers);
+    }
+
+    // The first page asks for no cursor; each later one echoes exactly what it was given.
+    assert!(requests[1].json()["params"].get("cursor").is_none(), "page 1 must send no cursor");
+    for (i, expected) in [(2usize, "cursor-2"), (3, "cursor-3")] {
+        let params = &requests[i].json()["params"];
+        assert_eq!(params["cursor"], expected, "page {} must echo the cursor it was given", i + 1);
+        let mut keys = params.as_object().expect("params object").keys().cloned().collect::<Vec<_>>();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["_meta".to_string(), "cursor".to_string()],
+            "a modern continuation is exactly {{_meta, cursor}}: {}",
+            String::from_utf8_lossy(&requests[i].body)
+        );
+        assert_eq!(params["_meta"]["io.modelcontextprotocol/protocolVersion"], "2026-07-28");
+        assert!(params["_meta"]["io.modelcontextprotocol/clientCapabilities"].is_object());
+    }
+
+    assert_eq!(discovery.pagination.pages_fetched, 3);
+    assert_eq!(discovery.pagination.stopped_because, StopReason::NoCursor);
+    assert!(discovery.pagination.cursors_exhausted(), "a walk that ran out of cursors is complete");
+    assert_eq!(discovery.tools_list_pages.len(), 3);
+
+    // The pin, and the tools, cover the whole walk rather than page one.
+    let (pins, _) = discovery::pin_pages(&discovery.tools_list_pages).expect("pin the walk");
+    assert_eq!(
+        pins.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+        vec!["a", "b", "c"],
+        "every tool past page one was missing from every number July published"
+    );
+}
+
+/// The same, over the legacy lifecycle, where a continuation carries **only** a cursor:
+/// `_meta` and the two MCP headers are undefined before `2026-07-28`, and sending either to
+/// a server that has just declined the modern probe invites an outright rejection.
+#[test]
+fn a_paginated_legacy_tools_list_is_followed_to_the_end() {
+    let (listener, endpoint) = bind();
+    let server = serve(
+        listener,
+        vec![
+            // The commonest real legacy shape: HTTP 200 plus `-32601` to the modern probe.
+            Reply::json(200, r#"{"jsonrpc":"2.0","id":0,"error":{"code":-32601,"message":"x"}}"#),
+            Reply::json(200, legacy_initialize_result(1)),
+            Reply::json(202, ""),
+            Reply::json(200, tools_list_page(2, false, &tool("a"), Some("legacy-cursor"))),
+            Reply::json(200, tools_list_page(3, false, &tool("b"), None)),
+        ],
+    );
+
+    let mut client = DiscoveryClient::http(endpoint);
+    let discovery = client.discover().expect("a paginated legacy tool list must be discoverable");
+    let requests = server.join().expect("fake server thread must not panic");
+
+    assert_eq!(requests.len(), 5, "probe, initialize, initialized, then one request per page");
+    assert_eq!(discovery.discovery_path, DiscoveryPath::Initialize);
+    assert_eq!(requests[4].method(), "tools/list");
+    let params = requests[4].json()["params"].clone();
+    assert_eq!(
+        params.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()),
+        Some(vec!["cursor".to_string()]),
+        "a legacy continuation is exactly {{cursor}}: {}",
+        String::from_utf8_lossy(&requests[4].body)
+    );
+    assert_eq!(params["cursor"], "legacy-cursor");
+    assert!(
+        !requests[4].has_header_name("mcp-method"),
+        "Mcp-Method is undefined before 2026-07-28: {}",
+        requests[4].headers
+    );
+
+    assert_eq!(discovery.pagination.pages_fetched, 2);
+    assert_eq!(discovery.pagination.stopped_because, StopReason::NoCursor);
+}
+
+/// A server that keeps handing out a cursor forever is cut off at [`paginate::MAX_PAGES`],
+/// and the cut is **recorded** rather than silently producing a short tool list that looks
+/// complete.
+///
+/// The fake serves exactly `1 + MAX_PAGES` responses and then drops its listener. A client
+/// with no page bound does **not** hang here: its next request is refused at the socket,
+/// which ends the walk as `page_request_failed`, and the `PageLimit` assertion below is what
+/// fails. The request-count assertion then pins that the bound stopped the walk *before*
+/// that request was sent.
+#[test]
+fn a_cursor_that_never_terminates_is_cut_off_at_the_page_bound_and_recorded() {
+    let (listener, endpoint) = bind();
+    let mut script = vec![Reply::json(200, DISCOVER_RESULT)];
+    for page in 0..discovery::paginate::MAX_PAGES {
+        let id = (page + 1) as u64;
+        script.push(Reply::json(
+            200,
+            tools_list_page(id, true, &tool(&format!("t{page}")), Some(&format!("c{id}"))),
+        ));
+    }
+    let scripted = script.len();
+    let server = serve(listener, script);
+
+    let mut client = DiscoveryClient::http(endpoint);
+    let discovery = client.discover().expect("a truncated walk is still a discovery");
+    let requests = server.join().expect("fake server thread must not panic");
+
+    assert_eq!(requests.len(), scripted, "the walk must stop at exactly MAX_PAGES pages");
+    assert_eq!(discovery.pagination.pages_fetched, discovery::paginate::MAX_PAGES);
+    assert_eq!(discovery.pagination.stopped_because, StopReason::PageLimit);
+    assert!(
+        !discovery.pagination.cursors_exhausted(),
+        "a page-limited walk must never report itself complete — a truncated tool list that \
+         looks complete corrupts every coverage number computed from it"
+    );
+}
+
+/// A cursor that cycles: page two hands back the cursor page one already asked with. Caught
+/// before the request is sent, so the cycle costs one page rather than forty.
+#[test]
+fn a_cycling_cursor_stops_the_walk_without_spending_the_page_bound() {
+    let (listener, endpoint) = bind();
+    let server = serve(
+        listener,
+        vec![
+            Reply::json(200, DISCOVER_RESULT),
+            Reply::json(200, tools_list_page(1, true, &tool("a"), Some("loop"))),
+            Reply::json(200, tools_list_page(2, true, &tool("b"), Some("loop"))),
+        ],
+    );
+
+    let mut client = DiscoveryClient::http(endpoint);
+    let discovery = client.discover().expect("a cycling walk is still a discovery");
+    let requests = server.join().expect("fake server thread must not panic");
+
+    assert_eq!(requests.len(), 3, "a cycle must be detected on the second sighting, not the 40th");
+    assert_eq!(discovery.pagination.pages_fetched, 2);
+    assert_eq!(discovery.pagination.stopped_because, StopReason::CursorRepeated);
+    assert!(!discovery.pagination.cursors_exhausted());
+}
+
+/// The four unusable-cursor cases, three reasons between them: a cursor longer than the
+/// bound, a numeric and an object cursor (both not a JSON string), and an empty string.
+#[test]
+fn an_unusable_cursor_stops_the_walk_with_its_own_reason() {
+    let huge = "c".repeat(discovery::paginate::MAX_CURSOR_BYTES + 1);
+    let cases: Vec<(&str, String, StopReason)> = vec![
+        (
+            "a cursor over the length bound",
+            tools_list_page(1, true, &tool("a"), Some(&huge)),
+            StopReason::CursorTooLong,
+        ),
+        (
+            "a numeric cursor",
+            page_with_raw_cursor(1, "12345"),
+            StopReason::CursorNotAString,
+        ),
+        (
+            "an object cursor",
+            page_with_raw_cursor(1, r#"{"page":2}"#),
+            StopReason::CursorNotAString,
+        ),
+        (
+            "an empty-string cursor",
+            tools_list_page(1, true, &tool("a"), Some("")),
+            StopReason::CursorEmpty,
+        ),
+    ];
+
+    for (label, page, expected) in cases {
+        let (listener, endpoint) = bind();
+        let server =
+            serve(listener, vec![Reply::json(200, DISCOVER_RESULT), Reply::json(200, page)]);
+
+        let mut client = DiscoveryClient::http(endpoint);
+        let discovery = client.discover().expect("an unusable cursor is still a discovery");
+        let requests = server.join().expect("fake server thread must not panic");
+
+        assert_eq!(requests.len(), 2, "{label}: the unusable cursor must never be sent");
+        assert_eq!(discovery.pagination.stopped_because, expected, "{label}");
+        assert_eq!(discovery.pagination.pages_fetched, 1, "{label}");
+        assert!(!discovery.pagination.cursors_exhausted(), "{label}");
+    }
+}
+
+/// A later page's request failing **truncates** the walk and keeps the pages already
+/// fetched; the first page's failing still fails discovery outright.
+///
+/// Both halves in one test on purpose: they are the same error on two sides of a boundary,
+/// and the first-page half is what keeps `ModernWithoutDiscover`'s correction path reachable
+/// (that path is triggered by precisely this error).
+#[test]
+fn a_later_page_failure_truncates_the_walk_while_a_first_page_failure_still_fails_discovery() {
+    let (listener, endpoint) = bind();
+    let server = serve(
+        listener,
+        vec![
+            Reply::json(200, DISCOVER_RESULT),
+            Reply::json(200, tools_list_page(1, true, &tool("a"), Some("c2"))),
+            Reply::json(500, "<html>gateway error</html>").content_type("text/html"),
+        ],
+    );
+    let mut client = DiscoveryClient::http(endpoint);
+    let discovery = client.discover().expect("a truncated walk is still a discovery");
+    let requests = server.join().expect("fake server thread must not panic");
+
+    assert_eq!(requests.len(), 3);
+    assert_eq!(discovery.pagination.pages_fetched, 1, "the page that did arrive is kept");
+    assert_eq!(discovery.pagination.stopped_because, StopReason::PageRequestFailed);
+    assert!(!discovery.pagination.cursors_exhausted());
+
+    let (listener, endpoint) = bind();
+    let server = serve(
+        listener,
+        vec![
+            Reply::json(200, DISCOVER_RESULT),
+            Reply::json(500, "<html>gateway error</html>").content_type("text/html"),
+        ],
+    );
+    let mut client = DiscoveryClient::http(endpoint);
+    let error = client.discover().expect_err("a first-page failure must still fail discovery");
+    let requests = server.join().expect("fake server thread must not panic");
+
+    assert_eq!(requests.len(), 2);
+    match error {
+        DiscoveryError::HttpStatus { status, .. } => assert_eq!(status, 500),
+        other => panic!("the July taxonomy must be unchanged, got {other:?}"),
+    }
+}
+
+/// **The at-bound-but-complete rule (B1).** A walk of exactly `MAX_PAGES` pages whose last
+/// page offers no cursor ran out of cursors: it is `no_cursor`, not `page_limit`.
+///
+/// Exists so that a tidy-up hoisting the continuation-side bound checks to the top of the
+/// loop — where the absolute tool ceiling now lives — fails here loudly instead of silently
+/// reclassifying every server that happens to finish at the bound as truncated, which would
+/// discard its coverage numbers for no reason.
+#[test]
+fn a_walk_ending_exactly_at_the_page_bound_without_a_cursor_is_not_truncated() {
+    let pages = discovery::paginate::MAX_PAGES;
+    let (listener, endpoint) = bind();
+    let mut script = vec![Reply::json(200, DISCOVER_RESULT)];
+    for page in 0..pages {
+        let id = (page + 1) as u64;
+        let next = (page + 1 < pages).then(|| format!("c{id}"));
+        script.push(Reply::json(
+            200,
+            tools_list_page(id, true, &tool(&format!("t{page}")), next.as_deref()),
+        ));
+    }
+    let scripted = script.len();
+    let server = serve(listener, script);
+
+    let mut client = DiscoveryClient::http(endpoint);
+    let discovery = client.discover().expect("a walk at the bound is a discovery");
+    let requests = server.join().expect("fake server thread must not panic");
+
+    assert_eq!(requests.len(), scripted);
+    assert_eq!(discovery.pagination.pages_fetched, pages);
+    assert_eq!(discovery.pagination.stopped_because, StopReason::NoCursor);
+    assert!(discovery.pagination.cursors_exhausted());
+}
+
+/// **B1(b), measured attack closed.** One page offering *no* cursor but more tools than
+/// [`paginate::MAX_TOOLS`] used to be recorded as a finished walk and a census success —
+/// 20,000 tools in 1.4 MB, four times the bound, and at the 10 MiB page cap one response
+/// could carry ~150,000 against a whole July corpus of 3,183. The ceiling is now absolute
+/// and checked after every page, so this is `tool_limit` whatever the cursor said.
+///
+/// The second half keeps the boundary honest: exactly `MAX_TOOLS` tools with no cursor is
+/// still usable.
+#[test]
+fn a_single_page_over_the_tool_bound_is_truncated_even_without_a_cursor() {
+    for (count, expected) in [
+        (discovery::paginate::MAX_TOOLS * 4, StopReason::ToolLimit),
+        (discovery::paginate::MAX_TOOLS + 1, StopReason::ToolLimit),
+        (discovery::paginate::MAX_TOOLS, StopReason::NoCursor),
+    ] {
+        let flood: Vec<String> = (0..count).map(|i| tool(&format!("t{i}"))).collect();
+        let (listener, endpoint) = bind();
+        let server = serve(
+            listener,
+            vec![
+                Reply::json(200, DISCOVER_RESULT),
+                Reply::json(200, tools_list_page(1, true, &flood.join(","), None)),
+            ],
+        );
+
+        let mut client = DiscoveryClient::http(endpoint);
+        let discovery = client.discover().expect("a tool flood is still a discovery");
+        server.join().expect("fake server thread must not panic");
+
+        assert_eq!(discovery.pagination.pages_fetched, 1, "{count} tools");
+        assert_eq!(discovery.pagination.stopped_because, expected, "{count} tools");
+    }
+}
+
+/// A server returning more tools than [`paginate::MAX_TOOLS`] is cut off, and the tool bound
+/// is the reason recorded — not the page bound, which this walk never reaches.
+#[test]
+fn a_flood_of_tools_stops_the_walk_at_the_tool_bound() {
+    let flood: Vec<String> =
+        (0..discovery::paginate::MAX_TOOLS).map(|i| tool(&format!("t{i}"))).collect();
+    let (listener, endpoint) = bind();
+    let server = serve(
+        listener,
+        vec![
+            Reply::json(200, DISCOVER_RESULT),
+            Reply::json(200, tools_list_page(1, true, &flood.join(","), Some("more"))),
+        ],
+    );
+
+    let mut client = DiscoveryClient::http(endpoint);
+    let discovery = client.discover().expect("a tool flood is still a discovery");
+    let requests = server.join().expect("fake server thread must not panic");
+
+    assert_eq!(requests.len(), 2, "the second page must never be requested");
+    assert_eq!(discovery.pagination.pages_fetched, 1);
+    assert_eq!(discovery.pagination.stopped_because, StopReason::ToolLimit);
+}
+
+/// The byte bound, exercised with real bytes rather than asserted from the constant.
+///
+/// Four ~8.5 MiB pages is the smallest walk that can reach a 32 MiB total, because each
+/// individual page is already capped at 10 MiB by the transport — which is exactly why the
+/// walk needs a bound of its own: forty pages at the per-page cap is 400 MiB of host memory
+/// per in-flight discovery, and Stage 2 runs up to eight at once. Deliberately the heaviest
+/// test in this file; the alternative was trusting the constant.
+#[test]
+fn an_oversized_walk_stops_at_the_byte_bound() {
+    const PAGE_BYTES: usize = 8_500_000;
+    let padding = "x".repeat(PAGE_BYTES);
+    let fat_tool = format!(r#"{{"name":"t","inputSchema":{{}},"description":"{padding}"}}"#);
+    let pages_needed = discovery::paginate::MAX_TOTAL_BYTES / PAGE_BYTES + 1;
+
+    let (listener, endpoint) = bind();
+    let mut script = vec![Reply::json(200, DISCOVER_RESULT)];
+    for page in 0..pages_needed {
+        let id = (page + 1) as u64;
+        script.push(Reply::json(200, tools_list_page(id, true, &fat_tool, Some(&format!("c{id}")))));
+    }
+    let scripted = script.len();
+    let server = serve(listener, script);
+
+    let mut client = DiscoveryClient::http(endpoint);
+    let discovery = client.discover().expect("an oversized walk is still a discovery");
+    let requests = server.join().expect("fake server thread must not panic");
+
+    assert_eq!(requests.len(), scripted, "the walk must stop as soon as the total is reached");
+    assert_eq!(discovery.pagination.pages_fetched, pages_needed);
+    assert_eq!(discovery.pagination.stopped_because, StopReason::ByteLimit);
+    assert!(
+        discovery.tools_list_pages.iter().map(Vec::len).sum::<usize>()
+            >= discovery::paginate::MAX_TOTAL_BYTES,
+        "the bound must trip on real accumulated bytes"
+    );
+}
+
+/// Pagination must not change the sequence a **single-page** server sees, because that is
+/// almost every server in the corpus and every July number came from one.
+#[test]
+fn a_single_page_server_sends_exactly_the_requests_it_always_did() {
+    let (listener, endpoint) = bind();
+    let server = serve(
+        listener,
+        vec![
+            Reply::json(200, DISCOVER_RESULT),
+            // `nextCursor` absent entirely — the shape a non-paginating server returns.
+            Reply::json(200, tools_list_page(1, true, &tool("a"), None)),
+        ],
+    );
+
+    let mut client = DiscoveryClient::http(endpoint);
+    let discovery = client.discover().expect("discover");
+    let requests = server.join().expect("fake server thread must not panic");
+
+    assert_eq!(requests.len(), 2, "no extra request may be spent looking for a second page");
+    assert!(requests[1].json()["params"].get("cursor").is_none());
+    assert_eq!(discovery.pagination.pages_fetched, 1);
+    assert_eq!(discovery.pagination.stopped_because, StopReason::NoCursor);
+    assert!(discovery.pagination.cursors_exhausted());
+}
+
+/// An explicit `"nextCursor": null` is the spec's own last-page marker and must end the walk
+/// as cleanly as an absent key — not be treated as a cursor and echoed back.
+#[test]
+fn an_explicit_null_cursor_ends_the_walk_cleanly() {
+    let (listener, endpoint) = bind();
+    let server = serve(
+        listener,
+        vec![
+            Reply::json(200, DISCOVER_RESULT),
+            Reply::json(200, page_with_raw_cursor(1, "null")),
+        ],
+    );
+
+    let mut client = DiscoveryClient::http(endpoint);
+    let discovery = client.discover().expect("discover");
+    let requests = server.join().expect("fake server thread must not panic");
+
+    assert_eq!(requests.len(), 2);
+    assert_eq!(discovery.pagination.stopped_because, StopReason::NoCursor);
+    assert!(discovery.pagination.cursors_exhausted());
 }

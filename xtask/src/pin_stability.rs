@@ -57,8 +57,24 @@ fn discover_and_pin_twice(url: &str, permit: Permit) -> (PinAttempt, PinAttempt)
 
 fn pin_once(client: &mut DiscoveryClient) -> PinAttempt {
     let discovery = client.discover().map_err(|e| e.to_string())?;
+    // A truncated walk (P0-13) is **not** pinned here, deliberately. Its pin would cover
+    // whatever prefix of the tool list this attempt happened to see, and two attempts that
+    // stopped at different points would then differ for a reason that is not a rug pull —
+    // which is exactly the false positive this whole check exists to measure the rate of.
+    // Recorded as a failed attempt with its reason instead, so it lands in
+    // `failed_to_rediscover` rather than in `unstable`.
+    if !discovery.pagination.cursors_exhausted() {
+        return Err(format!(
+            "{}: tools/list walk incomplete after {} page(s): {} ({}) — a pin over a partial \
+             tool list is not this server's pin",
+            crate::census_report::TOOLS_LIST_TRUNCATED,
+            discovery.pagination.pages_fetched,
+            discovery.pagination.stopped_because,
+            discovery.pagination.attribution()
+        ));
+    }
     let (tool_pins, server_pin) =
-        discovery::pin_tools(&discovery.tools_list_raw).map_err(|e| e.to_string())?;
+        discovery::pin_pages(&discovery.tools_list_pages).map_err(|e| e.to_string())?;
     Ok((server_pin.to_string(), tool_pins.len()))
 }
 
@@ -99,7 +115,7 @@ fn check_one(candidate: &Candidate, pacer: &Arc<Pacer>) -> serde_json::Value {
                 "url": candidate.url,
                 "result": "refused_by_domain_budget",
                 "detail": denied.to_string(),
-                "pacing": census_report::pacing_record(&registrable_domain, 0, Duration::ZERO),
+                "pacing": census_report::pacing_record(&registrable_domain, 0, Duration::ZERO, 0),
             });
         }
     };
@@ -129,6 +145,7 @@ fn check_one(candidate: &Candidate, pacer: &Arc<Pacer>) -> serde_json::Value {
             &registrable_domain,
             stats.requests_sent(),
             stats.waited(),
+            stats.reservation(),
         ),
     });
     if let (Some(record_obj), Some(extra_obj)) = (record.as_object_mut(), extra.as_object()) {

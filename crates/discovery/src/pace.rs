@@ -37,13 +37,59 @@ use std::time::{Duration, Instant};
 /// [`Pacer::admit`] so the cap can never be overshot — including under concurrency, where
 /// two admissions must not each see the same remaining headroom.
 ///
-/// Equal to `discover`'s own documented request budget ("at most five, and the fallback is
-/// always a single bounded step, never a loop"). That coupling is asserted, not trusted:
-/// [`Permit::overshoot`] counts any discovery that sent more than this, and the accounting
-/// publishes the total, so the day `tools/list` pagination lands — which adds *unbounded*
-/// requests, and is a known open task — it shows up as a number in a results file instead
-/// of silently eroding the cap.
+/// Equal to the request budget `discover`'s *handshake* half spends ("at most five, and the
+/// fallback is always a single bounded step, never a loop"). That coupling is asserted, not
+/// trusted: [`Permit::overshoot`] counts any discovery that sent more than its own permit was
+/// reserved for, and the accounting publishes the total.
+///
+/// **Unchanged by P0-13, deliberately.** `tools/list` pagination adds one request per extra
+/// page, which is not knowable at admission time, and raising this constant to cover a
+/// worst-case walk would have been the wrong fix. At the derived cap of 120, a reservation of
+/// 5 admits at least 24 sequences per registrable domain, which is what lets every group in
+/// the committed July corpus except the one 149-entry outlier be attempted in full (the
+/// largest legitimate group holds 22 entries). A reservation sized for a 40-page walk — 44 —
+/// would admit **two**, refusing 20 of those 22 and destroying far more data than pagination
+/// recovers. So the reservation stays 5 and a walk buys each extra page from the same budget
+/// as it goes, through [`Permit::try_extend`]: the cap stays hard, and a walk that cannot
+/// buy its next page is *truncated and recorded as such*.
+///
+/// **What buying ahead does not do, on its own:** protect the other hosts on the domain.
+/// The pages a walk buys come out of the same shared pool later sequences on that domain
+/// are admitted from, so an unlimited extension hands one listing the power to refuse its
+/// co-tenants — the effect a 44-request reservation was rejected for, delivered on demand.
+/// [`MAX_SEQUENCE_SHARE_DIVISOR`] is what bounds it. See ADR-015 §3.
 pub const MAX_REQUESTS_PER_DISCOVERY: usize = 5;
+
+/// One sequence may hold at most `cap / MAX_SEQUENCE_SHARE_DIVISOR` requests of its
+/// registrable domain's budget, extensions included (never less than its own admission
+/// reservation).
+///
+/// **Why a per-sequence ceiling exists (P0-13 security review, B2).** [`Permit::try_extend`]
+/// draws from the registrable domain's *shared* pool with no per-sequence accounting, so a
+/// 40-page walk used to take 41 of 120 requests against an honest sequence's 5 — 8.2×. On
+/// one shared domain that measured as honest co-tenants admitted falling 24 → 15 with one
+/// hostile listing, → 8 with two, → 2 with four; and every refused co-tenant was recorded
+/// `registrable_domain_budget_exhausted`, i.e. **attributed to this harness's own politeness
+/// control**, while the listing that displaced them recorded a clean success. The grouping
+/// key makes it broad rather than exotic: it is a last-two-labels heuristic, so shared
+/// platforms collapse (`alice.vercel.app` and `bob.vercel.app` both key to `vercel.app`),
+/// and the committed corpus already holds a 149-entry and a 22-entry group on such keys.
+///
+/// **Why 8.** At the census cap of 120 it is 15 requests: the 5-request handshake plus ten
+/// extra `tools/list` pages, so eleven pages in all — still ~an order of magnitude above any
+/// real tool list this project has observed (one page; 112 tools at most) — and one
+/// sequence can never hold more than 12.5% of a domain. At least eight sequences' worth of
+/// headroom therefore always survives any one listing, and the same co-tenant measurement
+/// becomes 24 → 21 → 18 → 12
+/// (`one_paginating_listing_cannot_starve_its_co_tenants_out_of_the_census`). A walk that
+/// hits its share is truncated with `budget_exhausted`, counted per domain in
+/// `page_extensions_denied`, and is visible as such.
+///
+/// **Considered and not built:** granting an extension only from headroom left over after
+/// the sweep's *pending* candidates on that domain. Tighter, but it needs the pacer to know
+/// the corpus, which it deliberately does not, and the per-sequence ceiling already closes
+/// the measured attack structurally.
+pub const MAX_SEQUENCE_SHARE_DIVISOR: usize = 8;
 
 /// Longest key this module will store or publish. The DNS limit on a presentation-format
 /// name; a key is server-influenceable (it comes from a registry-supplied endpoint) and
@@ -109,6 +155,21 @@ struct DomainState {
     /// Discovery sequences admitted, and refused for want of budget.
     admitted: usize,
     denied: usize,
+    /// Mid-sequence reservation extensions refused for want of budget (P0-13: one per
+    /// `tools/list` page a walk could not buy). Counted separately from `denied` because a
+    /// refused *extension* truncates a tool list while a refused *sequence* means the host
+    /// was never contacted — two different findings that must not share a bucket.
+    extensions_denied: usize,
+    /// Of `extensions_denied`, how many were refused because the *sequence* had reached its
+    /// own share ([`MAX_SEQUENCE_SHARE_DIVISOR`]) rather than because the domain was full.
+    extensions_denied_by_share: usize,
+    /// Extra requests granted to sequences on this domain beyond their admission
+    /// reservation — what pagination took out of the shared pool. Published so a reader can
+    /// see that one host's walk consumed headroom other sequences could have been admitted
+    /// against, rather than infer it.
+    extensions_granted: usize,
+    /// The largest reservation any one sequence on this domain ever held.
+    largest_sequence_reservation: usize,
     /// The earliest instant at which the next request to this domain may be sent. `None`
     /// until the first request, so a domain's first request never waits.
     next_allowed: Option<Instant>,
@@ -120,6 +181,7 @@ struct State {
     requests: usize,
     waited: Duration,
     denials: usize,
+    extension_denials: usize,
     overshoot: usize,
 }
 
@@ -195,11 +257,14 @@ impl Pacer {
         }
         entry.reserved += reservation;
         entry.admitted += 1;
+        entry.largest_sequence_reservation = entry.largest_sequence_reservation.max(reservation);
         Ok(Permit {
             pacer: Arc::clone(self),
             registrable_domain: domain,
-            reservation,
             stats: Arc::new(PermitStats::new(reservation)),
+            // Never below the admission reservation: Track B admits with its own, larger
+            // bound, and a ceiling under it would refuse requests it was admitted for.
+            ceiling: reservation.max(cap / MAX_SEQUENCE_SHARE_DIVISOR),
         })
     }
 
@@ -215,6 +280,10 @@ impl Pacer {
                 requests: d.charged,
                 sequences_admitted: d.admitted,
                 sequences_denied: d.denied,
+                page_extensions_granted: d.extensions_granted,
+                page_extensions_denied: d.extensions_denied,
+                page_extensions_denied_by_sequence_share: d.extensions_denied_by_share,
+                largest_sequence_reservation: d.largest_sequence_reservation,
             })
             .collect();
         // Most-loaded first, ties broken by name so the list is deterministic.
@@ -224,9 +293,12 @@ impl Pacer {
         Accounting {
             policy: self.policy,
             per_discovery_reservation: MAX_REQUESTS_PER_DISCOVERY,
+            max_reservation_per_sequence: MAX_REQUESTS_PER_DISCOVERY
+                .max(self.policy.max_requests_per_registrable_domain / MAX_SEQUENCE_SHARE_DIVISOR),
             requests_sent: state.requests,
             waited: state.waited,
             sequences_denied: state.denials,
+            page_extensions_denied: state.extension_denials,
             overshoot_requests: state.overshoot,
             max_requests_to_one_registrable_domain: domains.first().map_or(0, |d| d.requests),
             registrable_domains_contacted: domains.iter().filter(|d| d.requests > 0).count(),
@@ -245,21 +317,32 @@ impl Pacer {
 pub struct PermitStats {
     requests: AtomicUsize,
     waited_micros: AtomicU64,
-    /// The reservation this permit was admitted against, so [`Self::overshoot`] measures
-    /// against the caller's own request bound rather than against a constant that may not
-    /// describe this sequence at all.
-    reservation: usize,
+    /// The reservation this permit currently holds, so [`Self::overshoot`] measures against
+    /// the caller's own request bound rather than against a constant that may not describe
+    /// this sequence at all.
+    ///
+    /// Atomic and mutable since P0-13: a `tools/list` cursor walk does not know its own
+    /// length at admission time and buys each extra page through [`Permit::try_extend`], so
+    /// a permit's reservation **grows**. Overshoot therefore keeps meaning "requests this
+    /// sequence sent that nobody reserved for it" — a legitimately extended walk is not
+    /// overshoot, and a bug that sent an unbudgeted request still is.
+    reservation: AtomicUsize,
 }
 
 impl PermitStats {
     fn new(reservation: usize) -> Self {
-        Self { requests: AtomicUsize::new(0), waited_micros: AtomicU64::new(0), reservation }
+        Self {
+            requests: AtomicUsize::new(0),
+            waited_micros: AtomicU64::new(0),
+            reservation: AtomicUsize::new(reservation),
+        }
     }
 
-    /// The reservation this permit was admitted against.
+    /// The reservation this permit currently holds — its admission reservation plus every
+    /// extension [`Permit::try_extend`] has granted it.
     #[must_use]
     pub fn reservation(&self) -> usize {
-        self.reservation
+        self.reservation.load(Ordering::Relaxed)
     }
 
     /// Requests sent under this permit.
@@ -277,7 +360,7 @@ impl PermitStats {
     /// Requests sent beyond this permit's reservation, which should always be zero.
     #[must_use]
     pub fn overshoot(&self) -> usize {
-        self.requests_sent().saturating_sub(self.reservation)
+        self.requests_sent().saturating_sub(self.reservation())
     }
 }
 
@@ -290,8 +373,10 @@ impl PermitStats {
 pub struct Permit {
     pacer: Arc<Pacer>,
     registrable_domain: String,
-    reservation: usize,
     stats: Arc<PermitStats>,
+    /// The most this one sequence may ever hold, extensions included. See
+    /// [`MAX_SEQUENCE_SHARE_DIVISOR`].
+    ceiling: usize,
 }
 
 impl Permit {
@@ -326,10 +411,72 @@ impl Permit {
         self.stats.overshoot()
     }
 
-    /// The reservation this permit was admitted against.
+    /// The reservation this permit currently holds — its admission reservation plus every
+    /// extension [`Self::try_extend`] has granted it.
     #[must_use]
     pub fn reservation(&self) -> usize {
-        self.reservation
+        self.stats.reservation()
+    }
+
+    /// Buy `extra` more requests on this permit's registrable domain, for a sequence whose
+    /// length is not knowable at admission time.
+    ///
+    /// `tools/list` pagination (P0-13) is why this exists: a cursor walk discovers how many
+    /// requests it needs one page at a time. The alternative shapes were both worse. Letting
+    /// the walk simply send its extra requests would make the per-domain cap **soft** — a
+    /// paginating server's pages would be charged against headroom reserved for later hosts
+    /// on the same domain, which is exactly the erosion a reservation exists to prevent, and
+    /// `overshoot_requests` would report it only *after* the requests had gone out. Raising
+    /// [`MAX_REQUESTS_PER_DISCOVERY`] to a worst-case walk would refuse legitimate hosts
+    /// wholesale (see that constant's own doc comment for the arithmetic). Buying one page at
+    /// a time keeps the cap hard, keeps the reservation exactly as tight as the walk turned
+    /// out to be, and turns "the budget ran out" into a decidable, recordable branch at the
+    /// one moment it can still be acted on — before the request leaves.
+    ///
+    /// Two tests, either of which refuses:
+    ///
+    /// - **The sequence's own share.** The permit may never hold more than its ceiling —
+    ///   `cap / MAX_SEQUENCE_SHARE_DIVISOR`, or its admission reservation if larger. Without
+    ///   this an extension is drawn from the domain's *shared* pool with nothing stopping one
+    ///   sequence draining it, which is how a single paginating listing used to refuse the
+    ///   other hosts on its domain (see [`MAX_SEQUENCE_SHARE_DIVISOR`]).
+    /// - **The domain's headroom**, the same test [`Pacer::admit`] makes, with the same
+    ///   conservatism: a permit's `charged` requests are not deducted from its `reserved`
+    ///   until it drops, so an in-flight sequence is double-counted against the cap while it
+    ///   runs. That errs toward fewer requests, the safe direction for a politeness control.
+    ///
+    /// # Errors
+    ///
+    /// [`Denied`], naming the domain, the counts and the cap, when either test fails.
+    /// **Nothing is charged and nothing is sent on that path** — the caller's obligation is
+    /// to stop and record it, which is what [`crate::StopReason::BudgetExhausted`] is for.
+    pub fn try_extend(&self, extra: usize) -> Result<(), Denied> {
+        if extra == 0 {
+            return Ok(());
+        }
+        let cap = self.pacer.policy.max_requests_per_registrable_domain;
+        let mut state = self.pacer.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let entry = state.domains.entry(self.registrable_domain.clone()).or_default();
+        let over_share = self.stats.reservation().saturating_add(extra) > self.ceiling;
+        if over_share || entry.charged + entry.reserved + extra > cap {
+            let denied = Denied {
+                registrable_domain: self.registrable_domain.clone(),
+                charged: entry.charged,
+                reserved: entry.reserved,
+                cap,
+            };
+            entry.extensions_denied += 1;
+            if over_share {
+                entry.extensions_denied_by_share += 1;
+            }
+            state.extension_denials += 1;
+            return Err(denied);
+        }
+        entry.reserved += extra;
+        entry.extensions_granted += extra;
+        let held = self.stats.reservation.fetch_add(extra, Ordering::Relaxed) + extra;
+        entry.largest_sequence_reservation = entry.largest_sequence_reservation.max(held);
+        Ok(())
     }
 
     /// Block until this domain's minimum interval has elapsed, then charge one request.
@@ -416,7 +563,11 @@ impl Drop for Permit {
         let mut state = self.pacer.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.overshoot += overshoot;
         if let Some(entry) = state.domains.get_mut(&self.registrable_domain) {
-            entry.reserved = entry.reserved.saturating_sub(self.reservation);
+            // The *current* reservation, extensions included (P0-13): a walk that bought
+            // three extra pages must return four reservations' worth, or the headroom it
+            // bought is stranded for the rest of the run and later hosts on the domain are
+            // refused for budget nobody is using.
+            entry.reserved = entry.reserved.saturating_sub(self.stats.reservation());
         }
     }
 }
@@ -594,6 +745,18 @@ pub struct DomainAccounting {
     pub sequences_admitted: usize,
     /// Discovery sequences refused against it.
     pub sequences_denied: usize,
+    /// Extra requests granted to sequences on this domain beyond their admission
+    /// reservation — the share of the shared pool pagination took (P0-13). Beside
+    /// `sequences_denied`, this is what lets a reader see one host's walk displacing other
+    /// sequences rather than infer it.
+    pub page_extensions_granted: usize,
+    /// Page extensions refused on this domain, for any reason.
+    pub page_extensions_denied: usize,
+    /// Of those, the ones refused because the sequence had reached its own share
+    /// ([`MAX_SEQUENCE_SHARE_DIVISOR`]) while the domain still had room.
+    pub page_extensions_denied_by_sequence_share: usize,
+    /// The largest reservation any one sequence on this domain ever held.
+    pub largest_sequence_reservation: usize,
 }
 
 /// What a [`Pacer`] did over a whole run — the preimage of the `pacing` block in a census
@@ -605,13 +768,26 @@ pub struct Accounting {
     /// [`MAX_REQUESTS_PER_DISCOVERY`], recorded so a reader can reproduce the admission
     /// arithmetic without reading this crate.
     pub per_discovery_reservation: usize,
+    /// The most any one [`MAX_REQUESTS_PER_DISCOVERY`]-admitted sequence may hold,
+    /// extensions included: `max(reservation, cap / MAX_SEQUENCE_SHARE_DIVISOR)`.
+    pub max_reservation_per_sequence: usize,
     /// Requests sent under all permits.
     pub requests_sent: usize,
     /// Total time spent waiting for the minimum interval.
     pub waited: Duration,
     /// Discovery sequences refused for want of budget.
     pub sequences_denied: usize,
-    /// Requests sent beyond the per-discovery reservation, across the run. Should be zero.
+    /// Mid-sequence reservation extensions refused for want of budget (P0-13: one per
+    /// `tools/list` page a walk could not buy).
+    ///
+    /// Separate from [`Self::sequences_denied`] because the two are different findings: a
+    /// refused *sequence* means a host was never contacted at all, while a refused
+    /// *extension* means a host was contacted and its tool list came back **truncated** —
+    /// which is a caveat on that server's coverage numbers, not an absence of them. Pooling
+    /// them would hide the second inside the first.
+    pub page_extensions_denied: usize,
+    /// Requests sent beyond a permit's reservation, across the run. Should be zero — a
+    /// paginating walk extends its reservation rather than exceeding it.
     pub overshoot_requests: usize,
     /// The largest per-domain request count.
     pub max_requests_to_one_registrable_domain: usize,
@@ -1232,5 +1408,175 @@ mod tests {
         let names: Vec<&str> =
             accounting.domains.iter().map(|d| d.registrable_domain.as_str()).collect();
         assert_eq!(names, vec!["b.test", "c.test", "a.test"], "by load, then by name");
+    }
+
+    // ---- P0-13: mid-sequence reservation extensions ----
+
+    #[test]
+    fn an_extension_grows_the_reservation_and_is_charged_to_the_same_domain() {
+        let pacer = pacer(0, 100);
+        let permit = pacer.admit("https://mcp.example.com/mcp").expect("budget");
+        assert_eq!(permit.reservation(), MAX_REQUESTS_PER_DISCOVERY);
+
+        permit.try_extend(1).expect("headroom available");
+        permit.try_extend(2).expect("headroom available");
+        assert_eq!(permit.reservation(), MAX_REQUESTS_PER_DISCOVERY + 3);
+
+        // Eight requests under an eight-request reservation is not overshoot.
+        for _ in 0..8 {
+            permit.before_request();
+        }
+        assert_eq!(permit.requests_sent(), 8);
+        assert_eq!(permit.overshoot(), 0);
+        drop(permit);
+        assert_eq!(pacer.accounting().overshoot_requests, 0);
+        assert_eq!(pacer.accounting().page_extensions_denied, 0);
+    }
+
+    /// The cap stays **hard** across an extension: nothing is granted and nothing is charged
+    /// when the domain has no room, which is what stops a paginating walk spending headroom
+    /// reserved for a later host on the same domain.
+    #[test]
+    fn an_extension_beyond_the_cap_is_refused_and_grants_nothing() {
+        // Cap 5: admission takes the whole budget, so no extension can fit.
+        let pacer = pacer(0, 5);
+        let permit = pacer.admit("https://mcp.example.com/mcp").expect("budget");
+        let denied = permit.try_extend(1).expect_err("the cap must be hard");
+
+        assert_eq!(denied.cap, 5);
+        assert_eq!(denied.registrable_domain, "example.com");
+        assert_eq!(
+            permit.reservation(),
+            MAX_REQUESTS_PER_DISCOVERY,
+            "a refused extension must leave the reservation untouched"
+        );
+
+        let accounting = pacer.accounting();
+        assert_eq!(accounting.page_extensions_denied, 1);
+        assert_eq!(
+            accounting.sequences_denied, 0,
+            "a refused extension is not a refused sequence: one truncates a tool list, the \
+             other means the host was never contacted"
+        );
+    }
+
+    /// A refused extension must not consume the headroom a *later* sequence on the same
+    /// domain is entitled to — the erosion the whole buy-ahead design exists to prevent.
+    #[test]
+    fn a_refused_extension_leaves_a_later_sequence_on_the_domain_admissible() {
+        let pacer = pacer(0, 10);
+        let first = pacer.admit("https://a.example.com/mcp").expect("budget");
+        for _ in 0..5 {
+            first.before_request();
+        }
+        // charged 5 + reserved 5 + 1 = 11 > 10.
+        assert!(first.try_extend(1).is_err());
+        drop(first);
+
+        // 5 charged, 0 reserved: a second sequence still fits exactly.
+        let second = pacer.admit("https://b.example.com/mcp").expect("the budget was not eroded");
+        assert_eq!(second.reservation(), MAX_REQUESTS_PER_DISCOVERY);
+        assert_eq!(pacer.accounting().page_extensions_denied, 1);
+    }
+
+    #[test]
+    fn an_extension_of_zero_is_a_no_op_rather_than_an_error() {
+        let pacer = pacer(0, 5);
+        let permit = pacer.admit("https://mcp.example.com/mcp").expect("budget");
+        permit.try_extend(0).expect("zero must never be refused");
+        assert_eq!(permit.reservation(), MAX_REQUESTS_PER_DISCOVERY);
+        assert_eq!(pacer.accounting().page_extensions_denied, 0);
+    }
+
+    /// The extension must be released with the permit, or a long walk strands headroom for
+    /// the rest of the run and later hosts are refused for budget nobody is using.
+    #[test]
+    fn dropping_a_permit_releases_its_extensions_too() {
+        // Cap 200: a share of 25, so twenty extensions fit and the release is what is tested.
+        let pacer = pacer(0, 200);
+        let permit = pacer.admit("https://mcp.example.com/mcp").expect("budget");
+        for _ in 0..20 {
+            permit.try_extend(1).expect("headroom");
+        }
+        assert_eq!(permit.reservation(), MAX_REQUESTS_PER_DISCOVERY + 20);
+        drop(permit);
+
+        // Nothing was ever sent, so the whole 200 must be available again — forty full
+        // sequences after the one that reserved 25 and released it.
+        for i in 0..40 {
+            pacer
+                .admit("https://mcp.example.com/mcp")
+                .map(std::mem::forget)
+                .unwrap_or_else(|_| panic!("sequence {i} refused: the extensions were stranded"));
+        }
+    }
+
+    // ---- B2: one sequence's share of its domain ----
+
+    /// A sequence admitted with a reservation larger than the share (Track B's probe) keeps
+    /// its whole admission: the share is a ceiling on *extensions*, never a cut to what was
+    /// admitted.
+    #[test]
+    fn the_share_never_cuts_below_an_admitted_reservation() {
+        let pacer = pacer(0, 120);
+        let permit =
+            pacer.admit_with_reservation("https://mcp.example.com/mcp", 40).expect("budget");
+        assert_eq!(permit.reservation(), 40);
+        assert!(permit.try_extend(1).is_err(), "already at its own ceiling of 40");
+        let row = &pacer.accounting().domains[0];
+        assert_eq!(row.page_extensions_denied_by_sequence_share, 1);
+    }
+
+    /// **The measured B2 attack, closed.** On one shared registrable domain at the census
+    /// cap, run H "hostile" listings that each paginate for as long as anything will grant
+    /// them a page — up to `MAX_PAGES` — and spend everything they bought; then admit honest
+    /// five-request sequences until the domain refuses one.
+    ///
+    /// Before the per-sequence share a hostile walk took 41 of 120 and the honest admissions
+    /// measured 24 → 15 → 8 → 2 for H = 0, 1, 2, 4. With the share each walk holds at most
+    /// 15, so the series is 24 → 21 → 18 → 12: one listing can no longer refuse more than
+    /// three of its co-tenants, and four together cannot take half the domain.
+    #[test]
+    fn one_paginating_listing_cannot_starve_its_co_tenants_out_of_the_census() {
+        fn honest_admitted_after(hostile: usize) -> (usize, Accounting) {
+            let pacer = pacer(0, PacePolicy::CENSUS_DEFAULT.max_requests_per_registrable_domain);
+            for h in 0..hostile {
+                let walk = pacer
+                    .admit(&format!("https://evil{h}.shared.app/mcp"))
+                    .expect("a hostile listing is admitted like any other");
+                for _ in 1..crate::paginate::MAX_PAGES {
+                    if walk.try_extend(1).is_err() {
+                        break;
+                    }
+                }
+                for _ in 0..walk.reservation() {
+                    walk.before_request();
+                }
+            }
+            let mut honest = 0;
+            while let Ok(seq) = pacer.admit(&format!("https://ok{honest}.shared.app/mcp")) {
+                for _ in 0..MAX_REQUESTS_PER_DISCOVERY {
+                    seq.before_request();
+                }
+                honest += 1;
+            }
+            (honest, pacer.accounting())
+        }
+
+        let series: Vec<usize> =
+            [0, 1, 2, 4].iter().map(|&h| honest_admitted_after(h).0).collect();
+        assert_eq!(series, vec![24, 21, 18, 12]);
+
+        // And the displacement is visible in the published per-domain row rather than
+        // inferred: what the hostile walks bought, and that it was their share that stopped
+        // them, not the domain filling.
+        let (_, accounting) = honest_admitted_after(1);
+        let row = &accounting.domains[0];
+        assert_eq!(row.registrable_domain, "shared.app");
+        assert_eq!(row.page_extensions_granted, 10);
+        assert_eq!(row.page_extensions_denied_by_sequence_share, 1);
+        assert_eq!(row.largest_sequence_reservation, 15);
+        assert_eq!(row.sequences_admitted, 1 + 21);
+        assert_eq!(row.sequences_denied, 1);
     }
 }

@@ -1092,7 +1092,9 @@ population it exists to measure. (2) `tools/list` pagination has never been foll
 either era, so any tool past page one is silently absent from these counts — that the
 cursor is never followed is confirmed in the code; that it actually bit a sampled server is
 **UNVERIFIED and unmeasured**, so the size of the loss is unknown rather than known to be
-zero. (3) Two
+zero. *(Fixed by [P0-13](#p0-13-follow-toolslist-pagination); the loss is still unmeasured
+until a sweep runs, and `pagination.tools_beyond_first_page` is where it will appear.)*
+(3) Two
 ecosystem-wide coverage censuses were published in September 2026, so this result is now a
 replication carrying two numeric disagreements that have to be explained (48.6% vs 26.0% for
 Class B; 41.7% vs 58.8% for Class A), not a first measurement. Fix (1) and (2) before
@@ -1112,9 +1114,21 @@ published sweep is checkable. July comparability is preserved deliberately — `
 `protocol`, `rate_limited` and the tool-weighted fields are unchanged in meaning, and the
 refusal bucket is new and subtractable. Projected over this very file's 1,000 entries: 2,163
 requests instead of 2,345, 91 refusals (all on the one 149-entry host), and ≤ ~13 minutes of
-added wall-clock. **(2), pagination, is still outstanding and is still its own task** — and
-note it will overshoot P0-12's per-discovery request reservation when it lands, which that
-task's limitations spell out.
+added wall-clock.
+
+**(2), pagination, is no longer outstanding either — it landed in
+[P0-13](#p0-13-follow-toolslist-pagination)** ([ADR-015](adr/015-paginated-tool-lists.md)).
+`nextCursor` is now followed in both eras; the pin covers every tool across the walk and is
+stable against a change of page split; every page is persisted and re-derivable; and the four
+hostile-input bounds each produce a distinct recorded outcome, with a truncated walk recorded
+as `tools_list_truncated` rather than tallied as a complete tool list. The reservation
+interaction P0-12 warned about was resolved rather than absorbed: the 5-request reservation and
+the 120-request cap are **unchanged**, and a walk buys each extra page from the same budget
+before requesting it — so `overshoot_requests` is now expected to stay **zero** rather than go
+non-zero as P0-12's own limitations predicted. **What is still unmeasured is the finding
+itself**: `pagination.tools_beyond_first_page` in a results file is the quantity these July
+numbers were missing, and it has no value until a sweep runs. A zero there would be a real
+answer, not a null result.
 
 - [x] Throughput profile suitable for the corpus size — sequential requests (never
       concurrent — unrelated third-party hosts, no reason to burst them), 12s per-request
@@ -1736,9 +1750,14 @@ server-reachable on the live path today.
 
 **Limitations, disclosed rather than hidden:**
 
-- **`tools/list` pagination is still not followed**, in either era. `ListToolsResult` is a
+- ~~**`tools/list` pagination is still not followed**, in either era. `ListToolsResult` is a
   `PaginatedResult` and `nextCursor` is ignored, so tools on later pages are silently missing
-  from P0-06/P0-07 counts. Real, pre-existing, out of scope here, and its own task.
+  from P0-06/P0-07 counts. Real, pre-existing, out of scope here, and its own task.~~
+  **Landed in [P0-13](#p0-13-follow-toolslist-pagination)**
+  ([ADR-015](adr/015-paginated-tool-lists.md)): followed in both eras, with the pin taken over
+  every tool of the walk and page framing deliberately outside its preimage, so a server that
+  changes its page size does not look rug-pulled while a server that changes a tool still
+  does.
 - **Modern-first costs every legacy server one extra round trip.** The spec accepts this. The
   populations that dominate census failures are unaffected — a connection-level failure and any
   non-era-signalling status (401 above all) still cost exactly one request, asserted by
@@ -2140,6 +2159,21 @@ pacing, 13 stdio, 2 pin); `xtask` 52 lib + 6 purity + 1 reason-codes.
   instead of a quietly weakened control
   (`a_sequence_that_exceeds_its_reservation_is_counted_as_overshoot`). Whoever lands pagination
   must revisit the reservation.
+  **Revisited and resolved in [P0-13](#p0-13-follow-toolslist-pagination)**
+  ([ADR-015](adr/015-paginated-tool-lists.md)) — and *not* by the shape this bullet
+  anticipated. Raising the reservation was measured against this corpus and rejected: a
+  reservation sized for a worst-case 40-page walk is 44, which admits two sequences per
+  registrable domain instead of 24 and would refuse 20 of the 22 entries in the largest
+  legitimate July group. Instead the reservation stays **5** and a walk buys each extra page
+  from the same budget immediately before requesting it (`Permit::try_extend`), so the
+  120-request cap stays hard and the extra consumption is charged to the domain that caused it
+  rather than taken from later hosts on it. Consequence for this bullet's own prediction:
+  `overshoot_requests` is expected to stay **zero**, and
+  `a_sequence_that_exceeds_its_reservation_is_counted_as_overshoot` still guards the number —
+  but a non-zero value now means an accounting bug rather than "a server paginated". A refused
+  page is counted separately as `pacing.page_extensions_denied`, never pooled into
+  `sequences_denied_by_budget`, because a refused page means a *truncated tool list* while a
+  refused sequence means no contact at all.
 - **The heuristic over-groups shared-hosting suffixes**, and that is the one error direction
   that can cost data rather than just requests: `*.vercel.app` (22 July entries),
   `*.workers.dev` (18), `*.railway.app` (15), `*.onrender.com` (14) and four more are ~95
@@ -2162,6 +2196,317 @@ pacing, 13 stdio, 2 pin); `xtask` 52 lib + 6 purity + 1 reason-codes.
 - **`bounded()` limits characters rather than bytes** (P0-10's disclosed wart) still applies to
   the refusal detail — which is harness-authored and therefore ASCII, so the bound holds here
   for a reason rather than by luck.
+
+---
+
+### P0-13 Follow `tools/list` pagination
+
+**Depends on:** P0-01, P0-02, P0-10, P0-11, P0-12
+**Exit:** `DiscoveryClient` follows `nextCursor` to the end of a `tools/list` walk in **both**
+protocol eras; the metadata pin covers every tool and is stable across a change of page split;
+every page is persisted and `census-rederive` still reproduces a live run byte-for-byte; every
+hostile-input dimension is bounded and each bound produces a distinct recorded outcome; and the
+results file publishes how many tools lay beyond page one, so the re-run can size what was
+previously missing rather than silently correcting it.
+**Status:** Done — [ADR-015](adr/015-paginated-tool-lists.md). New module
+`crates/discovery/src/paginate.rs`; `pin_pages` in `crates/discovery/src/pin.rs`;
+`Permit::try_extend` in `src/pace.rs`; a `try_extend_budget` hook on the `Transport` trait; the
+walk itself in `src/client.rs`; and the evidence, pagination and pacing changes in
+`xtask/src/census_report.rs` plus call-site updates in
+`xtask/src/{census_stage1,pin_stability,probe_stage1,dump_tools}.rs`.
+**No sweep was run and nothing in `results/` changed** — every number below is a test
+assertion or a figure taken from the committed July data, labelled as which.
+
+Why now rather than later: P0-10 persists raw bytes, so a sweep run before this lands would
+store page one of every paginating server and **a later fix could not recover the missing tools
+without re-contacting every host**. O-01 flagged it on 2026-10-07 and P0-11 left it explicitly
+as its own task; this is that task.
+
+What was actually broken: `ListToolsResult` is a `PaginatedResult` in **both** eras —
+pagination predates `2026-07-28` — and the client sent one `tools/list` and dropped
+`nextCursor` on the floor. Every tool past page one was absent from every number P0-06 and
+P0-07 published, and *how many servers paginate was never measured*, so the loss was unknown
+rather than known to be zero.
+
+- [x] **The pin: hash the per-tool pins across the whole walk, and drop page framing from the
+      preimage** (ADR-015 §1). `pin_pages(pages)` is
+      `sha256(tool_pin_0 ‖ … ‖ tool_pin_n)` over every tool of every page in walk order; the
+      per-tool preimage is untouched from P0-02. Nothing about a page enters the server
+      preimage — not `nextCursor`, not a modern page's required
+      `resultType`/`ttlMs`/`cacheScope`, not the boundaries. The two rejected options are in
+      the ADR's table: hashing a canonical concatenation of page *bytes*, or hashing per-page
+      digests, both make a server that changes its page size look rug-pulled, and both break
+      the revision-independence P0-11 proved (a modern page carries three result fields a
+      legacy page does not). Sorting the tool pins was rejected for discarding P0-02's
+      deliberate order sensitivity. `pin_tools(one)` remains and is *literally*
+      `pin_pages(&[one])` — the same code, not an equivalent one — so a single-page pin is
+      byte-identical to what it was.
+      **Proven in both directions, each test stopping the other passing vacuously:**
+      `the_same_tools_split_across_pages_differently_pin_identically` (one page of three, three
+      pages of one, two uneven pages, and a walk with an empty page in the middle — all four
+      agree per-tool *and* server-wide) and
+      `a_pin_survives_both_the_revision_and_the_page_split_at_once` (`tests/era_pin.rs`: one
+      legacy page versus two *modern* pages with a cursor between them, which differ in three
+      independent ways at once) against
+      `a_change_inside_a_tool_on_a_later_page_still_moves_the_pin` (name, `inputSchema`,
+      `annotations`, `description` and key order inside `inputSchema`, each changed on page
+      **two**; five cases, pin moves every time),
+      `a_change_on_a_later_modern_page_still_moves_the_pin` and
+      `reordering_tools_across_pages_changes_the_pin`. July comparability is pinned by
+      `a_single_page_pin_is_byte_for_byte_what_it_was_before_pagination`, which asserts two
+      **literal** digests
+      (`418ca9d0…` per-tool, `c2164f3c…` server) computed independently from the algorithm as
+      the module documents it rather than pasted out of a run of the new code — which would
+      have pinned whatever the new code does, regression included. A walk is pinned whole or
+      not at all: `pin_pages_rejects_an_empty_walk` and
+      `one_malformed_page_fails_the_whole_walk_rather_than_pinning_the_rest`.
+- [x] **The evidence: one blob per page, addressed as received; the stop reason is the only
+      carried-through field** (ADR-015 §2). Each page is `put` into F-05's store separately —
+      **not** spliced into one artifact, because the store is content-addressed over bytes *as
+      received* and concatenating N responses is a transformation at capture time, which
+      ADR-005 puts on the far side of the normaliser. A record carries
+      `evidence.tools_list_raw` (**unchanged in meaning**: page one, so every pre-P0-13 reader
+      of that key sees what it always saw), `evidence.tools_list_pages` (the authoritative
+      ordered walk, always present even for a one-page server, because an absent array and an
+      array of one are different claims and only one is checkable), and a `pagination` block.
+      Everything in that block except `stopped_because` is **recomputed** from the stored
+      pages, so P0-10's single derivation path is intact; `stopped_because` rides as an
+      observation — the treatment `discovery_path` and the per-server pacing block already get
+      — because two of its ten values (`budget_exhausted`, `page_request_failed`) are facts
+      about the *run* and are in no page. `a_multi_page_results_file_rederives_byte_for_byte`
+      proves the central claim over a file holding a three-page walk, a one-page server **and**
+      a truncated walk; `a_missing_later_page_blob_fails_rederivation_loudly` proves a missing
+      page fails loudly naming its digest, so "the evidence no longer reproduces this file"
+      cannot be read as "that server had fewer pages".
+- [x] **The budget: the reservation stays 5 and a walk buys each extra page before sending it**
+      (ADR-015 §3). `Permit::try_extend(1)` is called immediately before each page beyond the
+      first; a refusal stops the walk with `StopReason::BudgetExhausted`. Raising
+      `MAX_REQUESTS_PER_DISCOVERY` was the wrong fix and the arithmetic says why: at the cap of
+      120 a reservation of 5 admits ≥24 sequences per registrable domain, which is what lets
+      every July group but the one 149-entry outlier be attempted in full (largest legitimate
+      group: 22 entries). A reservation sized for a 40-page walk is 44, admits **two**, and
+      would refuse 20 of those 22 — destroying far more data than pagination recovers, on every
+      domain in the corpus, to insure against a page count almost no server has. Letting the
+      walk overshoot instead (P0-12's stopgap) is what makes the cap **soft**: the extra pages
+      would be charged against headroom reserved for later hosts on the same domain, and
+      `overshoot_requests` would disclose it only after the requests had gone out. Buying ahead
+      keeps the cap hard and gives `overshoot_requests` back its original meaning — a non-zero
+      value is now an accounting bug, not "a server paginated". Asserted by
+      `a_paginated_walk_buys_each_page_and_never_overshoots_its_reservation` (reservation 5 → 7
+      over a three-page walk, overshoot 0),
+      `a_walk_that_cannot_buy_its_next_page_is_truncated_and_the_refusal_is_counted` (cap 11:
+      three pages served, the fourth never requested, `page_extensions_denied` 1,
+      `sequences_denied` **0**),
+      `an_extended_reservation_is_released_with_its_permit`,
+      `a_refused_extension_leaves_a_later_sequence_on_the_domain_admissible` and
+      `dropping_a_permit_releases_its_extensions_too`. **Cost to a sweep, stated:** pacing is
+      per request, so every page is spaced at the 500 ms default, and since the review fix one
+      sequence may hold at most 15 of a domain's 120 requests (eleven pages) on a paced
+      transport. Over stdio (Stage 2) there is no pacer, and the page bound is purely a memory
+      control. The published headline politeness numbers (500 ms, 120, reservation 5) are
+      **unchanged**; `max_reservation_per_sequence` (15) is new.
+- [x] **Hostile input: four bounds, three cursor shape gates, a cycle check and two failure
+      branches — every one a distinct recorded outcome** (ADR-015 §4, design.md §3). `no_cursor`
+      is the **only** complete outcome; the other nine are `page_limit` (40),
+      `tool_limit` (5,000), `byte_limit` (32 MiB), `cursor_too_long` (1,024 B),
+      `cursor_not_a_string`, `cursor_empty`, `cursor_repeated`, `budget_exhausted` and
+      `page_request_failed`. Each bound is checked **only when a cursor was actually offered**,
+      so a walk that reaches exactly 40 pages whose last page has no cursor is complete, not
+      page-limited — filing a complete observation as truncated would discard a server's
+      coverage numbers for no reason, the mirror image of the failure this task prevents.
+      Exercised with real bytes against real listeners, not asserted from the constants:
+      `a_cursor_that_never_terminates_is_cut_off_at_the_page_bound_and_recorded` (41 scripted
+      responses, 41 requests asserted — a client with no page bound would not hang: the fake
+      drops its listener, the 42nd request is refused, the walk ends `page_request_failed`,
+      and the `page_limit` assertion is what fails), `a_cycling_cursor_stops_the_walk_without_spending_the_page_bound` (detected on the
+      second sighting, not the 40th), `an_unusable_cursor_stops_the_walk_with_its_own_reason`
+      (four cases: over-length, numeric, object, empty — each asserting the unusable cursor is
+      never sent), `a_flood_of_tools_stops_the_walk_at_the_tool_bound`,
+      `an_oversized_walk_stops_at_the_byte_bound` (four ~8.5 MiB pages, because each page is
+      already capped at 10 MiB by the transport — which is exactly why the *walk* needs a bound
+      of its own: 40 pages at the per-page cap is 400 MiB per in-flight discovery and Stage 2
+      runs up to eight), `an_explicit_null_cursor_ends_the_walk_cleanly`, and
+      `a_later_page_failure_truncates_the_walk_while_a_first_page_failure_still_fails_discovery`
+      — both halves in one test, because the first-page half is what keeps
+      `ModernWithoutDiscover`'s correction path reachable.
+      **The rule, enforced not remembered: a truncated walk is recorded as a failure, not a
+      flagged success.** `failure_category: "tools_list_truncated_*"` (one per attribution),
+      with every page it did
+      fetch still in the evidence store and the `pagination` block saying how far it got — but
+      no tally, no tool count, no pin. A flag would not have been enough: the tool-weighted
+      corpus tally would silently gain a *prefix* of a server instead of a server, and the
+      server-weighted `explicit.on_every_tool` would claim "every tool" over a subset, a
+      strictly **more favourable** claim than the evidence supports. design.md §8's rule for an
+      unobservable effect is `unverifiable`, never `holds`; this is the same rule for a
+      partially observed tool list. **Not uniformly subtractable** — see the review-fix item
+      below: only the harness-bound and harness-budget truncations are this harness's doing,
+      and four of the ten stop reasons are the *server's*. Asserted by
+      `a_truncated_walk_is_a_failure_rather_than_a_partial_coverage_number`, which checks all
+      four of `tool_count`/`annotation_tally`/`annotations_object`/`server_pin` are **absent**.
+      **Deliberately not gated:** a cursor containing control characters or unusual Unicode is
+      accepted — it rides back out as a `Value::String`, so `serde_json` escapes it and it
+      cannot close the enclosing string, inject a member, or smuggle a raw newline into stdio's
+      one-message-per-line framing. Asserted on the *encoded bytes* by
+      `a_hostile_cursor_cannot_break_the_request_it_rides_in` and
+      `a_control_character_cursor_is_usable_and_cannot_break_framing`. Rejecting legal opaque
+      tokens would refuse conformant servers for no gain. The cursor is never published and
+      never logged; only its length and the stop reason leave the crate, and the page it
+      arrived on is in the evidence store like any other response.
+- [x] **Comparability, which is the point: publish what was missing rather than correct it
+      silently** (ADR-015 §5). A top-level `pagination` block carries `servers`,
+      `servers_paginating` + percentage, `pages_fetched_total`, `max_pages_fetched`,
+      `tools_observed_total`, **`tools_beyond_first_page`** + percentage, `servers_truncated`,
+      `duplicate_tool_names`, a `stopped_because` distribution seeded with every reason plus
+      `unrecorded`, and the four `bounds` in force — because `page_limit` means nothing without
+      them and a reader cannot otherwise reproduce a truncation decision.
+      `tools_beyond_first_page` is exactly the quantity July was missing; a **zero** there is a
+      finding in its own right, answering O-01's "how many servers paginate is UNVERIFIED" with
+      "none, measurably". `tools_observed_total` is deliberately a different number from
+      `tools_discovered` (it includes truncated servers, which `tools_discovered` excludes as
+      failures) and both are published so neither has to be inferred. Per server the same
+      figures appear on the record. `finish` also prints the headline to stderr, so an operator
+      sees it during the sweep rather than only in the file. Asserted by
+      `the_pagination_header_sizes_what_was_previously_missing` (including that the
+      `stopped_because` map holds every reason plus `unrecorded`, so a bound that never fired
+      reads as zero rather than being absent) and
+      `a_multi_page_server_tallies_every_page_and_pins_the_whole_walk`.
+- [x] **Both eras, one loop.** `tools_list_params` adds `cursor` to whatever the era's own
+      params are and subtracts nothing: a modern continuation is exactly `{_meta, cursor}` —
+      `_meta` is required on *every* `2026-07-28` request, and a continuation that replaced the
+      params rather than extending them would get a conformant server to answer `-32021`, on
+      page two of a walk where no previous test looked — and a legacy continuation is exactly
+      `{cursor}`, with no `_meta` and no MCP headers. Asserted field by field in
+      `a_continuation_request_adds_a_cursor_without_dropping_the_era_params` and over the wire
+      in `a_paginated_modern_tools_list_is_followed_to_the_end` (4 requests: cursor echoed,
+      keys exactly `{_meta, cursor}`, `Mcp-Method`/`MCP-Protocol-Version` on every page) and
+      `a_paginated_legacy_tools_list_is_followed_to_the_end` (5 requests, params exactly
+      `{cursor}`, **no** `Mcp-Method`). Over stdio against a real subprocess:
+      `a_paginated_stdio_tools_list_is_followed_to_the_end`, with a new `paginated` mode in the
+      fake server that serves page one to a request with no cursor and answers `-32602` to a
+      cursor it did not issue — so a client that mangled the cursor fails loudly, and one that
+      dropped it is re-served page one and stopped by the walk's own cycle check.
+      `a_single_page_server_sends_exactly_the_requests_it_always_did` pins that nothing changed
+      for the overwhelming majority of the corpus.
+- [x] **There is no `tools_list_raw` field left on `Discovery`, and no first-page accessor.**
+      `tools_list_pages: Vec<Vec<u8>>` plus `pagination`. A field named for "the `tools/list`
+      response" while holding page one of forty is the same trap P0-11 renamed `initialize_raw`
+      to remove, and the whole defect here was code treating one page as the whole list — so a
+      consumer that genuinely wants one page indexes it, visibly. The *results-file* key
+      `evidence.tools_list_raw` is kept, because there it still means exactly what it meant.
+
+- [x] **Review fixes (two independent passes; the security pass found four blocking
+      issues, all fixed).**
+      **B1 — one server could rewrite every corpus percentage, as a success.** (a) Per-page
+      tallies were summed with no de-duplication: 40 pages of the same 2 tools published as
+      `tool_count = 80`, `readOnlyHint.explicit = 80`, `success`. The census tool count and
+      every tally are now over the **name-deduplicated** set (first sighting wins), with the
+      raw count published beside it (`pagination.tools_total` vs `tools_distinct`);
+      de-duplication rather than refusal because a repeat is legitimate without snapshot
+      isolation, and refusing it would be a second one-key exit from the census. The pin is
+      not de-duplicated. (b) `MAX_TOOLS` was only checked when a cursor was offered, so one
+      page of 20,000 tools with no cursor was a success (~150,000 possible at the 10 MiB page
+      cap, against July's 3,183). It is now absolute, checked after every page; the
+      continuation-side bounds keep the at-bound-but-complete rule, now pinned by
+      `a_walk_ending_exactly_at_the_page_bound_without_a_cursor_is_not_truncated`.
+      **B2 — one listing could starve its co-tenants.** `Permit::try_extend` drew from the
+      domain's shared pool with no per-sequence bound (41 of 120 for a 40-page walk; honest
+      co-tenants admitted 24 → 15 → 8 → 2 for 1/2/4 hostile listings, each victim recorded as
+      *our* budget). One sequence may now hold at most `cap / 8` = 15
+      (`MAX_SEQUENCE_SHARE_DIVISOR`); the series is now 24 → 21 → 18 → 12. Per-domain rows
+      publish `page_extensions_granted`/`_denied`/`_denied_by_sequence_share` and
+      `largest_sequence_reservation`. ADR-015 §3's sentence claiming the opposite is
+      corrected. **B3 — truncation is partitioned by who caused it.**
+      `server_nonconformant` (four cursor reasons) / `harness_bound` (three) /
+      `harness_budget` / `ambiguous` (`page_request_failed`), plus `unrecorded`, published as
+      `pagination.servers_truncated_by`, as five `tools_list_truncated_*` failure categories,
+      and on stderr; server-caused truncation sets `nonconformance_flag` (architecture.md
+      §5.1's accept-and-flag, P4-03's carry-to-publication). The "harness-side and therefore
+      subtractable" framing is removed — it was wrong for seven of ten reasons and told an
+      analyst to drop evaders from the denominator. The opt-out is now its own limitation in
+      design.md §8 and P5-05. **B4 — a crafted bundle could OOM the reviewer** (22 KB file +
+      922 KB store → 184 MB resident, 200 pages accepted). `tools_list_pages` longer than
+      `MAX_PAGES`, or declaring more than `MAX_TOTAL_BYTES` + one page, is refused before any
+      blob is read; derivation streams one page at a time (`pin_page` + `server_pin_of`) and
+      re-measures against the same ceiling; a `no_cursor` walk over `MAX_TOOLS` is refused.
+      **Also fixed:** `coverage_extraction` now counted in the pagination denominator; an
+      order-insensitive `server_pin_unordered` published beside the pin (whole-page
+      reordering moved the primary for an identical tool set); memory/concurrency claims
+      corrected (below); `complete` renamed `cursors_exhausted`;
+      `conflicting_tool_definitions` counts names redefined mid-walk; the pacing guard checks
+      `page_extensions_denied` as a lower bound; `dump_tools` strips and bounds
+      server-controlled text; Track B uses the partitioned categories; the zero-tool pin and
+      the lone-surrogate breadth of `cursor_not_a_string` are documented and tested.
+
+**Test suite.** Workspace **458 passed, 0 failed**. Measured, not recounted: the baseline is
+**392** at `367f754` (390 at `ed8d6b0` — the two between are that commit's own `intake`
+tests, not P0-13's). P0-13 adds **66**: **49** in the original change (`discovery` +41,
+`xtask` +8) and **17** from the review pass (`discovery` +10, `xtask` +7). `discovery` is
+**158** (107 before P0-13).
+All four gates clean: `cargo build --workspace`, `cargo test --workspace`,
+`cargo clippy --workspace --all-targets -- -D warnings`, `cargo purity`
+(`normalise`/`verdict` closures untouched — `discovery` was never on the allowlist).
+
+**Limitations, disclosed rather than hidden:**
+
+- **The four bounds are choices, not measurements.** 40 pages / 5,000 tools / 32 MiB / 1 KiB
+  are sized generously against the largest tool counts this project has observed (112 on one
+  server, P0-06; ~13 mean, October) but **no sweep has exercised any of them against a real
+  server**. The first ≥1,000-host sweep's `stopped_because` distribution is the data that
+  should set them, which is why they are published in the results header — a change to them is
+  then a visible version bump, not a silent redefinition of every truncation decision.
+- **A pre-P0-13 results file re-derives correctly but not byte-identically.** It has no
+  `tools_list_pages` and no `pagination`, so its one response is read as one page and its walk
+  is recorded `unrecorded` — which is deliberately **not** treated as complete, so its servers
+  come back reclassified as `tools_list_truncated`. Calling an unknown walk "complete" would be
+  the same substitution this project refuses when it insists on `unverifiable` over `holds`.
+  Acceptable because no file of that shape exists in `results/`: the committed July data
+  predates evidence persistence entirely and `census-rederive` already refuses it. Asserted by
+  `a_pre_pagination_results_file_is_read_as_one_page_and_never_asserted_complete`.
+- **A tool set that changes mid-walk is a limitation, not a bound.** The protocol gives a
+  cursor walk no snapshot isolation, so a server may legitimately re-list or drop a tool
+  between pages, and no mechanical check separates that from a rug pull performed *during* the
+  walk. What exists: the pin attests to the concatenation actually observed, `pages_fetched`
+  makes the window visible, `duplicate_tool_names` counts re-listings, and
+  `conflicting_tool_definitions` counts names re-listed with a different definition. Both are
+  **one-sided**: neither catches a tool *dropped* between pages, and a server that never repeats
+  a name avoids the first entirely. Published per server and corpus-wide
+  (`tool_names_repeated_across_pages_are_counted_and_published`). A server cycling through a
+  long series of *distinct* cursors returning the same page each time is caught by `MAX_PAGES`,
+  not by the cycle check, and shows up as a large `duplicate_tool_names` — a signal, not a
+  bound.
+- **Peak memory per in-flight discovery is the byte bound plus one page: ~42 MiB, not 32.** The
+  byte check runs after a page is appended. **No HTTP sweep reaches `--jobs 8`** — Stage 1 is
+  sequential and `--jobs` is Class A only — so the concurrent case is **Stage 2**, ~336 MiB at
+  `--jobs 8`, held in the host `xtask` process where the container's `--memory=256m` does not
+  reach. Stage 2 is containerised stdio with **no `Pacer`**, so `try_extend_budget` always
+  grants: a Class A walk has no budget gate and no spacing, `budget_exhausted` and
+  `page_extensions_denied` are structurally zero there, and for Class A the page bound is purely
+  a memory control. Real tool lists are kilobytes; not exercised at `--jobs 8`.
+- **A server can decline to be measured** with one unfollowable cursor. Now visible
+  (`server_nonconformant`, `nonconformance_flag`) but not recoverable. **Recorded, not built:**
+  a sensitivity bound over the retained page-one evidence of those records ("if every
+  truncated server's tools were maximally unfavourable, `absent` would be X instead of Y")
+  would turn the unquantified bias into a published interval.
+- **`MAX_TOOLS` is enforced on a count parsed out of each page**, so a page whose `result` is
+  not a readable `tools/list` shape counts zero tools toward it. It still counts toward
+  `MAX_PAGES` and `MAX_TOTAL_BYTES`, and the derivation step rejects it as
+  `coverage_extraction` rather than tallying it, so the bound cannot be used to make the walk
+  unbounded — only to reach the page or byte bound instead of the tool one.
+- **Two new skip categories whose rate is unmeasured.** Track B refuses to probe a server whose
+  walk was truncated (`tools_list_truncated` in `xtask/src/probe_stage1.rs`) and
+  `census-pin-stability` refuses to pin one, rather than recording a pin over a prefix —
+  because `TOOL_SNAPSHOT.metadata_pin` lands in a committed SQLite file and architecture.md §6
+  invariant 1 keys every verdict on the snapshot, so a snapshot that misdescribes what it saw
+  poisons the verdict rather than merely annotating it. How often that fires is unknown until a
+  sweep runs.
+- **`overshoot_requests` is expected to stay zero now**, which inverts what P0-12 published
+  about it. That is deliberate (see the budget item) but it means a reader comparing the two
+  tasks' notes must read this one: P0-12 said the number would go non-zero the day pagination
+  landed, and the design changed so that it does not.
+- **No sweep was run.** Nothing in `results/` changed. The pagination block, the truncation
+  category and the budget interaction are all proven by test, not yet by corpus data — so the
+  headline this task exists to produce (*how many servers paginate, and how many tools were
+  missing*) is still **unmeasured**. It becomes measured on the next Stage 1/2 sweep.
 
 ---
 
@@ -3588,8 +3933,11 @@ named publication defensible, since a claim is bound to an exact observed snapsh
 the results.
 
 Design constraints, not deferred work: external state invisibility, semantic argument
-validity, normalisation sensitivity, caching confound, observation evasion. Each must appear
-in published results.
+validity, normalisation sensitivity, caching confound, observation evasion, and **census
+opt-out by a nonconformant server** (design.md §8; P0-13) — kept separate from observation
+evasion, since it is a server declining measurement and moves census denominators rather than
+a verdict. Each must appear in published results; the opt-out with its `server_nonconformant`
+count and, once built, its sensitivity interval.
 
 ---
 
@@ -3857,14 +4205,24 @@ which would produce numbers that are stale on arrival:
   exactly the population whose upgrade it exists to measure. Not hypothetical: three of five
   well-known public endpoints already answered `server/discover` correctly on 2026-10-07
   (research note §1.6 and Appendix A).
-- `ListToolsResult` is a `PaginatedResult` and the client has never followed `nextCursor`, in
-  **either** era (pagination predates `2026-07-28`). Any tool past page one has been silently
-  absent from the P0-06/P0-07 counts and would be again. How many servers paginate is
-  unmeasured.
+- ~~`ListToolsResult` is a `PaginatedResult` and the client has never followed `nextCursor`,
+  in **either** era (pagination predates `2026-07-28`). Any tool past page one has been
+  silently absent from the P0-06/P0-07 counts and would be again.~~ **Fixed in
+  [P0-13](#p0-13-follow-toolslist-pagination)** ([ADR-015](adr/015-paginated-tool-lists.md)):
+  the cursor is followed in both eras, bounded in four dimensions with a distinct recorded
+  outcome per bound, and a truncated walk is recorded as `tools_list_truncated` rather than
+  tallied — because a partial tool list filed as a complete one would corrupt every coverage
+  number computed from it. **How many servers paginate remains unmeasured**, which is the one
+  half of this bullet P0-13 could not close without contacting servers: the harness now
+  *measures* it (`pagination.servers_paginating`, `pagination.tools_beyond_first_page`), and
+  the number exists only once a sweep runs. Sizing it is now a result the re-run produces
+  rather than a defect blocking it.
 
-Correct order: fix the five defects above and pagination, *then* re-run. O-02's two published
-censuses make this sharper — a re-run that silently drops upgraded servers and later pages is
-not comparable against them.
+Correct order: fix the five defects above and pagination, *then* re-run. Both are now done
+(P0-11 and P0-13 respectively). O-02's two published censuses make this sharper — a re-run
+that silently drops upgraded servers and later pages is not comparable against them, and the
+re-run must now also report `pagination.tools_beyond_first_page` alongside its counts so the
+comparison against July is a comparison and not a quiet correction.
 
 **⚑ Flagged for the census re-run, P0-02, P5-01 and P5-04 — carry-forward findings from the
 same 2026-10-07 review. Recorded here, not implemented.** Each needs its own change when the
@@ -3892,9 +4250,17 @@ relevant work is picked up; none is a defect in anything already landed except w
   produced the 429 described here — with a hard 120-request cap per registrable domain, a
   refusal recorded as its own failure category rather than a skipped host, and the policy and
   accounting published so the claim is checkable. This bullet's *first* observation, that
-  "pagination adds unbounded ones", is **still open**: pagination remains unfollowed, and when
-  it lands it will overshoot P0-12's per-discovery request reservation, which that task
-  publishes as `overshoot_requests` rather than absorbing silently.
+  "pagination adds unbounded ones", is **now closed too**, by
+  [P0-13](#p0-13-follow-toolslist-pagination) ([ADR-015](adr/015-paginated-tool-lists.md)):
+  pagination is followed but **not** unbounded — at most 40 pages, 5,000 tools, 32 MiB and a
+  1 KiB cursor, each bound producing its own recorded stop reason. And it does **not** overshoot
+  P0-12's reservation after all: rather than spending past the 5-request reservation and
+  publishing the excess, a walk now buys each extra page from the registrable domain's budget
+  *before* requesting it (`Permit::try_extend`), so the 120-request cap stays hard, a
+  paginating server cannot spend headroom reserved for later hosts on its domain, and a walk
+  that cannot buy its next page is truncated and recorded rather than sent anyway. The
+  consequence for anyone reading P0-12's note: `overshoot_requests` is now expected to stay
+  **zero**, and a non-zero value means an accounting bug rather than "a server paginated".
 - **`ttlMs`/`cacheScope` are a new rug-pull surface, and the harness is immune only by
   accident.** A server can declare a long TTL with `cacheScope: "public"` so caches hold one
   tool list while a revalidating client sees another — cache divergence as a rug-pull

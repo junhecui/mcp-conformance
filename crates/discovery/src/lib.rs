@@ -18,6 +18,7 @@ mod client;
 pub mod era;
 pub mod jsonrpc;
 pub mod pace;
+pub mod paginate;
 mod pin;
 mod transport;
 
@@ -31,4 +32,7 @@ pub use pace::{
     PacedAgent, Pacer, Permit, PermitStats, StatusHandling, registrable_domain,
     registrable_domain_of_endpoint,
 };
-pub use pin::{PinError, ToolPin, pin_tools};
+pub use paginate::{PaginationOutcome, StopReason, TruncationAttribution};
+pub use pin::{
+    PinError, ToolPin, pin_page, pin_pages, pin_tools, server_pin_of, unordered_server_pin_of,
+};

@@ -34,6 +34,11 @@ fn tools() -> serde_json::Value {
     }])
 }
 
+/// One tool, for the `paginated` mode's one-tool-per-page split (P0-13).
+fn page_tool(name: &str) -> serde_json::Value {
+    serde_json::json!({ "name": name, "inputSchema": { "type": "object" } })
+}
+
 /// Does `params` carry a well-formed `2026-07-28` `_meta` block at `MODERN`?
 fn has_modern_meta(params: &serde_json::Value) -> bool {
     let Some(meta) = params.get("_meta") else { return false };
@@ -186,6 +191,38 @@ fn main() {
                     "serverInfo": { "name": "fake-mcp-stdio-server", "version": "0.0.0" }
                 }
             }),
+
+            // ---- tools/list, paginated (P0-13) ----
+            // A legacy server that splits its tool list across three pages and expects the
+            // cursor echoed back in `params.cursor`. A *missing* cursor is the first-page
+            // request and gets page one; a cursor it did not issue gets `-32602` rather than
+            // a shrug, so a client that mangled the cursor fails loudly here. (A client that
+            // dropped it would be re-served page one and its repeated `c2` caught by the
+            // walk's own cycle check — this fake does not detect that case itself.)
+            ("tools/list", "paginated") => {
+                let cursor = params.get("cursor").and_then(|c| c.as_str());
+                match cursor {
+                    None => serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": { "tools": [page_tool("first")], "nextCursor": "cursor-2" }
+                    }),
+                    Some("cursor-2") => serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": { "tools": [page_tool("second")], "nextCursor": "cursor-3" }
+                    }),
+                    // Last page: no `nextCursor` at all.
+                    Some("cursor-3") => serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": { "tools": [page_tool("third")] }
+                    }),
+                    Some(other) => {
+                        error(&id, -32602, &format!("unrecognized cursor: {other}"))
+                    }
+                }
+            }
 
             // ---- tools/list, in both shapes ----
             // `2026-07-28` adds the required `resultType`, `ttlMs` and `cacheScope` to every

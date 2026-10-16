@@ -44,7 +44,7 @@ const USER_AGENT: &str = concat!(
 /// Upper bound on one stdio JSON-RPC line. A `tools/list` response measured in megabytes
 /// is already extraordinary; past this it is indistinguishable from a deliberate
 /// memory-exhaustion attempt by a hostile server, and the read fails instead of buffering.
-const MAX_LINE_BYTES: usize = 10 * 1024 * 1024;
+const MAX_LINE_BYTES: usize = crate::paginate::MAX_PAGE_BYTES;
 
 /// Upper bound on one HTTP response body, stated explicitly rather than inherited.
 ///
@@ -52,7 +52,7 @@ const MAX_LINE_BYTES: usize = 10 * 1024 * 1024;
 /// `with_config().reader()` and `read_json()` are unbounded without an explicit `.limit()`,
 /// per ureq's own documentation. Setting the limit here means the bound is visible in this
 /// crate and survives a future switch to a different read method.
-const MAX_BODY_BYTES: u64 = 10 * 1024 * 1024;
+const MAX_BODY_BYTES: u64 = crate::paginate::MAX_PAGE_BYTES as u64;
 
 /// Upper bound on a `Retry-After` header value kept for reporting. A sweep uses it to skip
 /// a host, never to sleep, so only its first few characters could ever matter.
@@ -114,6 +114,23 @@ pub(crate) trait Transport {
     /// without a version would get a spec-compliant server to answer `-32020`
     /// `HeaderMismatch`. A no-op for stdio, which has no headers.
     fn configure_http_headers(&mut self, _protocol_version: Option<&str>, _send_method: bool) {}
+
+    /// Buy `extra` more requests from this transport's P0-12 pacing budget, returning
+    /// whether they may be sent.
+    ///
+    /// Exists for `tools/list` pagination (P0-13), whose length is not knowable when the
+    /// permit is admitted. The permit deliberately lives *inside* the transport (it lives
+    /// inside the agent, because the agent is the only thing that can send), so
+    /// [`crate::DiscoveryClient`] cannot reach it directly and asks through here instead —
+    /// which keeps the encapsulation the P0-12 fix established rather than handing the
+    /// permit back out to a caller that could then build its own agent around it.
+    ///
+    /// `true` by default: a transport with no budget — stdio, or any unpaced HTTP client —
+    /// has nothing to consult, and must not be made to refuse pages for want of a control it
+    /// never had.
+    fn try_extend_budget(&self, _extra: usize) -> bool {
+        true
+    }
 
     /// Send one request and validate its envelope: the cooked counterpart to
     /// [`Self::call_raw`], used for every request whose response must be a well-formed
@@ -557,6 +574,13 @@ impl Transport for HttpTransport {
     fn configure_http_headers(&mut self, protocol_version: Option<&str>, send_method: bool) {
         self.protocol_version = protocol_version.map(str::to_string);
         self.send_method_header = send_method;
+    }
+
+    fn try_extend_budget(&self, extra: usize) -> bool {
+        // An unpaced agent has no budget to consult, so there is nothing to refuse. A paced
+        // one refuses only when its registrable domain genuinely has no headroom, and the
+        // refusal is already counted in the run's accounting by `Permit::try_extend` itself.
+        self.agent.permit().is_none_or(|permit| permit.try_extend(extra).is_ok())
     }
 }
 

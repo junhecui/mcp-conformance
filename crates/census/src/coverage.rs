@@ -111,9 +111,15 @@ fn coverage_of(annotations: &Option<Annotations>, field: impl Fn(&Annotations) -
     }
 }
 
-/// Extract per-tool, per-annotation coverage from a raw `tools/list` response — the same
-/// bytes shape [`discovery::pin::pin_tools`] consumes, from
-/// [`discovery::Discovery::tools_list_raw`].
+/// Extract per-tool, per-annotation coverage from **one** raw `tools/list` response — the
+/// same bytes shape `discovery::pin_tools` consumes, and one element of
+/// `discovery::Discovery::tools_list_pages`.
+///
+/// One page, not a whole walk, deliberately: a caller holding a paginated tool list (P0-13)
+/// calls this per page and sums the resulting [`AnnotationTally`]s, which the `AddAssign`
+/// impls below make exactly equal to tallying the concatenation. That leaves this function
+/// unchanged in meaning — a property every July number depends on — and keeps a per-server
+/// rollup from ever holding every tool of every page at once.
 pub fn tool_coverage(tools_list_raw: &[u8]) -> Result<Vec<ToolCoverage>, CoverageError> {
     let text = std::str::from_utf8(tools_list_raw).map_err(CoverageError::NotUtf8)?;
     let envelope: Envelope = serde_json::from_str(text)

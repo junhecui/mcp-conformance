@@ -153,6 +153,8 @@ These are design constraints, not deferred work. Each must appear in published r
 
 **Observation evasion.** A sufficiently adversarial tool could detect the sandbox and behave differently. Out of scope, but worth stating.
 
+**Census opt-out by a nonconformant server.** A server can decline to be measured at all by sending an unfollowable `nextCursor` — empty, not a string, over-long, or repeated — on a `tools/list` response it was already sending. The harness cannot follow it, so the walk is truncated and the server contributes no tally, tool count or pin. This is distinct from observation evasion: that is a sandboxed tool detecting observation and altering a *verdict*; this is a server declining measurement, and it affects the census *denominators*. It is also adverse-selected — the servers with a motive to dodge are those that declare annotations, since an absent annotation cannot be found violated — so excluding them biases the published `absent` share upward and the eventual mismatch rate downward, both in the direction that flatters the ecosystem. Mitigation (P0-13, ADR-015 §4): such records are partitioned as `server_nonconformant`, never subtracted as harness-side, and carry a `nonconformance_flag` to publication. A sensitivity bound — the `absent` share if every such server's withheld tools were maximally unfavourable — is computable offline from the retained page-one evidence and should be published as an interval beside the point estimate.
+
 ---
 
 ## 9. Key design decisions

@@ -70,31 +70,50 @@ fn explicit(annotations: &Value, key: &str) -> bool {
 /// needs the full raw `annotations` value (for `TOOL_SNAPSHOT.annotations_raw`) and the
 /// `inputSchema` (for argument synthesis), neither of which that module exposes. Same
 /// re-parse pattern `xtask::dump_tools` already uses for its own, different, purpose.
-fn parse_tools(tools_list_raw: &[u8]) -> Result<Vec<ToolEntry>, Box<dyn std::error::Error>> {
-    let envelope: Value = serde_json::from_slice(tools_list_raw)?;
-    let tools = envelope["result"]["tools"].as_array().cloned().unwrap_or_default();
-    Ok(tools
-        .into_iter()
-        .filter_map(|t| {
+/// Every tool across a whole paginated `tools/list` walk (P0-13), in walk order.
+fn parse_tools(pages: &[Vec<u8>]) -> Result<Vec<ToolEntry>, Box<dyn std::error::Error>> {
+    let mut entries = Vec::new();
+    for page in pages {
+        let envelope: Value = serde_json::from_slice(page)?;
+        let tools = envelope["result"]["tools"].as_array().cloned().unwrap_or_default();
+        entries.extend(tools.into_iter().filter_map(|t| {
             let name = t.get("name")?.as_str()?.to_string();
             let input_schema = t.get("inputSchema").cloned().unwrap_or(Value::Object(Default::default()));
             let annotations = t.get("annotations").cloned().unwrap_or(Value::Null);
             Some(ToolEntry { name, input_schema, annotations })
-        })
-        .collect())
+        }));
+    }
+    Ok(entries)
 }
 
 enum DiscoverOutcome {
-    Success { tools_list_raw: Vec<u8>, spec_revision: String, tools: Vec<ToolEntry> },
+    Success { tools_list_pages: Vec<Vec<u8>>, spec_revision: String, tools: Vec<ToolEntry> },
     Failed { category: &'static str, detail: String },
 }
 
 fn discover(url: &str, permit: discovery::Permit) -> DiscoverOutcome {
     let mut client = DiscoveryClient::http_paced(url.to_string(), REQUEST_TIMEOUT, permit);
     match client.discover() {
-        Ok(discovery) => match parse_tools(&discovery.tools_list_raw) {
+        // A truncated walk (P0-13) is refused rather than probed. Track B writes a
+        // `TOOL_SNAPSHOT.metadata_pin` into a committed SQLite file, and a pin over a
+        // *prefix* of a server's tool list is not that server's pin — architecture.md §6
+        // invariant 1 keys every verdict on the snapshot, so a snapshot that misdescribes
+        // what it saw poisons the verdict rather than merely annotating it. The same
+        // partitioned categories the census uses (`census_report::truncated_category`), so a
+        // server that dodged the probe with an unfollowable cursor is never pooled with one
+        // this harness cut off — only the latter is the harness's to subtract.
+        Ok(discovery) if !discovery.pagination.cursors_exhausted() => DiscoverOutcome::Failed {
+            category: crate::census_report::truncated_category(discovery.pagination.attribution()),
+            detail: format!(
+                "tools/list walk incomplete after {} page(s): {} ({})",
+                discovery.pagination.pages_fetched,
+                discovery.pagination.stopped_because,
+                discovery.pagination.attribution()
+            ),
+        },
+        Ok(discovery) => match parse_tools(&discovery.tools_list_pages) {
             Ok(tools) => DiscoverOutcome::Success {
-                tools_list_raw: discovery.tools_list_raw,
+                tools_list_pages: discovery.tools_list_pages,
                 // `None` means no revision was *negotiated* — the `modern_without_discover`
                 // path assumed one, or the server's echo was not storable. Both columns this
                 // value reaches are `NOT NULL` — `server.spec_revision` here, and through
@@ -276,10 +295,10 @@ pub fn run(sample_size: usize) -> Result<(), Box<dyn std::error::Error>> {
                 continue;
             }
         };
-        let (tools_list_raw, spec_revision, tools) = match outcome {
-            DiscoverOutcome::Success { tools_list_raw, spec_revision, tools } => {
+        let (tools_list_pages, spec_revision, tools) = match outcome {
+            DiscoverOutcome::Success { tools_list_pages, spec_revision, tools } => {
                 discovery_succeeded += 1;
-                (tools_list_raw, spec_revision, tools)
+                (tools_list_pages, spec_revision, tools)
             }
             DiscoverOutcome::Failed { category, detail } => {
                 *discovery_failure_categories.entry(category).or_insert(0) += 1;
@@ -298,7 +317,7 @@ pub fn run(sample_size: usize) -> Result<(), Box<dyn std::error::Error>> {
         // This must degrade to a per-server failure like every other discovery problem,
         // never abort the whole sweep — found the hard way running this against the live
         // registry: without this branch, one such server killed a 500-server run at #213.
-        let tool_pins = match discovery::pin_tools(&tools_list_raw) {
+        let tool_pins = match discovery::pin_pages(&tools_list_pages) {
             Ok((pins, _server_pin)) => pins,
             Err(e) => {
                 *discovery_failure_categories.entry("pin_failed").or_insert(0) += 1;

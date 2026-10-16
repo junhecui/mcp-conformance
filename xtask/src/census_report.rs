@@ -29,7 +29,7 @@
 //! (`failure_detail`, `negotiated_spec_revision`, pin/parse errors) is length-bounded before it
 //! reaches the results file; the full bytes, where any exist, stay in the evidence store.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -39,7 +39,7 @@ use census::coverage::{self, AnnotationTally, Tally};
 use datamodel::{Annotation, Digest};
 use discovery::{
     Discovery, DiscoveryError, DiscoveryPath, EraProvenance, FallbackReason, ProbeAbsence,
-    ProbeEvidence, RevisionSource,
+    ProbeEvidence, RevisionSource, StopReason, ToolPin, TruncationAttribution,
 };
 use serde_json::{Map, Value, json};
 use store::{BlobStore, StoreError};
@@ -72,6 +72,7 @@ const DERIVED_TOP_LEVEL_KEYS: &[&str] = &[
     "annotation_tally",
     "server_weighted",
     "provenance",
+    "pagination",
     "evidence_summary",
     "servers",
 ];
@@ -85,6 +86,7 @@ const SERVER_NON_IDENTITY_KEYS: &[&str] = &[
     "discovery_path",
     "era_provenance",
     "negotiated_spec_revision",
+    "pagination",
     "evidence",
     "tool_count",
     "server_pin",
@@ -271,9 +273,122 @@ impl EraRecord {
     }
 }
 
+/// Why a `tools/list` cursor walk stopped, as a census observation (P0-13).
+///
+/// Carried through verbatim rather than recomputed, for the same reason `discovery_path` is:
+/// two of the ten reasons ([`StopReason::BudgetExhausted`] and
+/// [`StopReason::PageRequestFailed`]) are facts about the *run*, not about any stored page,
+/// so no amount of re-reading the evidence could recover them. Everything else about a walk
+/// — pages, tool counts, bytes, duplicate names — **is** derivable from the stored pages and
+/// is recomputed, which is what keeps P0-10's single-derivation-path property intact.
+///
+/// Three states, and the third is why this is a type rather than an `Option<StopReason>`:
+/// "this file predates cursor following" and "this walk was complete" are different claims,
+/// and the difference decides whether a server's coverage numbers can be trusted.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum PaginationRecord {
+    /// The walk's own stop reason.
+    Recorded(StopReason),
+    /// Written before P0-13 followed `nextCursor`. A fact about the file, not an error — and
+    /// specifically **not** equivalent to `no_cursor`: such a record's tool list is page one,
+    /// and whether the server had more pages is unknown and unknowable from it.
+    Unrecorded,
+}
+
+impl PaginationRecord {
+    /// Read a stop reason back out of a server record's `pagination` block.
+    fn from_record(value: Option<&Value>) -> Self {
+        value
+            .and_then(|v| v.get("stopped_because"))
+            .and_then(Value::as_str)
+            .and_then(StopReason::parse)
+            .map_or(Self::Unrecorded, Self::Recorded)
+    }
+
+    /// Stable string form for the published record and for the corpus distribution.
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Recorded(reason) => reason.as_str(),
+            Self::Unrecorded => "unrecorded",
+        }
+    }
+
+    /// Whether the walk this record describes saw the server's whole tool list.
+    ///
+    /// `false` for [`Self::Unrecorded`], and that is the load-bearing choice: a record from
+    /// before cursor following cannot assert completeness, and treating "unknown" as
+    /// "complete" is the exact substitution this project refuses one layer up when it
+    /// insists on `unverifiable` over `holds`.
+    fn cursors_exhausted(self) -> bool {
+        matches!(self, Self::Recorded(reason) if reason.cursors_exhausted())
+    }
+
+    /// Who truncated this walk, as published (B3) — the four
+    /// [`TruncationAttribution`]s, `not_truncated`, or `unrecorded` for a file written
+    /// before cursor following, which nobody truncated and nobody can attribute.
+    fn attribution_str(self) -> &'static str {
+        match self {
+            Self::Recorded(reason) => reason.attribution().as_str(),
+            Self::Unrecorded => "unrecorded",
+        }
+    }
+
+    /// The failure category this walk is recorded under when it is truncated.
+    fn truncated_category(self) -> &'static str {
+        match self {
+            Self::Recorded(reason) => truncated_category(reason.attribution()),
+            Self::Unrecorded => TOOLS_LIST_TRUNCATED_UNRECORDED,
+        }
+    }
+
+    /// Whether the *server* truncated this walk with an unfollowable cursor.
+    fn is_server_nonconformance(self) -> bool {
+        matches!(self, Self::Recorded(reason) if reason.attribution().is_server_nonconformance())
+    }
+}
+
+/// Why a results file could not be derived from its evidence.
+///
+/// Two kinds, kept apart: the store failed (a missing or corrupt blob — P0-10's "the
+/// evidence no longer reproduces this file"), or the file and its evidence describe
+/// something no live capture could have produced, which is how a crafted bundle is refused
+/// (B4) rather than derived from at whatever cost it chooses.
+#[derive(Debug)]
+pub(crate) enum DeriveError {
+    /// The evidence store failed.
+    Store(StoreError),
+    /// The record or its evidence exceeds what any capture can produce.
+    Malformed(String),
+}
+
+impl From<StoreError> for DeriveError {
+    fn from(e: StoreError) -> Self {
+        Self::Store(e)
+    }
+}
+
+impl std::fmt::Display for DeriveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Store(e) => write!(f, "{e}"),
+            Self::Malformed(msg) => write!(f, "malformed evidence: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for DeriveError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Store(e) => Some(e),
+            Self::Malformed(_) => None,
+        }
+    }
+}
+
 /// What one discovery attempt observed.
 pub(crate) enum Observation {
-    /// Discovery returned both responses, and both were persisted.
+    /// Discovery returned its handshake and at least one `tools/list` page, and all were
+    /// persisted.
     Discovered {
         /// Which handshake produced the result (P0-09 provenance).
         discovery_path: DiscoveryPath,
@@ -281,8 +396,10 @@ pub(crate) enum Observation {
         era: EraRecord,
         /// The handshake response's evidence digest.
         handshake: Digest,
-        /// The `tools/list` response's evidence digest.
-        tools_list: Digest,
+        /// Every `tools/list` page's evidence digest, in walk order. Non-empty.
+        tools_list_pages: Vec<Digest>,
+        /// Why the cursor walk stopped (P0-13).
+        pagination: PaginationRecord,
     },
     /// Discovery failed before both responses existed, so there are no bytes to keep.
     Failed {
@@ -391,6 +508,16 @@ pub(crate) fn persist(store: &BlobStore, discovery: &Discovery) -> Result<Observ
         Some(bytes) => Some(store.put(bytes)?),
         None => None,
     };
+    // One blob per `tools/list` page (P0-13), in walk order. One blob per page rather than a
+    // concatenation: the store is content-addressed over *bytes as received*, and splicing N
+    // responses into one artifact would be a transformation at capture time — which ADR-005
+    // puts on the far side of the normaliser, not here. It also means two servers (or one
+    // server twice) returning an identical page share that blob for free, which is how the
+    // cost of keeping N pages stays close to the cost of keeping one.
+    let mut tools_list_pages = Vec::with_capacity(discovery.tools_list_pages.len());
+    for page in &discovery.tools_list_pages {
+        tools_list_pages.push(store.put(page)?);
+    }
     Ok(Observation::Discovered {
         discovery_path: discovery.discovery_path,
         era: EraRecord::of(
@@ -398,7 +525,8 @@ pub(crate) fn persist(store: &BlobStore, discovery: &Discovery) -> Result<Observ
             ProbeRecord::of(&discovery.probe_raw, probe_digest),
         ),
         handshake: store.put(&discovery.handshake_raw)?,
-        tools_list: store.put(&discovery.tools_list_raw)?,
+        tools_list_pages,
+        pagination: PaginationRecord::Recorded(discovery.pagination.stopped_because),
     })
 }
 
@@ -512,6 +640,15 @@ pub(crate) fn pacing_header(accounting: &discovery::Accounting) -> Value {
                 "requests": d.requests,
                 "sequences_admitted": d.sequences_admitted,
                 "sequences_denied": d.sequences_denied,
+                // B2. Beside `sequences_denied`, these let a reader see one host's walk
+                // displacing other sequences on its domain rather than infer it: what
+                // pagination took from the shared pool, what it was refused, how much of that
+                // was the per-sequence share, and the most any one sequence held.
+                "page_extensions_granted": d.page_extensions_granted,
+                "page_extensions_denied": d.page_extensions_denied,
+                "page_extensions_denied_by_sequence_share":
+                    d.page_extensions_denied_by_sequence_share,
+                "largest_sequence_reservation": d.largest_sequence_reservation,
             })
         })
         .collect();
@@ -522,6 +659,10 @@ pub(crate) fn pacing_header(accounting: &discovery::Accounting) -> Value {
         "max_requests_per_registrable_domain":
             accounting.policy.max_requests_per_registrable_domain,
         "per_discovery_reservation": accounting.per_discovery_reservation,
+        // B2: the most one sequence may hold, page extensions included —
+        // `max(reservation, cap / 8)`. Part of the policy, because it bounds how many
+        // co-tenants one paginating listing can displace.
+        "max_reservation_per_sequence": accounting.max_reservation_per_sequence,
         // Part of the policy, not a curiosity: a followed redirect is a request this block
         // cannot see. ureq's default is 10, so before B1 one POST could become 11 requests
         // with no spacing between them and only the first charged, which would make every
@@ -536,6 +677,14 @@ pub(crate) fn pacing_header(accounting: &discovery::Accounting) -> Value {
         "max_requests_to_one_registrable_domain":
             accounting.max_requests_to_one_registrable_domain,
         "sequences_denied_by_budget": accounting.sequences_denied,
+        // P0-13. Its own field, never pooled into `sequences_denied_by_budget`: a refused
+        // *sequence* means a host was never contacted, while a refused page-reservation
+        // means a host was contacted and its tool list came back **truncated**. The second
+        // is a caveat on that server's coverage numbers; the first is their absence. Each
+        // refusal here has a matching `tools_list_truncated` server record whose
+        // `pagination.stopped_because` is `budget_exhausted`, and
+        // `verify_pacing_self_consistent` checks that correspondence.
+        "page_extensions_denied": accounting.page_extensions_denied,
         "overshoot_requests": accounting.overshoot_requests,
         "registrable_domains_listed": domains.len(),
         "registrable_domains": domains,
@@ -570,15 +719,25 @@ fn millis(d: std::time::Duration) -> u64 {
 }
 
 /// One server's pacing accounting, for its record in the results file.
+///
+/// `reservation` is new in P0-13 and is what keeps the header's `overshoot_requests`
+/// checkable. A paginating walk *extends* its reservation one page at a time
+/// (`Permit::try_extend`), so overshoot is no longer `requests_sent − a single constant`;
+/// deriving it from the header's `per_discovery_reservation` would report every paginating
+/// server as overshoot and fail the guard on a correct file. Publishing the reservation the
+/// sequence actually ended up holding keeps the derivation a subtraction a reader can do by
+/// hand, which is the only reason the guard is worth anything.
 pub(crate) fn pacing_record(
     registrable_domain: &str,
     requests: usize,
     waited: std::time::Duration,
+    reservation: usize,
 ) -> Value {
     json!({
         "registrable_domain": registrable_domain,
         "requests_sent": requests,
         "waited_ms": millis(waited),
+        "reservation": reservation,
     })
 }
 
@@ -598,15 +757,34 @@ pub(crate) fn pacing_record(
 ///   against the data beneath it. It is the maximum, over domains, of the per-server
 ///   `requests_sent` grouped by per-server `registrable_domain`.
 /// - **`registrable_domains_contacted`** — distinct domains with at least one request.
-/// - **`overshoot_requests`** — `Σ max(0, requests_sent − per_discovery_reservation)`
-///   over the records. This is the number that is supposed to go non-zero the day
-///   `tools/list` pagination lands, so a published zero needs to mean something.
+/// - **`overshoot_requests`** — `Σ max(0, requests_sent − reservation)` over the records,
+///   using each record's **own** `pacing.reservation` (P0-13) and falling back to the
+///   header's `per_discovery_reservation` for a P0-12-era file that has none. A paginating
+///   walk extends its reservation rather than exceeding it, so subtracting the constant
+///   would report every paginating server as overshoot and fail this guard on a correct
+///   file; a published zero means "nothing sent a request nobody reserved for it", which is
+///   what the number is for.
+///
+/// A seventh field is checked since P0-13:
+///
+/// - **`page_extensions_denied`** — checked as a **lower bound**, not an equality: it must
+///   be at least the number of server records whose `pagination.stopped_because` is
+///   `budget_exhausted`, since each such record is one refusal. It cannot be an equality,
+///   for two reasons that each produced a false rejection of a correct file before this
+///   was relaxed: (1) a record can lose its `pagination` block to a *later* failure — a walk
+///   refused an extension and then hit `evidence_store_error` is recorded with no block at
+///   all, yet its refusal is in the header; and (2) one record can account for **more than
+///   one** refusal — `census-pin-stability` runs two walks under one permit, publishes this
+///   counter, and writes no `pagination` block at all. What the bound still catches is the
+///   direction that matters: a header claiming fewer refusals than its own records show
+///   budget truncations.
 ///
 /// The overshoot derivation assumes **one permit per server record**, which every sweep
 /// writing this block holds by construction (Stage 1 admits once per candidate;
 /// `pin_stability` deliberately covers both its sequences with a single permit for exactly
-/// this reason). A file that ever breaks that assumption must not publish this block
-/// unchanged.
+/// this reason). It does **not** assume one *walk* per record — that is the
+/// `page_extensions_denied` case above. A file that ever breaks the one-permit assumption
+/// must not publish this block unchanged.
 ///
 /// Deliberately independent of [`pacing_header`], in the shape B-03's
 /// `verify_report_matches_records` established: a checker that shares the aggregator's code
@@ -625,6 +803,7 @@ pub(crate) fn verify_pacing_self_consistent(report: &Value) -> Result<(), Vec<St
     let mut waited = 0u128;
     let mut denied = 0u128;
     let mut overshoot = 0u128;
+    let mut pages_refused = 0u128;
     let mut per_domain: BTreeMap<&str, u128> = BTreeMap::new();
     for server in servers {
         let n = |key: &str| {
@@ -633,7 +812,15 @@ pub(crate) fn verify_pacing_self_consistent(report: &Value) -> Result<(), Vec<St
         let sent = n("requests_sent");
         requests += u128::from(sent);
         waited += u128::from(n("waited_ms"));
-        overshoot += u128::from(sent.saturating_sub(reservation));
+        // The sequence's *own* reservation (P0-13), falling back to the header constant for a
+        // P0-12-era file that has no per-server value. A paginating walk extends its
+        // reservation, so subtracting the constant would count every extra page as overshoot
+        // and fail this guard on a perfectly correct file.
+        let own_reservation = server
+            .pointer("/pacing/reservation")
+            .and_then(Value::as_u64)
+            .unwrap_or(reservation);
+        overshoot += u128::from(sent.saturating_sub(own_reservation));
         if let Some(domain) =
             server.pointer("/pacing/registrable_domain").and_then(Value::as_str)
         {
@@ -641,6 +828,13 @@ pub(crate) fn verify_pacing_self_consistent(report: &Value) -> Result<(), Vec<St
         }
         if server.get("failure_category").and_then(Value::as_str) == Some(BUDGET_EXHAUSTED) {
             denied += 1;
+        }
+        // Each budget-truncated record is one refusal; the header may hold more (see the
+        // doc comment: records that lost their block, and records covering two walks).
+        if server.pointer("/pagination/stopped_because").and_then(Value::as_str)
+            == Some(StopReason::BudgetExhausted.as_str())
+        {
+            pages_refused += 1;
         }
     }
     let max_to_one_domain = per_domain.values().copied().max().unwrap_or(0);
@@ -663,6 +857,14 @@ pub(crate) fn verify_pacing_self_consistent(report: &Value) -> Result<(), Vec<St
             )),
             None => problems.push(format!("pacing.{key} is missing or not a number")),
         }
+    }
+    match claimed("page_extensions_denied") {
+        Some(value) if value >= pages_refused => {}
+        Some(value) => problems.push(format!(
+            "pacing.page_extensions_denied is {value} but {pages_refused} per-server records \
+             were truncated by budget_exhausted, each of which is one refusal"
+        )),
+        None => problems.push("pacing.page_extensions_denied is missing or not a number".into()),
     }
     if problems.is_empty() { Ok(()) } else { Err(problems) }
 }
@@ -743,7 +945,7 @@ pub(crate) fn build_report(
     store: &BlobStore,
     mut header: Map<String, Value>,
     servers: &[ServerObservation],
-) -> Result<Value, StoreError> {
+) -> Result<Value, DeriveError> {
     let mut rollup = Rollup::default();
     let mut records = Vec::with_capacity(servers.len());
 
@@ -756,8 +958,23 @@ pub(crate) fn build_report(
                 record.insert("failure_category".into(), category.as_str().into());
                 record.insert("failure_detail".into(), detail.as_str().into());
             }
-            Observation::Discovered { discovery_path, era, handshake, tools_list } => {
-                derive_discovered(store, *discovery_path, era, handshake, tools_list, &mut record, &mut rollup)?;
+            Observation::Discovered {
+                discovery_path,
+                era,
+                handshake,
+                tools_list_pages,
+                pagination,
+            } => {
+                derive_discovered(
+                    store,
+                    *discovery_path,
+                    era,
+                    handshake,
+                    tools_list_pages,
+                    *pagination,
+                    &mut record,
+                    &mut rollup,
+                )?;
             }
         }
         records.push(Value::Object(record));
@@ -768,18 +985,185 @@ pub(crate) fn build_report(
     Ok(Value::Object(header))
 }
 
+/// Prefix shared by every failure category for a server whose `tools/list` cursor walk was
+/// truncated (P0-13). Never itself a category since the B3 review: see
+/// [`truncated_category`].
+///
+/// **Why a truncated walk is a failure rather than a flagged success.** Its tally would be a
+/// partial sample of the server's own tools, and both census readings break on that in ways
+/// a flag cannot repair: the tool-weighted corpus tally would silently gain a prefix of a
+/// server instead of a server, and the server-weighted `explicit.on_every_tool` would report
+/// "every tool" over a subset — a strictly *more* favourable claim than the evidence
+/// supports. design.md §8's rule for an unobservable effect is `unverifiable`, never `holds`;
+/// this is the same rule for a partially-observed tool list.
+///
+/// The evidence is still kept — every page that did arrive is in the store, with the
+/// `pagination` block saying how far the walk got — so a later analysis can use it
+/// deliberately. What it may not do is enter a headline number by default.
+///
+/// **Not uniformly subtractable, and never as a whole.** Only the `_by_bound` and
+/// `_by_budget` categories are this harness's doing. `_by_server` is the *server's* doing —
+/// an unfollowable cursor, which costs a server one JSON key and removes it from every
+/// denominator — and subtracting those records would hand any server that wants to dodge
+/// measurement a free exit, with the bias running in the direction that flatters the
+/// ecosystem (see [`discovery::TruncationAttribution`]). `_ambiguous` cannot be attributed
+/// either way. An analyst choosing a denominator must choose per category.
+pub(crate) const TOOLS_LIST_TRUNCATED: &str = "tools_list_truncated";
+
+/// The failure category a truncated walk is recorded under, partitioned by who truncated
+/// it (B3). One flat, prefix-sharing category per [`TruncationAttribution`], so
+/// `failure_categories` itself carries the partition rather than one pooled count.
+pub(crate) fn truncated_category(attribution: TruncationAttribution) -> &'static str {
+    match attribution {
+        TruncationAttribution::ServerNonconformant => "tools_list_truncated_by_server",
+        TruncationAttribution::HarnessBound => "tools_list_truncated_by_bound",
+        TruncationAttribution::HarnessBudget => "tools_list_truncated_by_budget",
+        // `NotTruncated` is never passed here (only a walk whose cursors were not exhausted
+        // is recorded as truncated); mapped rather than panicked on, because a panic in a
+        // sweep discards a results file.
+        TruncationAttribution::Ambiguous | TruncationAttribution::NotTruncated => {
+            "tools_list_truncated_ambiguous"
+        }
+    }
+}
+
+/// Failure category for a pre-P0-13 record whose walk was never recorded — the fifth
+/// truncation bucket, distinct from the four attributions because nobody truncated it: the
+/// file simply predates cursor following.
+const TOOLS_LIST_TRUNCATED_UNRECORDED: &str = "tools_list_truncated_unrecorded";
+
+/// The most bytes one walk can legitimately hold: the walk bound plus one page, because the
+/// capture-side byte check runs after a page is appended (see
+/// `discovery::paginate::MAX_TOTAL_BYTES`). Re-applied at derivation so a crafted evidence
+/// bundle cannot make re-derivation read more than any live capture could have stored.
+const MAX_DERIVED_WALK_BYTES: usize =
+    discovery::paginate::MAX_TOTAL_BYTES + discovery::paginate::MAX_PAGE_BYTES;
+
+/// One walk, derived from its stored pages **one page at a time**.
+///
+/// Streamed rather than materialised (B4): every page is read, measured, classified and
+/// pinned, then dropped, so peak memory is one page plus the per-tool pins rather than the
+/// whole walk. That matters because the store is content-addressed — one blob referenced N
+/// times keeps an evidence bundle tiny while a derivation that holds every reference
+/// resident is not; a 22 KB results file and a 922 KB store measured 184 MB resident before
+/// this, extrapolating to ~90 GB from a 1 MB file and a 10 MiB store.
+struct WalkDerivation {
+    /// Each page's length, in walk order.
+    page_bytes: Vec<usize>,
+    /// The first page whose coverage could not be extracted, and why.
+    coverage_error: Option<(usize, String)>,
+    /// Tally over the **name-deduplicated** tool set, first sighting in walk order winning.
+    tally: AnnotationTally,
+    /// Tools as observed — every occurrence on every page.
+    tools_observed: usize,
+    tools_on_first_page: usize,
+    /// Distinct tool names. The census tool count.
+    tools_distinct: usize,
+    /// Per-tool pins over every observed tool, in walk order, or why pinning failed.
+    pins: Result<Vec<ToolPin>, String>,
+}
+
+impl WalkDerivation {
+    fn stream(store: &BlobStore, digests: &[Digest]) -> Result<Self, DeriveError> {
+        let mut walk = Self {
+            page_bytes: Vec::with_capacity(digests.len()),
+            coverage_error: None,
+            tally: AnnotationTally::default(),
+            tools_observed: 0,
+            tools_on_first_page: 0,
+            tools_distinct: 0,
+            pins: Ok(Vec::new()),
+        };
+        let mut names: HashSet<String> = HashSet::new();
+        let mut bytes_total = 0usize;
+        for (index, digest) in digests.iter().enumerate() {
+            let page = store.get(digest)?;
+            bytes_total = bytes_total.saturating_add(page.len());
+            if bytes_total > MAX_DERIVED_WALK_BYTES {
+                return Err(DeriveError::Malformed(format!(
+                    "tools/list walk holds more than {MAX_DERIVED_WALK_BYTES} bytes by page {} — \
+                     more than any capture can store; refusing to derive from this bundle",
+                    index + 1
+                )));
+            }
+            walk.page_bytes.push(page.len());
+
+            if walk.coverage_error.is_none() {
+                match coverage::tool_coverage(&page) {
+                    Ok(tools) => {
+                        if index == 0 {
+                            walk.tools_on_first_page = tools.len();
+                        }
+                        walk.tools_observed += tools.len();
+                        let fresh: Vec<_> =
+                            tools.into_iter().filter(|t| names.insert(t.tool_name.clone())).collect();
+                        walk.tools_distinct += fresh.len();
+                        walk.tally += coverage::tally(&fresh);
+                    }
+                    Err(e) => walk.coverage_error = Some((index, e.to_string())),
+                }
+            }
+            if let Ok(pins) = &mut walk.pins {
+                match discovery::pin_page(&page) {
+                    Ok(page_pins) => pins.extend(page_pins),
+                    Err(e) => walk.pins = Err(e.to_string()),
+                }
+            }
+        }
+        Ok(walk)
+    }
+
+    fn bytes_total(&self) -> usize {
+        self.page_bytes.iter().sum()
+    }
+
+    /// Tool occurrences beyond the first of their name — re-listings across pages.
+    fn duplicate_tool_names(&self) -> usize {
+        self.tools_observed - self.tools_distinct
+    }
+
+    /// Names that appeared with **more than one distinct definition** — the same name
+    /// re-listed with different `annotations`, `inputSchema` or `description`. `None` when
+    /// the walk could not be pinned.
+    ///
+    /// The case `duplicate_tool_names` cannot see on its own: a name repeated with a changed
+    /// definition is a tool set changing *under the walk*, and since the tally keeps the
+    /// first sighting, this is what tells a reader the second sighting said something else.
+    fn conflicting_tool_definitions(&self) -> Option<usize> {
+        let pins = self.pins.as_ref().ok()?;
+        let mut pairs: Vec<(&str, [u8; 32])> =
+            pins.iter().map(|p| (p.name.as_str(), *p.pin.as_bytes())).collect();
+        pairs.sort_unstable();
+        pairs.dedup();
+        let mut conflicting = 0;
+        let mut i = 0;
+        while i < pairs.len() {
+            let mut j = i + 1;
+            while j < pairs.len() && pairs[j].0 == pairs[i].0 {
+                j += 1;
+            }
+            if j - i > 1 {
+                conflicting += 1;
+            }
+            i = j;
+        }
+        Some(conflicting)
+    }
+}
+
 /// Derive one discovered server's record fields from its stored evidence.
+#[allow(clippy::too_many_arguments)]
 fn derive_discovered(
     store: &BlobStore,
     discovery_path: DiscoveryPath,
     era: &EraRecord,
     handshake: &Digest,
-    tools_list: &Digest,
+    tools_list_pages: &[Digest],
+    pagination: PaginationRecord,
     record: &mut Map<String, Value>,
     rollup: &mut Rollup,
-) -> Result<(), StoreError> {
+) -> Result<(), DeriveError> {
     let handshake_raw = store.get(handshake)?;
-    let tools_list_raw = store.get(tools_list)?;
     // Read back, not carried through: the byte count in the file is recomputed from the
     // blob, so a tampered count is caught by the same re-derivation that catches a tampered
     // tally, and a missing probe blob fails loudly like any other missing evidence.
@@ -797,12 +1181,25 @@ fn derive_discovered(
     let revision = discovery::negotiated_spec_revision(&handshake_raw)
         .ok()
         .map(|r| bounded(&r, MAX_REVISION_CHARS));
+
+    let walk = WalkDerivation::stream(store, tools_list_pages)?;
+    // Re-applied at derivation (B4): a walk that ran out of cursors with more tools than the
+    // capture-side ceiling allows cannot have come from a live capture, so a bundle claiming
+    // one is refused rather than tallied — the same disqualification capture applies.
+    if pagination.cursors_exhausted() && walk.tools_observed > discovery::paginate::MAX_TOOLS {
+        return Err(DeriveError::Malformed(format!(
+            "a walk recorded as no_cursor holds {} tools, over the capture ceiling of {}",
+            walk.tools_observed,
+            discovery::paginate::MAX_TOOLS
+        )));
+    }
+
     rollup.record_discovered(
         discovery_path,
         era,
         revision.as_deref(),
         (handshake, handshake_raw.len()),
-        (tools_list, tools_list_raw.len()),
+        (tools_list_pages, &walk.page_bytes),
         (era.probe.digest(), probe_bytes),
     );
 
@@ -813,41 +1210,151 @@ fn derive_discovered(
         "evidence".into(),
         json!({
             "handshake_raw": { "digest": handshake.to_string(), "bytes": handshake_raw.len() },
-            "tools_list_raw": { "digest": tools_list.to_string(), "bytes": tools_list_raw.len() },
+            // Kept, and kept meaning page one: every pre-P0-13 consumer of this key reads
+            // the first `tools/list` response, which is exactly what it still is.
+            "tools_list_raw": {
+                "digest": tools_list_pages.first().map(ToString::to_string).map_or(Value::Null, Value::String),
+                "bytes": walk.page_bytes.first().copied().unwrap_or(0),
+            },
+            // The authoritative walk. Always present, even for a one-page server, because an
+            // absent array and an array of one are different claims about a file and only
+            // one of them is checkable.
+            "tools_list_pages": tools_list_pages
+                .iter()
+                .zip(walk.page_bytes.iter())
+                .map(|(digest, bytes)| json!({ "digest": digest.to_string(), "bytes": bytes }))
+                .collect::<Vec<_>>(),
         }),
     );
 
-    let tools = match coverage::tool_coverage(&tools_list_raw) {
-        Ok(tools) => tools,
-        Err(e) => {
-            rollup.record_failure("coverage_extraction");
-            record.insert("outcome".into(), "failed".into());
-            record.insert("failure_category".into(), "coverage_extraction".into());
-            record.insert("failure_detail".into(), bounded(&e.to_string(), MAX_DETAIL_CHARS).into());
-            return Ok(());
-        }
-    };
-    let tally = coverage::tally(&tools);
-    let engagement = Engagement::of(tools.len(), &tally);
-    rollup.record_success(tools.len(), &tally, engagement);
+    // Written, and counted, on **every** exit below — including `coverage_extraction`, which
+    // used to return first and so left its server out of the pagination denominator while
+    // its own record claimed a finished walk.
+    record.insert("pagination".into(), pagination_json(pagination, &walk));
+    // The census-pipeline instance of architecture.md §5.1's accept-and-flag pattern, which
+    // P4-03 carries to publication: a walk the *server* truncated with an unfollowable
+    // cursor. On every discovered record, `false` included, so an absent flag can never be
+    // read as a clear one.
+    let flagged = pagination.is_server_nonconformance();
+    record.insert("nonconformance_flag".into(), flagged.into());
+    if flagged {
+        record.insert("nonconformance_reason".into(), pagination.as_str().into());
+    }
+    rollup.record_pagination(pagination, &walk);
+
+    if let Some((index, e)) = &walk.coverage_error {
+        rollup.record_failure("coverage_extraction");
+        record.insert("outcome".into(), "failed".into());
+        record.insert("failure_category".into(), "coverage_extraction".into());
+        record.insert(
+            "failure_detail".into(),
+            bounded(&format!("page {}: {e}", index + 1), MAX_DETAIL_CHARS).into(),
+        );
+        return Ok(());
+    }
+
+    // A truncated walk never becomes a coverage number. See `TOOLS_LIST_TRUNCATED`.
+    if !pagination.cursors_exhausted() {
+        let category = pagination.truncated_category();
+        rollup.record_failure(category);
+        record.insert("outcome".into(), "failed".into());
+        record.insert("failure_category".into(), category.into());
+        record.insert(
+            "failure_detail".into(),
+            format!(
+                "tools/list walk incomplete: stopped after {} page(s) because {} ({}); {} \
+                 tool(s) and {} byte(s) were observed and are kept in the evidence store, but \
+                 a partial tool list must not be tallied as a complete one",
+                walk.page_bytes.len(),
+                pagination.as_str(),
+                pagination.attribution_str(),
+                walk.tools_observed,
+                walk.bytes_total()
+            )
+            .into(),
+        );
+        return Ok(());
+    }
+
+    // The census tool count is the **distinct** tool set (B1): a name re-listed across pages
+    // is one tool, counted and tallied once, first sighting winning. Summing per-page
+    // tallies instead let forty pages of the same two tools publish as eighty tools with one
+    // annotation inflated 40x, recorded as a clean success. The raw occurrence count stays
+    // published in `pagination.tools_total` beside it, so the de-duplication is visible.
+    let tool_count = walk.tools_distinct;
+    let engagement = Engagement::of(tool_count, &walk.tally);
+    rollup.record_success(tool_count, &walk.tally, engagement);
 
     record.insert("outcome".into(), "success".into());
-    record.insert("tool_count".into(), tools.len().into());
-    record.insert("annotation_tally".into(), tally_json(&tally));
+    record.insert("tool_count".into(), tool_count.into());
+    record.insert("annotation_tally".into(), tally_json(&walk.tally));
     record.insert("annotations_object".into(), engagement.as_str().into());
-    // P0-02's pin binds this record to the exact tool set observed. A response coverage can
-    // read but the pinner cannot (a tool with no `inputSchema`) is still a census success, as
-    // it was in July — the pin is recorded as absent with its reason, never fatal.
-    match discovery::pin_tools(&tools_list_raw) {
-        Ok((_, server_pin)) => {
-            record.insert("server_pin".into(), server_pin.to_string().into());
+    // P0-02's pin binds this record to the exact tool set observed — every occurrence on
+    // every page since P0-13 (ADR-015), *not* the de-duplicated set: a pin is over what was
+    // received, never normalised. `server_pin_unordered` sits beside it so a reader can tell
+    // "reordered" (only the primary moved) from "changed" (both moved). A response coverage
+    // can read but the pinner cannot (a tool with no `inputSchema`) is still a census
+    // success, as it was in July — the pin is recorded as absent with its reason.
+    match &walk.pins {
+        Ok(pins) => {
+            record.insert("server_pin".into(), discovery::server_pin_of(pins).to_string().into());
+            record.insert(
+                "server_pin_unordered".into(),
+                discovery::unordered_server_pin_of(pins).to_string().into(),
+            );
         }
         Err(e) => {
             record.insert("server_pin".into(), Value::Null);
-            record.insert("pin_error".into(), bounded(&e.to_string(), MAX_DETAIL_CHARS).into());
+            record.insert("server_pin_unordered".into(), Value::Null);
+            record.insert("pin_error".into(), bounded(e, MAX_DETAIL_CHARS).into());
         }
     }
     Ok(())
+}
+
+/// One server's `pagination` block (P0-13).
+///
+/// Everything here except `stopped_because` (and the attribution derived from it) is
+/// recomputed from the stored pages, so a re-derivation reproduces it without trusting the
+/// live run's arithmetic — and `tools_beyond_first_page` is the number this whole task
+/// exists to make visible: it is exactly what July's tool-weighted counts were missing for
+/// this server. On a `coverage_extraction` failure the tool figures are 0: no tool count is
+/// derivable from a walk with an unreadable page.
+fn pagination_json(record: PaginationRecord, walk: &WalkDerivation) -> Value {
+    let readable = walk.coverage_error.is_none();
+    let (observed, beyond, distinct) = if readable {
+        (walk.tools_observed, walk.tools_observed - walk.tools_on_first_page, walk.tools_distinct)
+    } else {
+        (0, 0, 0)
+    };
+    json!({
+        "pages_fetched": walk.page_bytes.len(),
+        // **Not** "complete". It asserts that the server stopped offering cursors — never
+        // that the harness saw the server's whole catalogue: a curated subset ending without
+        // a cursor reads `true` here with no mechanical signal against it.
+        "cursors_exhausted": record.cursors_exhausted(),
+        "stopped_because": record.as_str(),
+        // Who truncated the walk (B3): `server_nonconformant`, `harness_bound`,
+        // `harness_budget`, `ambiguous`, `unrecorded`, or `not_truncated`.
+        "truncation_attribution": record.attribution_str(),
+        // Every occurrence on every page, as received.
+        "tools_total": observed,
+        "tools_beyond_first_page": beyond,
+        // The census tool count: distinct names, first sighting winning.
+        "tools_distinct": distinct,
+        // Occurrences beyond the first of their name. **One-sided**: it catches a tool
+        // re-listed across pages, but not a tool *dropped* between pages, and a server that
+        // never repeats a name avoids it entirely. Re-listings are excluded from the tally.
+        "duplicate_tool_names": if readable { walk.duplicate_tool_names() } else { 0 },
+        // Names seen with more than one distinct per-tool pin — a tool redefined mid-walk.
+        // `null` when the walk could not be pinned.
+        "conflicting_tool_definitions": if readable {
+            walk.conflicting_tool_definitions().map_or(Value::Null, Value::from)
+        } else {
+            Value::Null
+        },
+        "bytes_total": walk.bytes_total(),
+    })
 }
 
 /// Whether a server's tools carry an `annotations` object at all — the server-weighted
@@ -936,6 +1443,26 @@ struct Rollup {
     tools_list_bytes: u64,
     probe_bytes: u64,
     distinct_blobs: HashMap<Digest, u64>,
+    // Pagination (P0-13), over every server whose tools/list returned at least one page.
+    paginated_servers: usize,
+    servers_paginating: usize,
+    pages_fetched_total: usize,
+    max_pages_fetched: usize,
+    /// Tools seen across every page of every server with at least one page — **including**
+    /// servers whose walk was truncated, which `tools_discovered` deliberately excludes
+    /// (they are recorded as failures). This is the honest denominator for the share of
+    /// tools that lay beyond page one.
+    tools_observed_total: usize,
+    tools_beyond_first_page: usize,
+    duplicate_tool_names: usize,
+    /// Names redefined mid-walk, summed over every walk that could be pinned.
+    conflicting_tool_definitions: usize,
+    servers_truncated: usize,
+    /// `servers_truncated`, partitioned by who truncated the walk (B3).
+    servers_truncated_by: BTreeMap<&'static str, usize>,
+    /// Discovered records carrying `nonconformance_flag: true`.
+    servers_nonconformance_flagged: usize,
+    stop_reasons: BTreeMap<&'static str, usize>,
 }
 
 impl Rollup {
@@ -950,7 +1477,7 @@ impl Rollup {
         era: &EraRecord,
         revision: Option<&str>,
         handshake: (&Digest, usize),
-        tools_list: (&Digest, usize),
+        tools_list: (&[Digest], &[usize]),
         probe: (Option<&Digest>, Option<usize>),
     ) {
         self.discovered += 1;
@@ -976,12 +1503,52 @@ impl Rollup {
         };
         *self.revisions.entry(bucket.to_string()).or_insert(0) += 1;
         self.handshake_bytes += handshake.1 as u64;
-        self.tools_list_bytes += tools_list.1 as u64;
+        // Every page of the walk, not just the first (P0-13): `tools_list_bytes` means
+        // "bytes of `tools/list` evidence this corpus holds", and a one-page server's figure
+        // is unchanged.
+        self.tools_list_bytes += tools_list.1.iter().map(|len| *len as u64).sum::<u64>();
         self.probe_bytes += probe.1.unwrap_or(0) as u64;
-        let blobs = [Some(handshake), Some(tools_list), probe.0.zip(probe.1)];
-        for (digest, len) in blobs.into_iter().flatten() {
+        for (digest, len) in [Some(handshake), probe.0.zip(probe.1)].into_iter().flatten() {
             self.distinct_blobs.insert(*digest, len as u64);
         }
+        for (digest, len) in tools_list.0.iter().zip(tools_list.1.iter()) {
+            self.distinct_blobs.insert(*digest, *len as u64);
+        }
+    }
+
+    /// One server's pagination outcome (P0-13).
+    ///
+    /// Counted over servers whose `tools/list` returned at least one page — the same
+    /// denominator as `provenance`, and deliberately *not* "successful servers", because a
+    /// truncated walk is recorded as a failure and is exactly the population a reader needs
+    /// this block to size.
+    ///
+    /// Called on every exit of [`derive_discovered`], `coverage_extraction` included, so the
+    /// per-server `pages_fetched` values always sum to `pages_fetched_total`. The tool
+    /// figures it adds are exactly the ones the server's own `pagination` block publishes
+    /// (zero for an unreadable walk), so the two can never disagree.
+    fn record_pagination(&mut self, record: PaginationRecord, walk: &WalkDerivation) {
+        let pages = walk.page_bytes.len();
+        self.paginated_servers += 1;
+        if pages > 1 {
+            self.servers_paginating += 1;
+        }
+        self.pages_fetched_total += pages;
+        self.max_pages_fetched = self.max_pages_fetched.max(pages);
+        if walk.coverage_error.is_none() {
+            self.tools_observed_total += walk.tools_observed;
+            self.tools_beyond_first_page += walk.tools_observed - walk.tools_on_first_page;
+            self.duplicate_tool_names += walk.duplicate_tool_names();
+            self.conflicting_tool_definitions += walk.conflicting_tool_definitions().unwrap_or(0);
+        }
+        if !record.cursors_exhausted() {
+            self.servers_truncated += 1;
+            *self.servers_truncated_by.entry(record.attribution_str()).or_insert(0) += 1;
+        }
+        if record.is_server_nonconformance() {
+            self.servers_nonconformance_flagged += 1;
+        }
+        *self.stop_reasons.entry(record.as_str()).or_insert(0) += 1;
     }
 
     fn record_success(&mut self, tool_count: usize, tally: &AnnotationTally, engagement: Engagement) {
@@ -1039,6 +1606,24 @@ impl Rollup {
             .collect();
         fallback_reasons.extend(self.fallback_reasons);
 
+        // Seeded with every reason plus `unrecorded`, for the same reason the two
+        // distributions above are: a bound that fired once in a thousand servers is a
+        // finding, and a bucket that is merely absent cannot be told from one that is zero.
+        let mut stop_reasons: BTreeMap<&str, usize> = StopReason::all()
+            .iter()
+            .map(|r| (r.as_str(), 0))
+            .chain([("unrecorded", 0)])
+            .collect();
+        stop_reasons.extend(self.stop_reasons);
+
+        // Seeded with every truncating attribution plus `unrecorded`, for the same reason.
+        let mut truncated_by: BTreeMap<&str, usize> = TruncationAttribution::all_truncating()
+            .iter()
+            .map(|a| (a.as_str(), 0))
+            .chain([("unrecorded", 0)])
+            .collect();
+        truncated_by.extend(self.servers_truncated_by);
+
         let derived = json!({
             "attempted": self.attempted,
             "succeeded": self.succeeded,
@@ -1064,6 +1649,49 @@ impl Rollup {
                 "era_policy": self.era_policies,
                 "fallback_reason": fallback_reasons,
                 "negotiated_spec_revision": self.revisions,
+            },
+            // P0-13. The point of this block is comparability, not novelty: July's counts
+            // were tool-weighted and a paginating server was under-counted by an unknown
+            // amount, so the re-run must be able to say *how much* was previously missing.
+            // `tools_beyond_first_page` is exactly that quantity, corpus-wide.
+            "pagination": {
+                "denominator": "servers whose tools/list returned at least one page",
+                "servers": self.paginated_servers,
+                "servers_paginating": self.servers_paginating,
+                "pct_servers_paginating": pct_2dp(self.servers_paginating, self.paginated_servers),
+                "pages_fetched_total": self.pages_fetched_total,
+                "max_pages_fetched": self.max_pages_fetched,
+                // What July missed, in tools. A zero here means the July figures were
+                // already complete, and that is itself the answer to an open question
+                // ("how many servers paginate is UNVERIFIED", O-01), not a null result.
+                "tools_observed_total": self.tools_observed_total,
+                "tools_beyond_first_page": self.tools_beyond_first_page,
+                "pct_of_tools_beyond_first_page":
+                    pct_2dp(self.tools_beyond_first_page, self.tools_observed_total),
+                "servers_truncated": self.servers_truncated,
+                // B3. Who truncated each walk. Only `harness_bound` and `harness_budget` are
+                // this harness's to subtract from a denominator; `server_nonconformant` is a
+                // server declining to be measured, and the servers with a motive to do that
+                // are the ones that declare annotations — so excluding them biases `absent`
+                // upward. An offline sensitivity bound over these records' retained page-one
+                // evidence is computable but not built (ADR-015 "Flagged").
+                "servers_truncated_by": truncated_by,
+                "servers_nonconformance_flagged": self.servers_nonconformance_flagged,
+                // Raw re-listings. Excluded from every tally and tool count (B1), published
+                // so the de-duplication is visible rather than silent.
+                "duplicate_tool_names": self.duplicate_tool_names,
+                "conflicting_tool_definitions": self.conflicting_tool_definitions,
+                "stopped_because": stop_reasons,
+                // The bounds in force, because `page_limit` means nothing without them and a
+                // reader cannot reproduce a truncation decision from the reason alone.
+                "bounds": {
+                    "max_pages": discovery::paginate::MAX_PAGES,
+                    "max_tools": discovery::paginate::MAX_TOOLS,
+                    "max_tools_enforced": "after every page, cursor or not",
+                    "max_total_bytes": discovery::paginate::MAX_TOTAL_BYTES,
+                    "max_page_bytes": discovery::paginate::MAX_PAGE_BYTES,
+                    "max_cursor_bytes": discovery::paginate::MAX_CURSOR_BYTES,
+                },
             },
             "evidence_summary": {
                 "servers_with_evidence": self.discovered,
@@ -1134,6 +1762,30 @@ pub(crate) fn finish(
         n("/server_weighted/annotations_object/some/count"),
         n("/server_weighted/annotations_object/all/count"),
     );
+    // P0-13's headline, printed because it is the number this task exists to produce: how
+    // much the pre-pagination census was missing, and whether any walk was cut short.
+    eprintln!(
+        "{label}: pagination — {} of {} servers paginated ({} pages total, max {}); {} tool(s) \
+         lay beyond page one of {} observed ({:.1}%); {} walk(s) truncated — by server {} \
+         (flagged nonconformant), by harness bound {}, by harness budget {}, ambiguous {}, \
+         unrecorded {}",
+        n("/pagination/servers_paginating"),
+        n("/pagination/servers"),
+        n("/pagination/pages_fetched_total"),
+        n("/pagination/max_pages_fetched"),
+        n("/pagination/tools_beyond_first_page"),
+        n("/pagination/tools_observed_total"),
+        pct(
+            n("/pagination/tools_beyond_first_page") as usize,
+            n("/pagination/tools_observed_total") as usize,
+        ),
+        n("/pagination/servers_truncated"),
+        n("/pagination/servers_truncated_by/server_nonconformant"),
+        n("/pagination/servers_truncated_by/harness_bound"),
+        n("/pagination/servers_truncated_by/harness_budget"),
+        n("/pagination/servers_truncated_by/ambiguous"),
+        n("/pagination/servers_truncated_by/unrecorded"),
+    );
     let with_evidence = n("/evidence_summary/servers_with_evidence");
     eprintln!(
         "{label}: evidence — {} bytes in {} distinct blobs for {with_evidence} servers ({:.0} bytes/server)",
@@ -1154,6 +1806,15 @@ pub(crate) fn finish(
             n("/pacing/max_requests_to_one_registrable_domain"),
             n("/pacing/sequences_denied_by_budget"),
         );
+        // Separate line, because it is a different event from a refused host: this is the
+        // count of tool lists *this harness's own budget* cut short (P0-13).
+        let pages_refused = n("/pacing/page_extensions_denied");
+        if pages_refused > 0 {
+            eprintln!(
+                "{label}: pacing — {pages_refused} tools/list walk(s) truncated by the domain \
+                 budget; those servers' coverage numbers are withheld, not partial"
+            );
+        }
     }
     // Checked here as well as in `run_rederive`, so a published file's politeness claim is
     // verified against its own records before the file is written, not only if someone later
@@ -1329,13 +1990,74 @@ fn observation_of(record: &Map<String, Value>) -> Result<Observation, String> {
             .and_then(Value::as_str)
             .and_then(DiscoveryPath::parse)
             .ok_or("discovery_path is missing or unrecognised")?;
+        // The whole walk, in order (P0-13). A file written before cursor following has no
+        // `tools_list_pages` array, and that is a fact about the file rather than an error:
+        // it is read as the single page it recorded, and its `pagination` block comes back
+        // `unrecorded` — which, per `PaginationRecord::cursors_exhausted`, is *not* treated as
+        // complete, so re-deriving such a file reclassifies its servers as truncated rather
+        // than silently asserting their tool lists were whole. Disclosed in P0-13's entry;
+        // no such file exists in `results/`, which is why this is the cheap direction.
+        let tools_list_pages = match evidence.get("tools_list_pages") {
+            Some(Value::Array(entries)) => {
+                if entries.is_empty() {
+                    return Err("evidence.tools_list_pages is empty — a discovery always has \
+                                at least one tools/list page"
+                        .into());
+                }
+                // B4: a walk longer than capture can produce is a malformed record, refused
+                // before a single blob is read. The store is content-addressed, so one blob
+                // referenced thousands of times keeps a crafted bundle tiny while its
+                // derivation is not — the measured case was 200 pages against a capture
+                // bound of 40, from a 22 KB file.
+                if entries.len() > discovery::paginate::MAX_PAGES {
+                    return Err(format!(
+                        "evidence.tools_list_pages has {} entries, more than the {} any capture \
+                         can produce",
+                        entries.len(),
+                        discovery::paginate::MAX_PAGES
+                    ));
+                }
+                // The declared sizes are untrusted — derivation re-measures every blob and
+                // refuses past the same ceiling — but a file that *declares* more than any
+                // capture can hold is refused here, before anything is read.
+                let declared: u64 = entries
+                    .iter()
+                    .filter_map(|e| e.get("bytes").and_then(Value::as_u64))
+                    .fold(0u64, u64::saturating_add);
+                if declared > MAX_DERIVED_WALK_BYTES as u64 {
+                    return Err(format!(
+                        "evidence.tools_list_pages declares {declared} bytes, more than the \
+                         {MAX_DERIVED_WALK_BYTES} any capture can store"
+                    ));
+                }
+                entries
+                    .iter()
+                    .enumerate()
+                    .map(|(i, entry)| {
+                        entry
+                            .get("digest")
+                            .and_then(Value::as_str)
+                            .and_then(Digest::from_hex)
+                            .ok_or_else(|| {
+                                format!(
+                                    "evidence.tools_list_pages[{i}].digest is missing or not a \
+                                     64-character lowercase hex digest"
+                                )
+                            })
+                    })
+                    .collect::<Result<Vec<_>, String>>()?
+            }
+            Some(_) => return Err("evidence.tools_list_pages is not an array".into()),
+            None => vec![digest("tools_list_raw")?],
+        };
         return Ok(Observation::Discovered {
             discovery_path,
             // Absent in a file written before P0-11, which is a fact about the file rather
             // than an error: re-derivation still works, and reports the era as unrecorded.
             era: EraRecord::from_record(record.get("era_provenance")),
             handshake: digest("handshake_raw")?,
-            tools_list: digest("tools_list_raw")?,
+            tools_list_pages,
+            pagination: PaginationRecord::from_record(record.get("pagination")),
         });
     }
 
@@ -1400,9 +2122,38 @@ mod tests {
     /// bucket that *every* successful modern discovery produces was never exercised by any
     /// report test, so no assertion covered the shape the modern path actually writes.
     fn discovery(path: DiscoveryPath, revision: &str, tools_json: &str) -> Discovery {
-        let tools_list_raw =
-            format!(r#"{{"jsonrpc":"2.0","id":1,"result":{{"tools":[{tools_json}]}}}}"#)
-                .into_bytes();
+        walk(path, revision, &[tools_json], StopReason::NoCursor)
+    }
+
+    /// One `tools/list` page, in the legacy result shape.
+    fn page(tools_json: &str, next_cursor: Option<&str>) -> Vec<u8> {
+        let cursor = match next_cursor {
+            Some(c) => format!(r#","nextCursor":"{c}""#),
+            None => String::new(),
+        };
+        format!(r#"{{"jsonrpc":"2.0","id":1,"result":{{"tools":[{tools_json}]{cursor}}}}}"#)
+            .into_bytes()
+    }
+
+    /// A discovery whose `tools/list` arrived across several pages (P0-13), ending for the
+    /// stated reason. Every page but the last carries a cursor, because that is what a real
+    /// walk of this length looks like and what the stop reason has to be consistent with.
+    fn walk(
+        path: DiscoveryPath,
+        revision: &str,
+        pages: &[&str],
+        stopped_because: StopReason,
+    ) -> Discovery {
+        let last = pages.len().saturating_sub(1);
+        let tools_list_pages: Vec<Vec<u8>> = pages
+            .iter()
+            .enumerate()
+            .map(|(i, tools)| {
+                let cursor = (i < last || !stopped_because.cursors_exhausted())
+                    .then(|| format!("cursor-{}", i + 1));
+                page(tools, cursor.as_deref())
+            })
+            .collect();
         let legacy_handshake = format!(
             r#"{{"jsonrpc":"2.0","id":0,"result":{{"protocolVersion":"{revision}","capabilities":{{}},"serverInfo":{{"name":"fake","version":"0"}}}}}}"#
         )
@@ -1450,7 +2201,11 @@ mod tests {
 
         Discovery {
             handshake_raw,
-            tools_list_raw,
+            pagination: discovery::PaginationOutcome {
+                pages_fetched: tools_list_pages.len(),
+                stopped_because,
+            },
+            tools_list_pages,
             probe_raw,
             negotiated_spec_revision: negotiated,
             discovery_path: path,
@@ -1498,7 +2253,8 @@ mod tests {
             record_discovery(&store, &discovery(DiscoveryPath::ServerDiscover, "2026-07-28", ""), &stop),
         );
         let mut no_tools_array = discovery(init, "2025-11-25", "");
-        no_tools_array.tools_list_raw = br#"{"jsonrpc":"2.0","id":1,"result":{}}"#.to_vec();
+        no_tools_array.tools_list_pages =
+            vec![br#"{"jsonrpc":"2.0","id":1,"result":{}}"#.to_vec()];
         push("malformed-tools-list", record_discovery(&store, &no_tools_array, &stop));
         push("unpinnable", record_discovery(&store, &discovery(init, "2025-11-25", UNPINNABLE), &stop));
         push(
@@ -1647,7 +2403,12 @@ mod tests {
 
         let mut every_tool = Vec::new();
         for body in [ALL, NONE, SOME, "", UNPINNABLE, NONE, ""] {
-            every_tool.extend(coverage::tool_coverage(&discovery(DiscoveryPath::Initialize, "x", body).tools_list_raw).expect("parse"));
+            every_tool.extend(
+                coverage::tool_coverage(
+                    &discovery(DiscoveryPath::Initialize, "x", body).tools_list_pages[0],
+                )
+                .expect("parse"),
+            );
         }
         assert_eq!(report["tools_discovered"], every_tool.len());
         assert_eq!(report["annotation_tally"], tally_json(&coverage::tally(&every_tool)));
@@ -2184,6 +2945,7 @@ mod tests {
                 "max_requests_to_one_registrable_domain": 4,
                 "registrable_domains_contacted": 2,
                 "overshoot_requests": 0,
+                "page_extensions_denied": 0,
             },
             "servers": [
                 {
@@ -2402,7 +3164,10 @@ mod tests {
         {
             let mut ident = identity(name);
             let waited = std::time::Duration::from_millis(waited_ms);
-            ident.insert("pacing".into(), pacing_record("example.test", requests, waited));
+            ident.insert(
+                "pacing".into(),
+                pacing_record("example.test", requests, waited, discovery::MAX_REQUESTS_PER_DISCOVERY),
+            );
             let observation = if i == 0 {
                 record_discovery(
                     &store,
@@ -2421,7 +3186,7 @@ mod tests {
         let mut refused = identity("refused");
         refused.insert(
             "pacing".into(),
-            pacing_record("example.test", 0, std::time::Duration::ZERO),
+            pacing_record("example.test", 0, std::time::Duration::ZERO, 0),
         );
         servers.push(ServerObservation {
             identity: refused,
@@ -2453,6 +3218,7 @@ mod tests {
                 "registrable_domains_seen": 1,
                 "max_requests_to_one_registrable_domain": 6,
                 "sequences_denied_by_budget": 1,
+                "page_extensions_denied": 0,
                 "overshoot_requests": 0,
                 "registrable_domains_listed": 1,
                 "registrable_domains": [{
@@ -2478,4 +3244,584 @@ mod tests {
         assert_eq!(regenerated["servers"][2]["pacing"]["requests_sent"], 0);
         assert_eq!(regenerated["pacing"]["requests_sent"], 6);
     }
+
+    // ---- P0-13: pagination through the derivation path ----
+
+    /// Three pages of two tools each, plus a one-page server for contrast, driven through the
+    /// real live path: `record_discovery` into a real store, `build_report` back out of it.
+    fn paginated_run(dir: &Path) -> (PathBuf, PathBuf, Value) {
+        let evidence_dir = dir.join("evidence");
+        let store = Mutex::new(BlobStore::open(&evidence_dir).expect("open store"));
+        let stop = StopFlag::default();
+        let init = DiscoveryPath::Initialize;
+
+        let servers = vec![
+            ServerObservation {
+                identity: identity("three-pages"),
+                observation: record_discovery(
+                    &store,
+                    &walk(init, "2025-11-25", &[ALL, NONE, SOME], StopReason::NoCursor),
+                    &stop,
+                ),
+            },
+            ServerObservation {
+                identity: identity("one-page"),
+                observation: record_discovery(&store, &discovery(init, "2025-11-25", ALL), &stop),
+            },
+            // Cut off by this harness's own page bound: a *partial* tool list, which must not
+            // become a coverage number.
+            ServerObservation {
+                identity: identity("truncated"),
+                observation: record_discovery(
+                    &store,
+                    &walk(init, "2025-11-25", &[ALL, NONE], StopReason::PageLimit),
+                    &stop,
+                ),
+            },
+        ];
+
+        let header = RunHeader {
+            stage: "test",
+            sample_size_requested: 3,
+            candidates_selected: 3,
+            attempted: 3,
+            stop_reason: None,
+            evidence_store: &evidence_dir,
+            sample_seed: Some(7),
+        }
+        .into_map()
+        .expect("header");
+
+        let store = store.into_inner().expect("lock");
+        let report = build_report(&store, header, &servers).expect("build");
+        let results = dir.join("results.json");
+        write_report(&results, &report).expect("write");
+        (results, evidence_dir, report)
+    }
+
+    /// Every page is tallied, every page is in the evidence, and the pin covers the whole
+    /// walk — the three things that were silently false before P0-13.
+    #[test]
+    fn a_multi_page_server_tallies_every_page_and_pins_the_whole_walk() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (_, _, report) = paginated_run(dir.path());
+        let server = &report["servers"][0];
+
+        assert_eq!(server["name"], "three-pages");
+        assert_eq!(server["outcome"], "success");
+        // Two tools per page across three pages. Page one alone would have said 2.
+        assert_eq!(server["tool_count"], 6);
+        assert_eq!(server["pagination"]["pages_fetched"], 3);
+        assert_eq!(server["pagination"]["cursors_exhausted"], true);
+        assert_eq!(server["pagination"]["stopped_because"], "no_cursor");
+        assert_eq!(server["pagination"]["tools_total"], 6);
+        assert_eq!(
+            server["pagination"]["tools_beyond_first_page"], 4,
+            "this is the per-server quantity July was missing"
+        );
+        assert_eq!(server["pagination"]["duplicate_tool_names"], 0);
+
+        // One evidence blob per page, in walk order, and `tools_list_raw` still means page
+        // one — so a pre-P0-13 reader of that key sees exactly what it always saw.
+        let pages = server["evidence"]["tools_list_pages"].as_array().expect("pages array");
+        assert_eq!(pages.len(), 3);
+        assert_eq!(server["evidence"]["tools_list_raw"]["digest"], pages[0]["digest"]);
+        assert_eq!(server["evidence"]["tools_list_raw"]["bytes"], pages[0]["bytes"]);
+        assert_eq!(
+            server["pagination"]["bytes_total"].as_u64().expect("bytes"),
+            pages.iter().map(|p| p["bytes"].as_u64().expect("bytes")).sum::<u64>()
+        );
+
+        // The pin is over the walk, and is *not* the pin page one alone would have produced.
+        let fixture = walk(DiscoveryPath::Initialize, "2025-11-25", &[ALL, NONE, SOME], StopReason::NoCursor);
+        let (_, whole_walk) = discovery::pin_pages(&fixture.tools_list_pages).expect("pin");
+        let (_, page_one_only) =
+            discovery::pin_tools(&fixture.tools_list_pages[0]).expect("pin page one");
+        assert_eq!(server["server_pin"], whole_walk.to_string());
+        assert_ne!(
+            server["server_pin"], page_one_only.to_string(),
+            "before P0-13 every published pin was the page-one one"
+        );
+
+        // The single-page server beside it is unchanged in every respect.
+        let single = &report["servers"][1];
+        assert_eq!(single["tool_count"], 2);
+        assert_eq!(single["pagination"]["pages_fetched"], 1);
+        assert_eq!(single["pagination"]["tools_beyond_first_page"], 0);
+        assert_eq!(single["pagination"]["cursors_exhausted"], true);
+    }
+
+    /// **The rule this task turns on.** A truncated walk is recorded as a failure with its
+    /// own category, and contributes no tally, no tool count and no pin — because a partial
+    /// tool list filed as a complete one would corrupt both census readings: the
+    /// tool-weighted tally would gain a prefix of a server, and the server-weighted
+    /// `explicit.on_every_tool` would claim "every tool" over a subset, which is a *more*
+    /// favourable claim than the evidence supports.
+    #[test]
+    fn a_truncated_walk_is_a_failure_rather_than_a_partial_coverage_number() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (_, _, report) = paginated_run(dir.path());
+        let truncated = &report["servers"][2];
+
+        assert_eq!(truncated["name"], "truncated");
+        assert_eq!(truncated["outcome"], "failed");
+        assert_eq!(truncated["failure_category"], "tools_list_truncated_by_bound");
+        assert_eq!(truncated["pagination"]["cursors_exhausted"], false);
+        assert_eq!(truncated["pagination"]["stopped_because"], "page_limit");
+        assert_eq!(truncated["pagination"]["truncation_attribution"], "harness_bound");
+        assert_eq!(
+            truncated["nonconformance_flag"], false,
+            "a bound this harness chose is not the server's nonconformance"
+        );
+        // What it *did* see is still stated, and its pages are still in the evidence store —
+        // withheld from the headline numbers, not discarded.
+        assert_eq!(truncated["pagination"]["tools_total"], 4);
+        assert_eq!(truncated["evidence"]["tools_list_pages"].as_array().expect("pages").len(), 2);
+        let detail = truncated["failure_detail"].as_str().expect("detail");
+        assert!(detail.contains("page_limit"), "{detail}");
+        assert!(detail.contains("must not be tallied"), "{detail}");
+
+        for withheld in ["tool_count", "annotation_tally", "annotations_object", "server_pin"] {
+            assert!(
+                truncated.get(withheld).is_none(),
+                "a truncated walk must contribute no {withheld}"
+            );
+        }
+
+        // Corpus-wide: its own partitioned bucket, and its tools are outside
+        // `tools_discovered`.
+        assert_eq!(report["failure_categories"]["tools_list_truncated_by_bound"], 1);
+        assert_eq!(report["pagination"]["servers_truncated_by"]["harness_bound"], 1);
+        assert_eq!(report["succeeded"], 2);
+        assert_eq!(report["tools_discovered"], 8, "6 from the walk plus 2 from the one-pager");
+        assert_eq!(
+            report["pagination"]["tools_observed_total"], 12,
+            "the pagination denominator *includes* the truncated server, which is why it is \
+             a different number from tools_discovered"
+        );
+    }
+
+    /// The corpus-wide block, which is what a reader needs to size the correction rather
+    /// than have it applied silently.
+    #[test]
+    fn the_pagination_header_sizes_what_was_previously_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (_, _, report) = paginated_run(dir.path());
+        let block = &report["pagination"];
+
+        assert_eq!(block["servers"], 3);
+        assert_eq!(block["servers_paginating"], 2);
+        assert_eq!(block["pct_servers_paginating"], 66.67);
+        assert_eq!(block["pages_fetched_total"], 6);
+        assert_eq!(block["max_pages_fetched"], 3);
+        assert_eq!(block["tools_beyond_first_page"], 6, "4 from the walk, 2 from the truncated one");
+        assert_eq!(block["pct_of_tools_beyond_first_page"], 50.0);
+        assert_eq!(block["servers_truncated"], 1);
+        assert_eq!(block["duplicate_tool_names"], 0);
+
+        // Seeded with every reason, so a bound that never fired reads as zero rather than
+        // being absent — and the bounds in force are published, because `page_limit` means
+        // nothing without them.
+        let reasons = block["stopped_because"].as_object().expect("reasons");
+        assert_eq!(reasons.len(), StopReason::all().len() + 1, "every reason plus `unrecorded`");
+        assert_eq!(reasons["no_cursor"], 2);
+        assert_eq!(reasons["page_limit"], 1);
+        assert_eq!(reasons["cursor_repeated"], 0);
+        assert_eq!(reasons["unrecorded"], 0);
+        assert_eq!(block["bounds"]["max_pages"], discovery::paginate::MAX_PAGES);
+        assert_eq!(block["bounds"]["max_tools"], discovery::paginate::MAX_TOOLS);
+        assert_eq!(block["bounds"]["max_total_bytes"], discovery::paginate::MAX_TOTAL_BYTES);
+        assert_eq!(block["bounds"]["max_cursor_bytes"], discovery::paginate::MAX_CURSOR_BYTES);
+    }
+
+    /// **P0-10's central claim, with pagination in it.** A multi-page results file —
+    /// including a truncated walk, whose stop reason is the one part of the block that is
+    /// *not* derivable from any stored page — regenerates byte for byte from stored evidence
+    /// with no network.
+    #[test]
+    fn a_multi_page_results_file_rederives_byte_for_byte() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (results, _, _) = paginated_run(dir.path());
+
+        let outcome = rederive(&results, None).expect("rederive");
+        assert!(
+            outcome.byte_identical,
+            "multi-page evidence must re-derive exactly; differs at {:?}",
+            outcome.differences
+        );
+        assert_eq!(outcome.servers, 3);
+        assert_eq!(outcome.servers_with_evidence, 3);
+    }
+
+    /// A page blob missing from the store fails the re-derivation loudly, exactly as a
+    /// missing handshake blob does — so "the evidence no longer reproduces the file" cannot
+    /// be mistaken for "that server had fewer pages".
+    #[test]
+    fn a_missing_later_page_blob_fails_rederivation_loudly() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (results, evidence_dir, report) = paginated_run(dir.path());
+
+        let third = report["servers"][0]["evidence"]["tools_list_pages"][2]["digest"]
+            .as_str()
+            .expect("digest")
+            .to_string();
+        let path = evidence_dir.join(&third);
+        assert!(path.is_file(), "page blob must exist at {}", path.display());
+        std::fs::remove_file(&path).expect("remove the third page's blob");
+
+        let err = match rederive(&results, None) {
+            Err(e) => e,
+            Ok(_) => panic!("a missing page blob must fail the re-derivation"),
+        };
+        assert!(err.to_string().contains(&third), "the error must name the digest: {err}");
+    }
+
+    /// A results file written **before** cursor following has no `tools_list_pages` and no
+    /// `pagination` block. Re-deriving it must read its single response as one page and
+    /// report the walk as `unrecorded` — **not** as `no_cursor`.
+    ///
+    /// The distinction is the whole point: such a file's tool list is page one, and whether
+    /// the server had more pages is unknowable from it. Calling that "complete" would be the
+    /// same substitution this project refuses when it insists on `unverifiable` over
+    /// `holds`. The cost is stated rather than hidden: such a file no longer re-derives
+    /// byte-for-byte (its servers are reclassified as truncated), which is acceptable
+    /// precisely because no file of that shape exists in `results/` — the committed July
+    /// data predates evidence persistence entirely and is already refused.
+    #[test]
+    fn a_pre_pagination_results_file_is_read_as_one_page_and_never_asserted_complete() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (results, _, _) = paginated_run(dir.path());
+
+        // Strip the two P0-13 keys from the one-page server's record, leaving the P0-12 shape.
+        let mut file: Value =
+            serde_json::from_str(&std::fs::read_to_string(&results).expect("read")).expect("json");
+        let record = file["servers"][1].as_object_mut().expect("record");
+        record.remove("pagination");
+        record["evidence"].as_object_mut().expect("evidence").remove("tools_list_pages");
+        let legacy_shape = dir.path().join("legacy.json");
+        std::fs::write(&legacy_shape, serde_json::to_string_pretty(&file).expect("write"))
+            .expect("write");
+
+        let outcome = rederive(&legacy_shape, None).expect("a pre-P0-13 file must still re-derive");
+        let regenerated: Value = serde_json::from_str(&outcome.regenerated).expect("json");
+        let server = &regenerated["servers"][1];
+
+        assert_eq!(server["pagination"]["pages_fetched"], 1, "its one response is one page");
+        assert_eq!(
+            server["pagination"]["stopped_because"], "unrecorded",
+            "this file predates cursor following and cannot claim it ran out of cursors"
+        );
+        assert_eq!(server["pagination"]["cursors_exhausted"], false);
+        assert_eq!(
+            server["failure_category"], "tools_list_truncated_unrecorded",
+            "an unrecorded walk is not a complete one, so its tally is withheld rather than \
+             published as if the page-one list were the whole list"
+        );
+    }
+
+    /// Tool names repeated across pages are counted and published rather than swallowed.
+    ///
+    /// Not a bound and not an error: a cursor walk has no snapshot isolation in the
+    /// protocol, so a server mutating its tool set mid-walk may legitimately re-list a tool.
+    /// It is the one mechanical signal available that this happened, so it is a number on
+    /// the record.
+    #[test]
+    fn tool_names_repeated_across_pages_are_counted_and_published() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let evidence_dir = dir.path().join("evidence");
+        let store = Mutex::new(BlobStore::open(&evidence_dir).expect("open store"));
+        let stop = StopFlag::default();
+
+        // The same two tools on both pages, plus one genuinely new one.
+        let servers = vec![ServerObservation {
+            identity: identity("repeats"),
+            observation: record_discovery(
+                &store,
+                &walk(
+                    DiscoveryPath::Initialize,
+                    "2025-11-25",
+                    &[ALL, &format!("{ALL},{UNPINNABLE}")],
+                    StopReason::NoCursor,
+                ),
+                &stop,
+            ),
+        }];
+        let header = RunHeader {
+            stage: "test",
+            sample_size_requested: 1,
+            candidates_selected: 1,
+            attempted: 1,
+            stop_reason: None,
+            evidence_store: &evidence_dir,
+            sample_seed: None,
+        }
+        .into_map()
+        .expect("header");
+        let report = build_report(&store.into_inner().expect("lock"), header, &servers)
+            .expect("build");
+
+        let server = &report["servers"][0];
+        assert_eq!(server["outcome"], "success", "a repeat is a finding, not a failure");
+        assert_eq!(server["tool_count"], 3, "distinct tools, each counted once");
+        assert_eq!(server["pagination"]["tools_total"], 5, "every occurrence, as received");
+        assert_eq!(server["pagination"]["tools_distinct"], 3);
+        assert_eq!(server["pagination"]["duplicate_tool_names"], 2);
+        assert_eq!(report["pagination"]["duplicate_tool_names"], 2);
+        assert_eq!(report["tools_discovered"], 3);
+    }
+
+    /// Run one discovery through the live path and build its report.
+    fn one_server_report(dir: &Path, name: &str, discovery: &Discovery) -> Value {
+        let evidence_dir = dir.join("evidence");
+        let store = Mutex::new(BlobStore::open(&evidence_dir).expect("open store"));
+        let stop = StopFlag::default();
+        let servers = vec![ServerObservation {
+            identity: identity(name),
+            observation: record_discovery(&store, discovery, &stop),
+        }];
+        let header = RunHeader {
+            stage: "test",
+            sample_size_requested: 1,
+            candidates_selected: 1,
+            attempted: 1,
+            stop_reason: None,
+            evidence_store: &evidence_dir,
+            sample_seed: None,
+        }
+        .into_map()
+        .expect("header");
+        build_report(&store.into_inner().expect("lock"), header, &servers).expect("build")
+    }
+
+    /// **B1(a), the measured attack closed.** Forty pages serving the same two tools used to
+    /// publish as `tool_count = 80`, `tools_discovered = 80` and `readOnlyHint.explicit = 80`
+    /// — two real tools as eighty, one annotation inflated 40x — recorded as a clean
+    /// success. The census now counts and tallies distinct names; the raw occurrence count is
+    /// still published, beside it, so the de-duplication is visible rather than silent.
+    #[test]
+    fn forty_pages_of_the_same_two_tools_publish_as_two_tools() {
+        let two = r#"{"name":"r","inputSchema":{},"annotations":{"readOnlyHint":true}},{"name":"w","inputSchema":{},"annotations":{"readOnlyHint":false}}"#;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pages = vec![two; discovery::paginate::MAX_PAGES];
+        let report = one_server_report(
+            dir.path(),
+            "replayer",
+            &walk(DiscoveryPath::Initialize, "2025-11-25", &pages, StopReason::NoCursor),
+        );
+
+        let server = &report["servers"][0];
+        assert_eq!(server["outcome"], "success");
+        assert_eq!(server["tool_count"], 2);
+        assert_eq!(server["annotation_tally"]["readOnlyHint"]["explicit"], 2);
+        assert_eq!(report["tools_discovered"], 2);
+        assert_eq!(report["annotation_tally"]["readOnlyHint"]["explicit"], 2);
+        assert_eq!(server["pagination"]["tools_total"], 80);
+        assert_eq!(server["pagination"]["duplicate_tool_names"], 78);
+        assert_eq!(server["pagination"]["conflicting_tool_definitions"], 0);
+        // The pin is still over what was *received*, never the de-duplicated set.
+        let (_, received_pin) = discovery::pin_pages(
+            &pages.iter().map(|p| page(p, None)).collect::<Vec<_>>(),
+        )
+        .expect("pin");
+        assert_eq!(server["server_pin"], received_pin.to_string());
+    }
+
+    /// **Also-fix 5.** A name re-listed with a *different* definition is counted once in the
+    /// tally (first sighting wins) and surfaced as a conflict, which `duplicate_tool_names`
+    /// alone cannot distinguish from a harmless re-listing.
+    #[test]
+    fn a_tool_redefined_mid_walk_is_tallied_once_and_published_as_a_conflict() {
+        let first = r#"{"name":"t","inputSchema":{},"annotations":{"readOnlyHint":true}}"#;
+        let second = r#"{"name":"t","inputSchema":{},"annotations":{"readOnlyHint":false}}"#;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let report = one_server_report(
+            dir.path(),
+            "redefiner",
+            &walk(DiscoveryPath::Initialize, "2025-11-25", &[first, second], StopReason::NoCursor),
+        );
+        let server = &report["servers"][0];
+        assert_eq!(server["tool_count"], 1);
+        assert_eq!(server["annotation_tally"]["readOnlyHint"]["explicit"], 1);
+        assert_eq!(server["pagination"]["duplicate_tool_names"], 1);
+        assert_eq!(server["pagination"]["conflicting_tool_definitions"], 1);
+        assert_eq!(report["pagination"]["conflicting_tool_definitions"], 1);
+    }
+
+    /// **B3.** A walk its own server truncated with an unfollowable cursor is filed under
+    /// `tools_list_truncated_by_server`, carries `nonconformance_flag: true` with the reason,
+    /// and is counted under `server_nonconformant` — never pooled with the harness-side
+    /// buckets, because only those are the harness's to subtract.
+    #[test]
+    fn a_server_truncated_walk_is_partitioned_and_flagged() {
+        for reason in [
+            StopReason::CursorEmpty,
+            StopReason::CursorNotAString,
+            StopReason::CursorTooLong,
+            StopReason::CursorRepeated,
+        ] {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let report = one_server_report(
+                dir.path(),
+                "dodger",
+                &walk(DiscoveryPath::Initialize, "2025-11-25", &[ALL], reason),
+            );
+            let server = &report["servers"][0];
+            assert_eq!(server["failure_category"], "tools_list_truncated_by_server", "{reason}");
+            assert_eq!(server["nonconformance_flag"], true, "{reason}");
+            assert_eq!(server["nonconformance_reason"], reason.as_str());
+            assert_eq!(server["pagination"]["truncation_attribution"], "server_nonconformant");
+            let by = &report["pagination"]["servers_truncated_by"];
+            assert_eq!(by["server_nonconformant"], 1, "{reason}");
+            for other in ["harness_bound", "harness_budget", "ambiguous", "unrecorded"] {
+                assert_eq!(by[other], 0, "{reason}: seeded, and not pooled into {other}");
+            }
+            assert_eq!(report["pagination"]["servers_nonconformance_flagged"], 1);
+        }
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let report = one_server_report(
+            dir.path(),
+            "budget",
+            &walk(DiscoveryPath::Initialize, "2025-11-25", &[ALL], StopReason::BudgetExhausted),
+        );
+        assert_eq!(report["servers"][0]["failure_category"], "tools_list_truncated_by_budget");
+        assert_eq!(report["servers"][0]["nonconformance_flag"], false);
+        assert_eq!(report["pagination"]["servers_truncated_by"]["harness_budget"], 1);
+    }
+
+    /// **Also-fix 1.** A `coverage_extraction` failure used to return before its walk was
+    /// counted, so it was absent from the pagination denominator while its own record said
+    /// the walk was finished, and per-server `pages_fetched` no longer summed to
+    /// `pages_fetched_total`. Every exit now counts it.
+    #[test]
+    fn a_coverage_extraction_failure_is_still_in_the_pagination_denominator() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let report = one_server_report(
+            dir.path(),
+            "unreadable",
+            &walk(DiscoveryPath::Initialize, "2025-11-25", &[ALL, "not a tool"], StopReason::NoCursor),
+        );
+        let server = &report["servers"][0];
+        assert_eq!(server["failure_category"], "coverage_extraction");
+        assert_eq!(server["pagination"]["pages_fetched"], 2);
+        assert_eq!(report["pagination"]["servers"], 1);
+        assert_eq!(report["pagination"]["pages_fetched_total"], 2);
+        assert_eq!(report["pagination"]["stopped_because"]["no_cursor"], 1);
+    }
+
+    /// **B4, the measured amplification refused.** A results file whose record references
+    /// one tiny blob far more times than any capture can produce — 200 pages against a
+    /// capture bound of 40 — used to re-derive, holding every reference resident (184 MB
+    /// from a 22 KB file and a 922 KB store). It is now refused as a malformed record before
+    /// a blob is read; so is a record *declaring* more bytes than any capture can store.
+    #[test]
+    fn a_crafted_bundle_cannot_amplify_rederivation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (results, _, _) = paginated_run(dir.path());
+        let original: Value =
+            serde_json::from_str(&std::fs::read_to_string(&results).expect("read")).expect("json");
+        let first = original["servers"][0]["evidence"]["tools_list_pages"][0].clone();
+
+        let mut crafted = original.clone();
+        crafted["servers"][0]["evidence"]["tools_list_pages"] =
+            Value::Array(vec![first.clone(); 200]);
+        let err = split_results(crafted).err().expect("200 pages must be refused");
+        assert!(err.contains("more than the 40"), "{err}");
+
+        let mut at_bound = original.clone();
+        at_bound["servers"][0]["evidence"]["tools_list_pages"] =
+            Value::Array(vec![first.clone(); discovery::paginate::MAX_PAGES]);
+        assert!(split_results(at_bound).is_ok(), "exactly the capture bound is still readable");
+
+        let mut overstated = original;
+        let mut huge = first;
+        huge["bytes"] = Value::from(u64::MAX / 2);
+        overstated["servers"][0]["evidence"]["tools_list_pages"] = Value::Array(vec![huge]);
+        let err = split_results(overstated).err().expect("declared bytes must be refused");
+        assert!(err.contains("declares"), "{err}");
+    }
+
+    /// **Also-fix 6.** `page_extensions_denied` is a lower bound on the budget-truncated
+    /// records, not an equality: a record can lose its `pagination` block to a later failure,
+    /// and `census-pin-stability` runs two walks under one permit and writes no block at
+    /// all. Both used to make the guard reject a correct file. The direction that matters —
+    /// a header under-reporting the refusals its own records show — is still caught.
+    #[test]
+    fn the_page_refusal_guard_is_a_lower_bound_not_an_equality() {
+        let report = |claimed: u64, servers: Value| {
+            json!({
+                "pacing": {
+                    "applies": true,
+                    "per_discovery_reservation": 5,
+                    "requests_sent": 0,
+                    "waited_ms_total": 0,
+                    "sequences_denied_by_budget": 0,
+                    "max_requests_to_one_registrable_domain": 0,
+                    "registrable_domains_contacted": 0,
+                    "overshoot_requests": 0,
+                    "page_extensions_denied": claimed,
+                },
+                "servers": servers,
+            })
+        };
+        // pin_stability's shape: two refusals under one permit, and no pagination block.
+        assert!(verify_pacing_self_consistent(&report(2, json!([{ "name": "a" }]))).is_ok());
+        // A refusal followed by evidence_store_error: the header has it, the record does not.
+        assert!(
+            verify_pacing_self_consistent(&report(
+                1,
+                json!([{ "failure_category": "evidence_store_error" }])
+            ))
+            .is_ok()
+        );
+        let truncated = json!([{ "pagination": { "stopped_because": "budget_exhausted" } }]);
+        assert!(verify_pacing_self_consistent(&report(1, truncated.clone())).is_ok());
+        let problems = verify_pacing_self_consistent(&report(0, truncated))
+            .expect_err("a header under-reporting its own records' refusals is rejected");
+        assert!(problems[0].contains("page_extensions_denied"), "{problems:?}");
+    }
+
+    /// A malformed later page fails the whole server as `coverage_extraction`, naming the
+    /// page — not silently tallying the pages that did parse, which would publish a partial
+    /// list under a complete-looking record.
+    #[test]
+    fn a_malformed_later_page_fails_the_server_and_names_the_page() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let evidence_dir = dir.path().join("evidence");
+        let store = Mutex::new(BlobStore::open(&evidence_dir).expect("open store"));
+        let stop = StopFlag::default();
+
+        let mut fixture =
+            walk(DiscoveryPath::Initialize, "2025-11-25", &[ALL, NONE], StopReason::NoCursor);
+        fixture.tools_list_pages[1] = br#"{"jsonrpc":"2.0","id":1,"result":{}}"#.to_vec();
+        let servers = vec![ServerObservation {
+            identity: identity("bad-second-page"),
+            observation: record_discovery(&store, &fixture, &stop),
+        }];
+        let header = RunHeader {
+            stage: "test",
+            sample_size_requested: 1,
+            candidates_selected: 1,
+            attempted: 1,
+            stop_reason: None,
+            evidence_store: &evidence_dir,
+            sample_seed: None,
+        }
+        .into_map()
+        .expect("header");
+        let report = build_report(&store.into_inner().expect("lock"), header, &servers)
+            .expect("build");
+
+        let server = &report["servers"][0];
+        assert_eq!(server["outcome"], "failed");
+        assert_eq!(server["failure_category"], "coverage_extraction");
+        assert!(
+            server["failure_detail"].as_str().expect("detail").starts_with("page 2:"),
+            "the detail must say which page: {}",
+            server["failure_detail"]
+        );
+        assert!(server.get("tool_count").is_none());
+        assert_eq!(report["tools_discovered"], 0);
+    }
+
 }

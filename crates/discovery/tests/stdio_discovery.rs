@@ -5,7 +5,9 @@
 //! P0-11 adds the era-negotiation half: modern-only, legacy-only and dual-era servers, and
 //! the three `2026-07-28` error codes whose handling the spec prescribes and P0-09 got wrong.
 
-use discovery::{DiscoveryClient, DiscoveryError, DiscoveryPath, FallbackReason, RevisionSource};
+use discovery::{
+    DiscoveryClient, DiscoveryError, DiscoveryPath, FallbackReason, RevisionSource, StopReason,
+};
 
 fn fake_server_path() -> &'static str {
     env!("CARGO_BIN_EXE_fake-mcp-stdio-server")
@@ -39,7 +41,7 @@ fn discover_succeeds_against_a_real_stdio_server() {
     assert_eq!(handshake["result"]["serverInfo"]["name"], "fake-mcp-stdio-server");
 
     let tools: serde_json::Value =
-        serde_json::from_slice(&discovery.tools_list_raw).expect("valid JSON");
+        serde_json::from_slice(&discovery.tools_list_pages[0]).expect("valid JSON");
     assert_eq!(tools["result"]["tools"][0]["name"], "read_file");
 }
 
@@ -69,7 +71,7 @@ fn discover_succeeds_against_a_modern_only_stdio_server() {
     );
 
     let tools: serde_json::Value =
-        serde_json::from_slice(&discovery.tools_list_raw).expect("valid JSON");
+        serde_json::from_slice(&discovery.tools_list_pages[0]).expect("valid JSON");
     assert_eq!(tools["result"]["tools"][0]["name"], "read_file");
     assert_eq!(
         tools["result"]["resultType"], "complete",
@@ -189,7 +191,7 @@ fn a_stdio_server_that_exits_on_an_unknown_method_is_still_discovered() {
     );
 
     let tools: serde_json::Value =
-        serde_json::from_slice(&discovery.tools_list_raw).expect("valid JSON");
+        serde_json::from_slice(&discovery.tools_list_pages[0]).expect("valid JSON");
     assert_eq!(tools["result"]["tools"][0]["name"], "read_file");
 }
 
@@ -213,7 +215,7 @@ fn a_stdio_server_that_answers_the_probe_is_not_respawned_for_the_fallback() {
          re-spawned child would have restarted its id counter at 0"
     );
     let tools: serde_json::Value =
-        serde_json::from_slice(&discovery.tools_list_raw).expect("valid JSON");
+        serde_json::from_slice(&discovery.tools_list_pages[0]).expect("valid JSON");
     assert_eq!(tools["id"], 2, "and tools/list must be request 2 on that same transport");
 }
 
@@ -264,5 +266,42 @@ fn discover_is_unblocked_by_the_watchdog_when_the_server_never_responds() {
         start.elapsed() < std::time::Duration::from_secs(10),
         "watchdog should have unblocked discover() within a few seconds of the 2s timeout, took {:?}",
         start.elapsed()
+    );
+}
+
+/// P0-13 over stdio: the cursor walk is era-independent, so the stdio half of the suite
+/// gets the same claim the HTTP half does — against a real subprocess, not a mock.
+///
+/// The fake answers `-32602` to a cursor it did not issue, so a client that mangled the
+/// cursor fails here; one that dropped it is re-served page one and stopped by the walk's
+/// cycle check rather than collecting page one three times. The
+/// walk is also what proves the cursor survives a transport whose framing is one JSON
+/// message per line: a cursor is server-controlled text going back out on the wire, and
+/// `serde_json`'s escaping is the only thing between it and a broken frame.
+#[test]
+fn a_paginated_stdio_tools_list_is_followed_to_the_end() {
+    let mut client = DiscoveryClient::stdio(fake_server_path(), &["paginated"]).expect("spawn");
+    let discovery = client.discover().expect("a paginated tool list must be discoverable");
+
+    assert_eq!(discovery.pagination.pages_fetched, 3);
+    assert_eq!(discovery.pagination.stopped_because, StopReason::NoCursor);
+    assert!(discovery.pagination.cursors_exhausted());
+    assert_eq!(discovery.tools_list_pages.len(), 3);
+
+    // One tool per page, in walk order, and the pin covers all three.
+    let (pins, server_pin) =
+        discovery::pin_pages(&discovery.tools_list_pages).expect("pin the walk");
+    assert_eq!(
+        pins.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+        vec!["first", "second", "third"]
+    );
+    // Page one alone would have pinned one tool. That difference is the whole defect.
+    let (page_one_pins, page_one_pin) =
+        discovery::pin_tools(&discovery.tools_list_pages[0]).expect("pin page one");
+    assert_eq!(page_one_pins.len(), 1);
+    assert_ne!(
+        server_pin, page_one_pin,
+        "a pin over page one is not a pin over the server's tool list, and before P0-13 \
+         every pin this harness published was the former"
     );
 }
