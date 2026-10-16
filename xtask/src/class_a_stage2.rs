@@ -316,7 +316,7 @@ pub fn run(args: &SweepArgs) -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("census-stage2-class-a: fetching the registry to find all Class A candidates...");
     let registry = RegistryClient::new();
     let mut all_class_a = Vec::new();
-    registry.fetch_all(100, Duration::from_millis(200), |page| {
+    let registry_fetch = registry.fetch_all(100, Duration::from_millis(200), |page| {
         for raw in &page.entries_raw {
             let outcome = catalogue::ingest(raw);
             if let Some(candidate) = class_a_candidate(&outcome) {
@@ -401,6 +401,8 @@ pub fn run(args: &SweepArgs) -> Result<(), Box<dyn std::error::Error>> {
     .into_map()?;
     header.insert("execution_provenance".into(), "containerized_docker".into());
     header.insert("jobs".into(), args.jobs.into());
+    // Registry pages that needed retries during the candidate scan (a new key only).
+    header.insert("registry_fetch".into(), registry_fetch.to_json());
     // Header, not derived: carried verbatim through `census-rederive` (it describes what the
     // sweep did to the host, not anything the evidence says).
     header.insert("image_hygiene".into(), hygiene.finish());

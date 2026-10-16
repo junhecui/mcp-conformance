@@ -240,7 +240,7 @@ pub fn run(args: &SweepArgs) -> Result<(), Box<dyn std::error::Error>> {
 
     let registry = RegistryClient::new();
     let mut all_class_b = Vec::new();
-    registry.fetch_all(100, std::time::Duration::from_millis(200), |page| {
+    let registry_fetch = registry.fetch_all(100, std::time::Duration::from_millis(200), |page| {
         for raw in &page.entries_raw {
             let outcome = catalogue::ingest(raw);
             if let Some(candidate) = class_b_candidate(&outcome) {
@@ -314,6 +314,9 @@ pub fn run(args: &SweepArgs) -> Result<(), Box<dyn std::error::Error>> {
     // Policy *and* accounting, so a reader of the published file can check the politeness
     // claim rather than take it on trust (P0-12).
     header.insert("pacing".into(), census_report::pacing_header(&pacer.accounting()));
+    // How fragile the candidate scan was: registry pages that needed retries, and why. A new
+    // key only — no existing field moves — and carried verbatim through `census-rederive`.
+    header.insert("registry_fetch".into(), registry_fetch.to_json());
     // `into_inner` on poison rather than an error: a panicking attempt poisons this lock,
     // and failing here would discard the results file for every host already contacted —
     // re-creating, one layer up, exactly the total loss `guard_attempt` was added to stop.

@@ -218,7 +218,7 @@ pub fn run(sample_size: usize) -> Result<(), Box<dyn std::error::Error>> {
 
     let registry = RegistryClient::new();
     let mut all_class_b: Vec<Candidate> = Vec::new();
-    registry.fetch_all(100, Duration::from_millis(200), |page| {
+    let registry_fetch = registry.fetch_all(100, Duration::from_millis(200), |page| {
         for raw in &page.entries_raw {
             let outcome = catalogue::ingest(raw);
             if let Some(candidate) = class_b_candidate(&outcome) {
@@ -482,6 +482,8 @@ pub fn run(sample_size: usize) -> Result<(), Box<dyn std::error::Error>> {
         // Track B's conduct is auditable from its own results file rather than asserted.
         // ADR-014 flagged `probe` as unpaced; this is that flag closed.
         "pacing": crate::census_report::pacing_header(&pacer.accounting()),
+        // Registry pages that needed retries during the candidate scan (a new key only).
+        "registry_fetch": registry_fetch.to_json(),
         "sequences_refused_by_domain_budget": budget_refusals,
         // Every axis the aggregation guard groups on is disclosed in the published row,
         // `declared` included: a `holds` count that does not say what was declared pools a

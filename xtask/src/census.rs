@@ -37,7 +37,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut servers = Vec::new();
     let mut pages = 0usize;
 
-    client.fetch_all(100, Duration::from_millis(200), |page| {
+    let registry_fetch = client.fetch_all(100, Duration::from_millis(200), |page| {
         pages += 1;
         eprintln!("census: page {pages}, {} entries", page.entries_raw.len());
         for raw in &page.entries_raw {
@@ -72,6 +72,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         "generated_at_unix": generated_at_unix,
         "registry_base_url": intake::registry::DEFAULT_BASE_URL,
         "stage": "0 — registry metadata only, no contact with any third-party MCP server",
+        // Registry pages that needed retries (a new key only).
+        "registry_fetch": registry_fetch.to_json(),
         "total_servers": total,
         "class_a": class_a,
         "class_b": class_b,
