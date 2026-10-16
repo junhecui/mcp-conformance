@@ -898,6 +898,14 @@ doc's own minimal example rather than an invented fixture.
       `skipped` rather than sinking an otherwise-resolvable entry, and an entry with zero
       usable targets becomes `Unresolvable` rather than an empty `Resolved`
 
+**⚑ Flagged 2026-10-16, found in the registry-retry security review:** `RegistryClient::fetch_all`
+has no page cap and no check for a repeated cursor, so a hostile or impersonated registry could
+hold a sweep indefinitely by serving endless cursors. This is the same unbounded-walk defect
+P0-13 fixed for `tools/list`, one layer up, and it dwarfs anything the bounded retry added in
+`4f1a94f`. Fix: cap the walk at a few times the expected ~190 pages and fail on a repeated
+cursor.
+
+
 ### P0-04 Containability classifier
 
 **Depends on:** P0-03
@@ -2507,6 +2515,68 @@ All four gates clean: `cargo build --workspace`, `cargo test --workspace`,
   category and the budget interaction are all proven by test, not yet by corpus data — so the
   headline this task exists to produce (*how many servers paginate, and how many tools were
   missing*) is still **unmeasured**. It becomes measured on the next Stage 1/2 sweep.
+
+---
+
+### P0-14 Isolate Class A census containers from the operator's host
+
+**Depends on:** P0-06, P0-10
+**Exit:** Class A containers can install packages from npm and PyPI and reach nothing else —
+not the operator's host, the LAN, link-local addresses, or arbitrary internet hosts — proven
+against the real Docker on the operator's machine, before the change and after.
+**Status:** **Not done — partly investigated, then stopped.** Recorded here so the findings
+are not lost and the next attempt starts from them rather than from scratch.
+
+Why: Class A discovery runs arbitrary, unaudited registry packages via `npx`/`uvx` inside
+containers on Docker's default bridge. P0-10's security review recorded unrestricted egress as
+an accepted Phase 0 risk. Before scaling Class A from July's 100 packages to ~1,000, the
+operator decided the containers must be isolated first.
+
+**Measured on 2026-10-16** (Docker Desktop 29.2.1; TCP connect attempts only; no data sent to,
+authenticated against, or read from any operator service):
+
+- **The baseline exposure is real.** From a container on the default bridge, connections
+  succeeded to `host.docker.internal:11434` and `:5432` (both resolving to `192.168.65.254`),
+  to the same ports by IP, to the Windows host's WSL vEthernet address, to services on
+  Docker Desktop's own VM (rpcbind on `:111`), to the WSL distro, to the LAN gateway and to the
+  internet. `169.254.169.254` was routable.
+- **A bare `docker network create --internal` is not sufficient on Docker Desktop.** It cut
+  off-subnet traffic and external DNS, but the bridge gateway — Docker Desktop's VM — stayed
+  reachable: rpcbind on `:111` still connected. This is a false-assurance trap: anyone who
+  added only `--internal` would believe the containers isolated and be wrong.
+- **`--internal -o com.docker.network.bridge.gateway_mode_ipv4=isolated` closed that gap.**
+  The bridge gets no IPv4 address and connects to the gateway are refused. The VM's bridge
+  did carry an IPv6 link-local address while a container was attached, but the container's
+  `eth0` had `disable_ipv6=1` and those connects returned `ENETUNREACH`.
+
+**Design for whoever continues it:** an isolated network using `gateway_mode_ipv4=isolated`,
+never plain `--internal`; an allowlisting `CONNECT` proxy as the only route out, permitting
+`registry.npmjs.org`, `pypi.org` and `files.pythonhosted.org` on port 443 only, refusing IP
+literals and checking resolved addresses against non-public ranges; and proxy teardown with a
+dead-man switch (exit when its stdin closes, plus `--rm`), because a SIGKILL of the harness
+skips `Drop` guards and a dual-homed proxy left running would itself be a standing route into
+the host. Every guarantee Class A already has must survive: P0-06's unconditional
+`docker rm -f`, P0-10's `--` terminator before the image operand, the resource caps, and image
+hygiene, which must not remove the proxy image mid-sweep.
+
+**Why it stopped.** A safety classifier interrupted the empirical network probing partway
+through, and the work was deliberately not continued by other means. Proving the control
+requires exactly that probing, so the realistic route is for the operator to run the
+before/after connection checks on their own machine. One operational note from cleanup: a
+scratch listener started under `timeout 600` was still running afterwards, so verify that
+scratch processes have actually exited rather than trusting a timeout.
+
+**Consequence for the census.** The operator then chose to run Class A on the default network
+as-is, and the launch was denied by Claude Code's auto-mode safety classifier; it was not
+retried by other means. **The October Class A census has not been run.** The Class B half is
+complete and committed (`e271976`). When Class A does run with isolation in place, servers that
+need the network at startup will fail where they started in July, so its success rate will not
+be directly comparable to July's 57% — record the network policy in the results header.
+
+- [ ] Isolated network with `gateway_mode_ipv4=isolated`
+- [ ] Allowlisting egress proxy for npm and PyPI, with dead-man-switch teardown
+- [ ] Before/after connection proof on the operator's machine
+- [ ] Network policy recorded in the Class A results header
 
 ---
 
