@@ -21,6 +21,7 @@ This project builds the missing verification layer.
 | [docs/design.md](docs/design.md) | Original high-level design. Problem, trust model, verification protocols, known limitations. |
 | [docs/architecture.md](docs/architecture.md) | Implementable architecture. Supersedes the design doc; assumes you have read it. Contains the ADRs. |
 | [docs/tasks.md](docs/tasks.md) | Canonical implementation backlog, mirrored into GitHub Issues. |
+| [docs/parallel-discovery.md](docs/parallel-discovery.md) | Inspect one remote server's tool annotations with `dump-tools`, using Parallel Search MCP. |
 
 ## Shape of the work
 
