@@ -106,14 +106,16 @@ is explicitly *not* this ADR's job: a container is the right tool for containmen
 ### Overlayfs mount options
 
 Pinned regardless of who mounts (host-privileged or rootless-in-userns — that choice belongs
-to P1-03, not this ADR; see "Deferred to P1-03" below):
+to P1-03, not this ADR; see "Deferred to P1-03" below). **Now decided:** P1-03 mounts
+privileged, so the `userxattr` row below resolves to *not set* —
+[ADR-016](016-privileged-overlay-mount.md).
 
 | Option | Value | Why |
 |---|---|---|
 | `redirect_dir` | `off` | Kept off explicitly rather than relying on whatever the kernel/distro default happens to be, so a distro config change can't silently alter how the upper layer represents a renamed lower-layer directory out from under ADR-009's serialiser. |
 | `metacopy` | `off` | **Security-load-bearing, not just a precision choice.** The kernel's own documentation warns against `metacopy=on` with untrusted upper/lower directories: a handcrafted file with forged `REDIRECT`/`METACOPY` xattrs can be used to gain access to a lower-layer file it shouldn't reach. design.md §3's trust model is explicit that the tool under test is assumed *actively hostile* — this is precisely the untrusted-layer scenario the kernel docs warn about, so `metacopy=off` is a direct consequence of the trust model, not a generic best practice borrowed from elsewhere. |
 | `index` | `off` | The `index` feature exists to let copied/exported layers be safely reused or NFS-exported across mounts. Every run here gets a freshly constructed base and a freshly torn-down upper (architecture.md §4.1: "every arm runs in a freshly constructed sandbox... arms are never reused across tools") — there is no reuse or export for `index` to protect, only overhead for it to add. |
-| `userxattr` | **Conditional — required if and only if the mount happens unprivileged, inside the sandbox's own user namespace** (kernel ≥5.11, which 6.8 satisfies). Ubuntu has historically carried a downstream patch permitting some unprivileged-userns overlay mounts without it, but 6.8 is well past the point where relying on that rather than the documented option is prudent. If P1-03 instead mounts overlayfs on the host as a privileged step *before* entering the namespaces, `userxattr` does not apply and must not be set. **This ADR pins the value conditionally; P1-03 makes the privileged-vs-rootless mount call and applies the matching branch.** |
+| `userxattr` | **Conditional — required if and only if the mount happens unprivileged, inside the sandbox's own user namespace** (kernel ≥5.11, which 6.8 satisfies). Ubuntu has historically carried a downstream patch permitting some unprivileged-userns overlay mounts without it, but 6.8 is well past the point where relying on that rather than the documented option is prudent. If P1-03 instead mounts overlayfs on the host as a privileged step *before* entering the namespaces, `userxattr` does not apply and must not be set. **This ADR pins the value conditionally; P1-03 makes the privileged-vs-rootless mount call and applies the matching branch.** **Decided by P1-03 ([ADR-016](016-privileged-overlay-mount.md)): privileged — real root mounts the overlay inside a fresh mount namespace before any credential drop, so `userxattr` is not set (the kernel reports `nouserxattr`, asserted by `crates/sandbox`'s integration tests) and overlay markers land in `trusted.overlay.*`, which the tool cannot remove.** |
 
 Tied directly to ADR-009: whiteouts (character device, `dev_major=0`, `dev_minor=0`) are
 unaffected by any of the above — they are a file type, not an xattr, so no mount option
@@ -683,7 +685,9 @@ rather than slurping it — not a defect in the script.
 ## Follow-on decisions this ADR does not make
 
 - **P1-03** decides privileged-host-mount vs. rootless-userns-mount for the sandbox
-  supervisor, which selects the `userxattr` branch pinned above.
+  supervisor, which selects the `userxattr` branch pinned above. **Decided:** privileged,
+  `userxattr` not set — [ADR-016](016-privileged-overlay-mount.md), which also records the
+  constraint this places on P2-01 (the mount stays in the initial user namespace).
 - **A self-hosted CI runner on this exact image** — named as the escalation path, not built.
   Revisit if hosted-runner kernel drift is ever observed to actually change `sandbox`
   behaviour, or once Phase 1 has enough real findings that the infrastructure investment is

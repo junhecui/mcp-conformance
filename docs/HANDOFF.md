@@ -18,7 +18,11 @@ reviewer + security specialist — and one commit per task after review), then
   `-D warnings` and `cargo purity` clean per commit 832d990.
 - `docs/tasks.md` is accurate. Done: F-00…F-07, P0-01…P0-09, B-01…B-03, P1-01, P1-02 (22 of
   60 tasks). Open halves: P0-07 Class A at ≥1,000 servers; P0-09's live-server checkbox.
-- Nothing from P1-03 onward exists. `sandbox`, `observe`, `integrity`, `planner`, `argsynth`,
+- *(Updated after handoff: P1-06, P1-07 and P1-03 have since landed — `sandbox` now holds
+  the P1-03 supervisor, ADR-016 records its privileged-mount decision, and §4.6's OCI
+  lower-layer recommendation is carried on P1-08 in `docs/tasks.md`. The rest of this bullet
+  is the state at handoff.)*
+  Nothing from P1-03 onward exists. `sandbox`, `observe`, `integrity`, `planner`, `argsynth`,
   `orchestrator`, `destructive` are doc-comment placeholders. `normalise` and `verdict` are
   `todo!()` stubs whose messages ("blocked on ADR-008/009") are stale — both ADRs are
   accepted and `crates/evtree` exists. `datamodel::{RawEvidence, Ruleset, CanonicalChangeset}`

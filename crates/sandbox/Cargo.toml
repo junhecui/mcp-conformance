@@ -8,5 +8,28 @@ publish.workspace = true
 [dependencies]
 datamodel.workspace = true
 
+# Linux-only, so a non-Linux host never even resolves them (the crate root is
+# `#![cfg(target_os = "linux")]` anyway; this keeps that cost at fetch time too).
+#
+# * `rustix` — already in the lockfile at this exact version (via `tempfile`), so this adds no
+#   new crate to the build graph. Chosen over `nix` because its default `linux_raw` backend
+#   issues raw syscalls without going through libc wrappers or allocating when handed a
+#   `&CStr`, which is what code running between `fork` and `exec` in a multithreaded parent
+#   needs (see `supervisor.rs`, "What runs between fork and exec"). Default features off;
+#   only the API modules this crate calls (`net` for the one `sendmsg`/`recvmsg` pair that
+#   passes the child's mount-namespace fd back over `SCM_RIGHTS`).
+# * `libc` — also already in the lockfile. Used for exactly one thing rustix does not wrap:
+#   `close_range(2)` with `CLOSE_RANGE_CLOEXEC`. Default features off.
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1.1.4", default-features = false, features = ["std", "mount", "process", "thread", "fs", "event", "net"] }
+libc = { version = "0.2.189", default-features = false }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+tempfile = "3.27.0"
+# The lower layer the tests mount is built with P1-02's builder, so the supervisor is
+# exercised against the exact on-disk shape `world` produces. Dev-only: the supervisor takes
+# a lower-layer *path* and does not need to know how it was built.
+world.workspace = true
+
 [lints]
 workspace = true

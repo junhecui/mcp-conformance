@@ -505,6 +505,10 @@ name = "sandbox"
 version = "0.1.0"
 dependencies = [
  "datamodel",
+ "libc",
+ "rustix",
+ "tempfile",
+ "world",
 ]
 
 [[package]]

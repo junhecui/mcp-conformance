@@ -126,7 +126,8 @@ exactly and there is no owned fallback yet to fail over to.
       exactly design.md §3's hostile-tool trust model), `index=off` (no layer reuse/export
       exists to protect, per architecture.md §4.1's "arms are never reused"), `userxattr`
       conditional on P1-03's not-yet-made privileged-vs-rootless mount choice
-      — **annotation, added later:** this record predates an insight F-08 measured and is
+      — **now decided by P1-03: privileged, `userxattr` not set
+      ([ADR-016](adr/016-privileged-overlay-mount.md))** — **annotation, added later:** this record predates an insight F-08 measured and is
       silent on it rather than wrong about it. The arm64 probe above evidences the three
       pinned options only as "the mount was *accepted* with them". F-08 established
       empirically that the kernel both **rejects** unknown overlay options (so acceptance
@@ -563,7 +564,8 @@ than tidying, and both halves were measured in this guest rather than taken on f
 
 `nouserxattr` is still the correct branch for a privileged mount — now asserted rather than
 eyeballed — with ADR-010 pinning `userxattr` only for the rootless-in-userns case P1-03 has
-not yet chosen.
+not yet chosen. (**Since decided:** P1-03 mounts privileged, so `nouserxattr` is the branch
+the supervisor uses too — [ADR-016](adr/016-privileged-overlay-mount.md).)
 
 **The dev loop, run end to end** (`scripts/vm-test.sh`, exit 0):
 
@@ -780,6 +782,57 @@ In rough priority order:
    one future convenience `ssh -A` would hand a compromised guest the contributor's agent. Set
    `AllowTcpForwarding no`, `AllowAgentForwarding no`, `X11Forwarding no` in user-data for an
    untrusted-execution guest.
+
+#### Open finding: the guest's kernel drifted from -146 to -147 (unattended-upgrades)
+
+*Diagnosed 2026-11-12 during P1-03's fifth review round; not fixed.* The provisioning record
+above and every guest run until early November report `6.8.0-146-generic`, but the guest now
+boots `6.8.0-147-generic`. Root cause, from the guest's own logs (read-only):
+
+- **`unattended-upgrades` installed it.** `/var/log/apt/history.log`: at 2026-11-04 06:12
+  (`Commandline: /usr/bin/unattended-upgrade`) it upgraded `linux-image-generic` /
+  `linux-image-virtual` / `linux-headers-generic` from `6.8.0-146.146` to `6.8.0-147.147` and
+  installed `linux-image-6.8.0-147-generic` and its modules. `unattended-upgrades.log` lists
+  `linux-image-generic` among "Packages that will be upgraded" from the allowed origins
+  (`noble`, `noble-security`, ...; `apt-cache policy` shows `6.8.0-147.147` in
+  `noble-security`). The same run auto-removed the `-136` image. The guest was up from
+  2026-11-03 21:42 to 2026-11-04 09:17, so the daily upgrade fired inside that session.
+- **GRUB then booted it.** `GRUB_DEFAULT=0` selects the newest installed kernel, and
+  `/boot/vmlinuz` was repointed to `-147` at 06:14. `last -x reboot` shows `-146` through the
+  boot of 2026-11-03 21:42, and `-147` from 2026-11-04 09:19 onward. Both images remain
+  installed.
+- **Nothing in provisioning prevents it.** The cloud image ships `unattended-upgrades` enabled
+  (`/etc/apt/apt.conf.d/20auto-upgrades`: `Update-Package-Lists "1"`, `Unattended-Upgrade
+  "1"`; `apt-daily.timer` and `apt-daily-upgrade.timer` enabled). Neither
+  `scripts/vm-provision.sh` nor `scripts/vm/user-data.template` disables them or holds a
+  package (`apt-mark showhold` is empty). The template installs the `linux-image-generic`
+  metapackage, which by design tracks the newest GA 6.8 ABI. That is also why provisioning
+  itself landed on `-146` rather than the image's `-136`.
+- **Not the AppArmor experiment.** `apparmor-utils` was never installed (`dpkg -l`: `un`), and
+  no `apparmor` package appears anywhere in the apt history or dpkg logs.
+
+ADR-010's pin is the 6.8 **series**, and `-147` stays inside it, so this is not a series
+break. But the exact build changes silently between runs, and the guest also changes other
+packages (systemd, openssh, curl, ...) on its own. That is not what "pinned" should mean for
+the kernel under test. A record that says `-146` cannot be reproduced on this disk without
+picking the older GRUB entry by hand.
+
+**Proposed fix (not applied; for whoever picks F-08 up):**
+
+1. In `user-data.template`, disable automatic upgrades: write `20auto-upgrades` with both
+   periodic settings `"0"`, and `systemctl disable --now apt-daily.timer
+   apt-daily-upgrade.timer` (a `runcmd`, or `write_files` plus a `bootcmd`).
+2. Pin the exact kernel ABI: install `linux-image-6.8.0-<abi>-generic` (and its modules)
+   explicitly, then `apt-mark hold` it and the `linux-image-generic`/`linux-image-virtual`/
+   `linux-headers-generic` metapackages. Record the ABI in ADR-010 next to the image serial,
+   and make probe 1 assert `uname -r` equals it exactly, not just `^6\.8\.`.
+3. For this existing disk, either accept `-147` as the new recorded pin (update ADR-010 and
+   the provisioning record) or boot `-146` explicitly (`GRUB_DEFAULT` set to the `-146`
+   "Advanced options" entry, plus `update-grub`) and hold it. Any package change should come
+   from an explicit, logged re-provision, never a timer.
+
+During this diagnosis the two apt timers were stopped for that boot only, so no upgrade ran
+under the tests (runtime only: both remain `enabled`, and no package state was changed).
 
 ---
 
@@ -2959,11 +3012,439 @@ registry servers and before P4-05's hostile server. P1-03 is also where the
 privileged-host-mount vs. rootless-userns-mount choice gets made, which selects ADR-010's
 conditional `userxattr` branch.
 
-- [ ] Mount namespace + overlayfs upper layer
-- [ ] Hard timeout
-- [ ] MCP **client stays on the host**, server runs in the sandbox, protocol crosses over
-      stdio (architecture.md §5 — keeps protocol handling outside the blast radius)
-- [ ] Must not emit any verdict
+**Status:** Done — `crates/sandbox::{overlay, supervisor, sweep}`, plus
+[ADR-016](adr/016-privileged-overlay-mount.md) for the mount-mode decision and the run-identity
+design added after review. `spawn(&SandboxSpec)` returns a `Sandbox` handle and a `SandboxStdio`
+(host ends of the child's stdin, stdout and stderr — the only channel between the host-side MCP
+client and the sandboxed server); `Sandbox::wait` / `kill_and_wait` return a `RunRecord` of
+facts — `ExitStatus`, `timed_out`, `killed_on_request`, wall time, a `TeardownReport`, and the
+host path of the preserved upper layer. No harvesting (P1-04), no gating (P1-05), no verdict;
+`sandbox` depends on neither `normalise` nor `verdict`, and `cargo purity` is unchanged.
+
+**Launch sequence.** Host side, before `fork`: validate the spec — including that `RunAs`'s uid,
+its helper uid `uid + 1` and its gid are ≥ 65 536 with no entry in `/etc/passwd` or `/etc/group`
+(the files, not NSS) — take the exclusive locks on the run uid and the helper uid, refuse if any
+process already runs under either, read `cap_last_cap`. Then in the forked child, before `exec`, with
+the slot for each later task marked in the code: `unshare(CLONE_NEWNS)` → `mount --make-rprivate
+/` → hand the supervisor an fd for the new mount namespace over `SCM_RIGHTS` (checked with
+`NS_GET_NSTYPE` to be a mount namespace, or the launch fails) → mount the overlay
+on `<scratch>/merged` with exactly `redirect_dir=off,metacopy=off,index=off` plus `nosuid,nodev`
+→ `pivot_root(".", ".")`, detach the old root, `chdir("/")`, `umask 022` → `close_range(3, ~0,
+CLOSE_RANGE_CLOEXEC)` → empty the capability bounding set and lock the securebits →
+`setgroups([])`, `setresgid`, `setresuid` → `chdir` to the spec's cwd (after the drop, so its
+permission checks apply) → `PR_SET_NO_NEW_PRIVS` → `PR_SET_PDEATHSIG(SIGKILL)` and a
+parent-still-alive check. The environment is cleared and replaced with the spec's list. Every
+string the child needs is built before `fork` and the syscalls are raw, so the child never
+allocates in a multithreaded parent. A failed step reports its name
+(`SandboxError::Launch { step: Some("pivot_root"), .. }`).
+
+**End of a run.** A watchdog thread owns it: it waits on the child's pidfd until the child exits
+or the deadline passes (and then `SIGKILL`s it through the pidfd), reaps it, snapshots what is
+left of the run, and kills it (`sweep::kill_run`): a forked helper with `setresuid(h, u, h)` —
+which the run cannot signal — loops `kill(-1, SIGKILL)` until the supervisor's two consecutive
+scans see the uid empty, then root `SIGKILL`s anything a scan still finds, per pid through a
+pidfd. So the timeout bounds the whole run, not just the direct child, and the run's other
+processes are killed as soon as the direct child ends: a descendant holding the stdio pipes
+dies then, and host-side reads see EOF then. If the run defeats all of that the attempt still
+ends — bounded by a count of work, not a wall time: about two helper attempts of up to 5 s each (twice, if the first sweep completed) plus up to ~51 `/proc` scans, and each scan is O(processes) — which, with no cgroups yet, only `RLIMIT_NPROC` bounds — and the record says so.
+Teardown takes one confirming scan, releases the namespace fd, and removes `work/` and `merged/`
+only if that scan was readable and found nothing.
+
+**Decisions taken:**
+
+1. **Privileged mount, `userxattr` not set** (ADR-016): real root mounts the overlay inside the
+   fresh mount namespace before the credential drop, so overlay markers are `trusted.overlay.*`
+   and ADR-011's removal attack stays closed. The kernel's `nouserxattr` is asserted. Recorded
+   as a constraint on P2-01: the mount stays in the initial user namespace.
+2. **The upper and work directories are unreachable from inside**, per ADR-011's requirement,
+   by `pivot_root` + old-root detach, **no procfs/sysfs/`/dev`** (a procfs without a PID
+   namespace exposes every host process's `root` link), the credential drop (a root child in a
+   mount namespace can mount a fresh procfs or `mknod` the host disk), a `0700` scratch
+   directory, and refusing a lower layer that overlaps the scratch directory.
+3. **No privilege survives the drop.** Bounding set emptied (`PR_CAPBSET_DROP` up to
+   `cap_last_cap`); securebits `NOROOT` and `NO_CAP_AMBIENT_RAISE` set and locked, `KEEP_CAPS`
+   and `NO_SETUID_FIXUP` locked *off* so the drop's capability clearing cannot be disabled;
+   `no_new_privs`. Inheritable, permitted, effective, bounding and ambient sets all read zero.
+4. **A run owns two uids exclusively: `u` and the helper uid `h = u + 1`** (ADR-016 decision
+   4). A `flock` on `/run/mcp-conformance-sandbox/uid-<u>.lock` and `uid-<h>.lock` (directory
+   created `0700`, required root-owned and not group/other writable, `lstat`-checked; lock files
+   `O_NOFOLLOW`), both held until teardown has finished; either uid held elsewhere is
+   `RunAsInUse`, either with live processes is `RunAsOccupied`. Chosen over a managed uid pool as
+   the simplest sound option; concurrent runs need uids at least 2 apart, and overlap is refused
+   (tested). The helper uid is per-run because each helper's `kill(-1)` also reaches processes
+   whose real or saved uid is its own real uid. The lock attempt retries for 1 s, because a
+   sibling sandbox's child briefly holds a copy of the descriptor between `fork` and `exec`.
+5. **The timeout is a pidfd watchdog that ends the whole run** — see "End of a run". Signalling
+   through the pidfd means a reaped and recycled pid is never hit. A process that exits in the
+   instant before the kill can be recorded as timed out (likewise `killed_on_request`) — the
+   error runs toward `unverifiable`, never toward a verdict. A descendant alive when the direct
+   child ended is recorded as its own fact (`residual_pids`), not as a timeout.
+6. **`scratch` must not exist**; the supervisor creates `upper/` (`0755`, because the merged
+   root takes its attributes from it), `work/` and `merged/`, removes the last two at teardown,
+   and leaves `upper/` for P1-04. A launch that fails after `exec` is torn down in full (uid
+   sweep included); the scratch directory is removed only if that found nothing left running.
+7. **Mount-path validation by character set, not escaping** (`overlay::validate_path`): any
+   byte outside `[A-Za-z0-9/._+-]` is refused, so a path cannot inject `,metacopy=on` or splice
+   a lower layer with `:`.
+8. **`stderr` is piped, not inherited**, so hostile output cannot reach the harness's terminal
+   (the P0-11 lesson); the caller drains or drops it.
+9. **The OCI lower layer (HANDOFF.md §4.6) is P1-08's, not P1-03's.** The supervisor takes one
+   lower directory by path and does not care how it was built; fetching an image by digest and
+   converting OCI `.wh.*` whiteouts is its own work, and P1-08 is the first consumer. Recorded on
+   P1-08 below.
+
+**Review round (two passes; the security reviewer demonstrated the first two in the guest), and
+three further bugs the fixes surfaced:**
+
+- **HIGH — a nested user+mount namespace evaded teardown.** A run process ran
+  `unshare -Um --propagation unchanged …` as the dropped uid (Ubuntu's
+  `apparmor_restrict_unprivileged_userns=1` does not stop the creation), got a mount namespace of
+  its own, and so was invisible to the namespace scan: the record said `residual_pids: [],
+  namespace_empty: true` while the escapee kept writing `upper/` ~8 s later. Fixed by decisions 4
+  and 5 — the uid is what it cannot shed.
+- **MEDIUM-HIGH — the timeout bounded only the direct child.** `sh -c '/bin/sleep 25 & exit 0'`
+  blocked a host `read_to_end` for 25 s with `timed_out: false`, forever with `sleep 1e9`. Fixed
+  by the end-of-run sweep.
+- **Found while fixing: `kill(-1)` never returns `ESRCH` on Linux while anything else runs** —
+  the kernel counts every process it iterates, permitted or not — so a helper looping "until
+  `ESRCH`" never finished (every test ran its 3 × 10 s budget). The supervisor now decides when
+  the uid is empty (two consecutive `/proc` scans 10 ms apart, live non-zombie processes only)
+  and stops the helper.
+- **Found while fixing: the helper inherited every descriptor in the supervisor** (a fork that
+  never execs), holding other runs' uid locks and stdio pipes; it now closes all of them first.
+- **Found while fixing: mount-namespace identity was reused.** Identifying the namespace by
+  `(st_dev, st_ino)` is only valid while it lives; nsfs inode numbers are recycled. One test's
+  teardown matched a *newer* sandbox's namespace and `SIGKILL`ed that sandbox's process — a
+  flake traced to its source with a bpftrace probe on `signal:signal_generate`. The child now
+  passes a namespace fd over `SCM_RIGHTS`; the supervisor holds it until the final scan.
+- Also from review: the bounding set was full (`CapBnd 000001ffffffffff`) — fixed (decision 3);
+  `RunAs` ids below 65 536 or with a passwd/group entry are refused; `chdir(cwd)` moved after the
+  drop; the watchdog-panic and failed-`waitpid` paths now tear down and return
+  `SandboxError::Supervision` with the teardown report, and `Drop` runs the same teardown; the
+  reachability probe's `2>/dev/null` (which could never succeed without a `/dev`) was removed.
+
+**Second review round** (both reviewers approved: no escape demonstrated, no false clean
+possible), and what it changed:
+
+- **MUST — the run could defeat the sweep and persist.** The helper ran as `u/u/u`, so a run
+  process (e.g. an `unshare -Um` escapee) looping `kill(-1, SIGKILL)` or `SIGSTOP` could hit each
+  helper and outlive teardown with host network access — fail-safe in the record
+  (`uid_sweep_completed: false`), but a hostile process left running on the worker; and teardown
+  signalled only namespace members from root, never uid matches. Fixed three ways: the helper
+  now runs `setresuid(h, u, h)` with a per-run locked `h` (verified in the pinned guest: a
+  run-uid process gets `EPERM` for `SIGSTOP` and `SIGKILL` against it and its `kill(-1)` leaves
+  it alive, while the helper kills run processes); root `SIGKILL`s every remaining uid match per
+  pid through a pidfd, re-reading the uid from `/proc/<pid>` after opening it so a reused pid is
+  never hit; and once a sweep has failed it is not retried (at most one extra sweep, only after
+  successes), which bounds the worst case by a count of scans instead of ~25 minutes of
+  re-sweeps (corrected in round 3: not a fixed wall time; see below).
+- **Nits:** the received namespace fd is checked with `NS_GET_NSTYPE`; the lock directory is
+  created `0700` atomically; the helper pauses 1 ms (`nanosleep`) between passes instead of
+  spinning; an unreadable `/proc` now forces `uid_sweep_completed: false` on every path, and
+  `namespace_empty` became **`confirmed_empty`** (readable final scan, nothing in the namespace
+  or under the uid); stale "until `ESRCH`" / "until nothing is left" wording fixed; validation is
+  documented as `/etc/passwd`/`/etc/group` only. **Simplified:** teardown no longer repeats the
+  kill loop (it is `kill_run`'s), and the namespace-only per-pid kill (`kill_if_still_in`) is
+  gone — after the credential drop nothing can be in the run's namespace without the run's uid,
+  and if something were it would only keep `confirmed_empty` false.
+
+**Third review round** (a focused security review of the round-2 delta), and what it changed —
+ADR-016 decision 5:
+
+- **HIGH — a zombie thread-group leader was invisible.** A run descendant that starts a thread
+  and ends its main thread with `SYS_exit` leaves a leader reading `State: Z`, `Threads: 2`,
+  with no resolvable `ns/mnt`, while the thread keeps writing `upper/`. Every scan treated `Z`
+  as dead, giving `residual_pids: [], uid_sweep_completed: true, confirmed_empty: true` — a
+  false clean. Now a multithreaded process is judged by any live task (`/proc/<pid>/task/*`,
+  for both the uid and the namespace view), and `kill_if_uid` reaches it through the leader's
+  pidfd. The helper's stop condition no longer trusts two bare empty scans: the helper reports
+  each completed `kill(-1)` pass through a non-blocking socketpair (its only kept descriptor), and an
+  empty scan counts only after two more passes complete — so a CPU-starved helper cannot be
+  "confirmed" before it has run.
+- **MEDIUM — the helper never confirmed it held no capabilities.** With an inherited
+  `SECBIT_NO_SETUID_FIXUP`, `setresuid` would keep the effective set, and a helper `kill(-1)`
+  with `CAP_KILL` kills every process on the host. The helper now sets the locked securebits
+  first and checks `capget` after `setresuid`, exiting without killing on either failure; the
+  run child gained the same `capget` check.
+- **Also:** the run child calls `setsid` (no shared session, so no same-session `SIGCONT`
+  exception); `gid == u32::MAX` is refused; the "missed only if pids wrapped" and "tens of
+  seconds" wording is corrected (above and below).
+
+**Fourth review round** (a static review of round 3; ADR-016 decision 6):
+
+- **HIGH — the scan failed open on a non-UTF-8 `comm`.** `/proc/<pid>/status` carries `comm`
+  with bytes `0x80..=0xFF` raw; `prctl(PR_SET_NAME, "\xff")` (no privilege) made the
+  round-3 `read_to_string` fail, and any error meant "no process" — `residual_pids: [],
+  uid_sweep_completed: true, confirmed_empty: true` while it ran. Fixed as a rule — **a scan may
+  report false positives, never a false empty** — not a patch: status is read as bytes and
+  parsed strictly (`sweep::parse_status`), only `ENOENT`/`ESRCH` mean "gone", and every other
+  error or malformed status makes the pid unverifiable — counted as present, reported in the
+  new `TeardownReport::unverified_pids`, never killed from root unverified.
+- **Every `/proc` read, audited** (fail-closed choice in brackets):
+  `sweep::scan` — `read_dir("/proc")` and each of its entries [error → whole scan `None`];
+  `process_view` — `/proc/<pid>/status` [`ENOENT`/`ESRCH` → gone; other error → unverifiable],
+  its parse [malformed → unverifiable], `/proc/<pid>/ns/mnt` of a live single-threaded process
+  [gone → keep the uid view; other → unverifiable], `/proc/<pid>/task` [gone → the leader's
+  uid view (round 5; was gone); other → unverifiable], each task entry [error → unverifiable], each `task/<tid>/status` [gone →
+  skip that task; other or malformed → unverifiable], each live task's `ns/mnt` [gone → skip;
+  other → unverifiable];
+  `kill_if_uid` — the same view [signals only `Known { by_uid: true }`; unverifiable is
+  counted, never killed];
+  `supervise_helper` — `scan` [`None` → sweep incomplete; any pid but the helper, unverifiable
+  included → not empty];
+  `kill_run` and `teardown` — `scan` [`None` → `uid_sweep_completed: false`, not
+  `confirmed_empty`];
+  `spawn` preflight — `scan` [`None` → error; any pid, unverifiable included →
+  `RunAsOccupied`];
+  `spawn` — `/proc/sys/kernel/cap_last_cap` [unreadable or unparseable → spawn error];
+  the run child — `/proc/self/ns/mnt` [open fails → launch fails]; the received ns fd
+  [`fstat`/`NS_GET_NSTYPE` fails → launch fails].
+- **Docs:** "clean" now explicitly means "no descendant observed" until P2-02, as requirements
+  on P1-05 and P2-02 (above); the pass channel is a socketpair, not a pipe.
+- **AppArmor, checked in the guest:** a run binary at a host-profiled path *is* confined by
+  that profile (measured: `tcpdump (enforce)`), but every one of the image's 23 enforce
+  profiles includes `abstractions/base` (`signal (receive) peer=unconfined`) or allows all
+  signals, and the confined process was killed by both the helper's credentials and root.
+  `apparmor_restrict_unprivileged_unconfined` is `0`. On a host with a stricter profile the
+  process would survive teardown (fail-closed: reported, not clean). Mitigation proposed for P4,
+  not built: run under a dedicated harness profile via `aa_change_onexec`.
+
+**Fifth review round** (a review of round 4; ADR-016 decision 6, "Fifth review round"):
+
+- **MUST — a `Threads: 0` stale leader read as gone.** A process spawns a thread, `SYS_exit`s
+  its main thread, and `execv`s itself from the thread. `de_thread` then releases the old
+  leader, and a concurrent `/proc/<pid>/status` read can print that leader as `State: Z`/`X`,
+  `Threads: 0`. The round-4 rule ("exited with `Threads <= 1` is not ours") reported the live
+  process as gone: a false empty, reproduced on about 0.1% of reads on a 6.6 host. A real
+  zombie reads `Threads: 1`. Now one pure function, `sweep::classify_leader`, shared by
+  `process_view` and the unit tests, reads `Threads: 0` as a **stale leader, present** by the
+  uids it shows. Only an exited leader with `Threads: 1` is a zombie.
+- **SHOULD — `ENOENT` on `/proc/<pid>/task`** now keeps the leader's uid view rather than
+  reporting the process gone. In the audit above, `/proc/<pid>/task` is now [gone → the
+  leader's view; other → unverifiable].
+- **Docs:** the readdir-frontier wording is narrowed (below). An AppArmor-confined survivor
+  keeps holding its uid pair, so later spawns on that pair get `RunAsOccupied` until manual
+  intervention.
+- **Info:** any unverifiable pid on the host counts against every uid being scanned, so it
+  makes concurrent runs uncertain and their preflights refuse with `RunAsOccupied` until it
+  goes away. That is fail-safe, and a run cannot cause it: its own statuses parse whatever
+  their `comm`, and it cannot make another process's `/proc` entry unreadable to root.
+
+**Review of the fifth-round fix (2026-11-12).** An independent security reviewer read the
+delta (the `Threads: 0` stale-leader handling in `crates/sandbox/src/sweep.rs`) and reported no
+new finding in the blocking classes: false clean, hostile data on a privileged path, broken
+structural invariant, containment failure. The reviewer confirmed by reading the code that every
+status/task/`ns/mnt` read failure other than `ENOENT`/`ESRCH` fails closed, and that the root test
+is time-bounded. The reviewer's kernel-behaviour reasoning (`nr_threads` accounting during
+`de_thread`, the atomic pid-link swap) is from knowledge of upstream 6.x source; it was not
+re-derived or reproduced in that review. Four non-blocking findings are recorded in the known
+gaps below, each with the task that owns the fix.
+
+**Known gaps, disclosed rather than claimed covered:**
+
+- **The kill is a kill, not a boundary.** No PID namespace until P2-01 and no `CLONE_NEWUSER`
+  denial until P4-01: run processes can fork and create nested namespaces, and until the kill
+  reaches them they run and may write the upper layer. The scans are not atomic: `/proc` is
+  listed in batches, in pid order (`next_tgid`). A forward fork-and-exit chain is always found,
+  because each child's pid lands at or ahead of the listing's cursor. A miss needs a pid
+  allocated *below* the cursor, which is cyclic allocation after a pid wrap. A host wraps on
+  its own over time, and a run can force a wrap with ~`pid_max` forks (4,194,304 here). After
+  a wrap, a chain can be missed by every scan. The helper still kills it — its passes do not
+  depend on the scan — but `residual_pids` can then come out empty; P2-02's cgroup (`pids.current`,
+  `cgroup.kill`) is the real fix. A run that forks faster than a per-uid `kill(-1)` plus root's
+  per-pid kills, or exhausts pids so no helper can fork, can still survive — never with a clean
+  record, after a time bounded by a count of work, not a wall time: about two helper attempts of up to 5 s each (twice, if the first sweep completed) plus up to ~51 `/proc` scans, and each scan is O(processes) — which, with no cgroups yet, only `RLIMIT_NPROC` bounds.
+  **P1-05 must read a run as `containment_uncertain` if `residual_pids` is non-empty,
+  `uid_sweep_completed` is false, or `confirmed_empty` is false.** A server launched through a
+  forking wrapper (`npx` → `node`) always has residual pids, so is always uncertain until P2-01.
+- **A clean record means "no descendant observed", not "none existed"** — until P2-02: after
+  a pid wrap, a fork-and-exit chain allocated below the readdir cursor can be missed by every
+  scan. Recorded as
+  requirements on **P1-05** (carry `containment_basis = "proc_scan"` with every verdict, into
+  publication) and **P2-02** (cgroup accounting makes "none existed" decidable; upgrade the
+  basis only then).
+- **Shared network, IPC and UTS namespaces** (P3-01; IPC/UTS fit with P2-01), **no cgroups**
+  (P2-02), **no seccomp** (P4-01). Concurrent sandboxes need `RunAs` uids at least 2 apart.
+- **`PR_SET_PDEATHSIG` is per-thread**: the sandbox is killed if the thread that called `spawn`
+  exits. Documented on `spawn`.
+- **Arm 0** (P1-07's carry-forward above): the supervisor provides the mechanism — spawn the
+  server, make no tool call, `kill_and_wait` — and its upper layer is Arm 0's changeset. The
+  *subtraction* the P1-07 entry requires belongs to whatever composes arms (P1-08 for the first
+  verdict, P2-04 in general), not to this crate.
+- F-08's nine preconditions still bind before P2-06/P4-05; nothing untrusted ran in this work
+  (the tests execute the host's own `dash`, `sleep` and `unshare`).
+- **A stale (`Threads: 0`) leader is reported as outside the mount namespace.**
+  `process_view`'s Stale arm returns `in_namespace: false` with `by_uid: true`, so a run
+  process caught mid-`de_thread` by the residual scan lands in
+  `TeardownReport::residual_outside_namespace` — a spurious "left the namespace" fact. A false
+  positive, never a false clean. The code comment there is also inaccurate
+  (`/proc/<pid>/ns/mnt` resolves through the pid's current task, the live new leader).
+  Suggested fix: let Stale fall through to the Multi task walk. Owner: **P2-01/P2-02** (the PID
+  namespace and cgroup replace the `/proc` scan as the containment basis); until then **P1-05
+  and P4-03 must not treat `residual_outside_namespace` as proof of an escape** or publish it as
+  an adversarial flag.
+- **`process_view`'s Stale arm is not pinned by a deterministic test.** The unit test pins
+  `classify_leader`; `status_matches_uid` is a separate `#[cfg(test)]` copy of the decision, not
+  the code production runs. A mutation of `process_view` itself (Stale → `Gone`, or
+  `by_uid: false`) passes every unit test and is caught only by the probabilistic root test,
+  which does not assert that the race was hit. Suggested fix: extract a pure
+  `leader_view(&StatusFacts, uid) -> Option<View>` used by both. Owner: **P2-02**, where the
+  scan becomes a cross-check rather than the basis.
+- **The stale-leader root test discards its final `kill_if_uid` result and `ended_by` result**,
+  so a regression in which `kill_if_uid` skips a Stale or Multi pid would pass (the drop guard
+  cleans up). Owner: **P2-02**.
+- **Doc wording:** "a genuine zombie never reads 0" in `sweep.rs` holds only for an unreaped
+  zombie; a just-reaped process read through a stale reference prints `(X, 0)` and is
+  classified Stale (present) — a harmless transient false positive. Owner: **P2-02** (reword
+  when the scan is next touched).
+
+**Tests.** 19 pure unit tests run anywhere (`cargo test -p sandbox`): option-string
+construction, the absence of `userxattr`, option injection through `,` `:` `\` `=`, non-canonical
+and relative paths, component-wise disjointness, launch-report parsing, the securebits mask, spec
+validation ordered before the privilege check (including `RunAs` ranges and the `u32::MAX`
+edges for uid and gid), `/proc/<pid>/status` parsing as bytes (a zombie leader is live with
+`Threads: 2` and dead with `Threads: 1`; a `Z` or `X` leader with `Threads: 0` is a stale
+leader and present, by its own uids — `sweep::classify_leader`, the rule production uses; uids matched on all four fields; a raw `0xFF` in `Name:`
+parses; a `Name:` that imitates `Uid:` changes nothing; a missing or malformed `Uid:`/`Threads:`/
+`State:` line, or a duplicate, fails closed), unverifiable pids counting as present,
+passwd/group id lookup, and the residual views. 20 tests need root and are `#[ignore]`d, so a
+plain `cargo test --workspace` lists them as ignored rather than reporting a pass for something
+it never ran: 5 in `sweep.rs` against real processes under synthetic uids (`kill_if_uid` kills a
+matching uid and spares another; a zombie leader with a live thread is seen by `scan` and killed
+by `kill_if_uid`; a process, and separately a thread, named `\xff\xfe` is seen, *verified* and
+killed; a process looping thread → main-thread `SYS_exit` → `execv(self)` is never seen as gone
+or not-ours by `process_view` over 8 s of reads, which also tallies how often a read caught the
+stale `(Z,0)`/`(X,0)` leader; `kill_run` ends every process of a uid and leaves no helper), and
+15 integration tests in `crates/sandbox/tests/supervisor.rs`, each fixture under its own uid
+pair. The zombie-leader, non-UTF-8-name and stale-leader programs are test-only example targets
+(`crates/sandbox/examples/zombie_leader.rs`, `odd_name.rs`, `stale_leader.rs`) that
+`cargo test` builds. In the pinned guest:
+
+```text
+scripts/vm.sh ssh "bash -lc 'cd ~/mcp-conformance && cargo test -p sandbox \
+  --config \"target.x86_64-unknown-linux-gnu.runner=\\\"sudo -E\\\"\" -- --include-ignored'"
+# aarch64 (macOS/Lima guest): the runner key is target-specific
+cargo test -p sandbox --config 'target.aarch64-unknown-linux-gnu.runner="sudo -E"' -- --include-ignored
+```
+
+→ 24 + 15 passed (the lib target's 19 unit tests plus its 5 root tests, and the 15 integration
+tests), 6 of 6 full root runs green on the round-5 code (7 of 7 in round 4, 7 of 7 in round 3,
+14 of 14 in round 2). Product flake rate 0/34. Round 5's first batch hit a test-harness
+`ETXTBSY` race (see the lessons below), now fixed. The stale-leader race was exercised under
+TCG: in 9 unmutated runs of that test (3 alone, 6 in the full suite), a read caught a
+`Threads: 0` leader 6 times, `(Z,0)` 3× and `(X,0)` 3×, over ~53,000 reads (about 1 in 9,000,
+in 6 of 9 runs), with `not_ours` = 0 every time. The integration tests cover: a write landing
+in the upper layer, owned by the dropped uid, and in neither the lower layer nor the host root; a
+never-exiting program `SIGKILL`ed at a 1 s timeout with `timed_out` set and bounded elapsed time;
+the overlay existing only in the child's namespace (host `mountinfo` unchanged
+before/during/after; the child's `mountinfo` is exactly one overlay at `/`, `nosuid,nodev`,
+`nouserxattr`, none of `userxattr`/`redirect_dir=on|follow`/`metacopy=on`/`index=on`) and
+teardown leaving only `upper/`; the upper, work, merged, scratch and lower paths plus `/proc`,
+`/proc/1/root`, `/sys`, `/dev`, `/tmp` unreachable from inside, with a positive control; a
+two-line stdio round trip; only fds 0–2 in the child despite a deliberately leaked non-CLOEXEC
+fd, all five capability sets zero, `NoNewPrivs: 1`, empty groups and exactly the spec's
+environment (read host-side from `/proc/<pid>`); a pipeline's two grandchildren recorded and
+swept after a timeout kill; a program missing from the lower layer surfacing as a launch error
+that leaves no scratch directory; **a process escaping via `unshare -Um` reported in
+`residual_outside_namespace`, killed, and the upper layer no longer growing 2 s later**; **a
+background grandchild holding stdout no longer blocking a host `read_to_end` past the direct
+child's exit** (bounded at 20 s against a 60 s deadline); **a uid refused while another live
+sandbox holds it — and a uid equal to a live run's helper uid refused too — and usable again once
+that run is torn down**; **an escapee looping `kill -STOP -1; kill -KILL -1` killed anyway, with a
+clean record only because it is gone, the upper layer no longer growing, and `wait` returning
+within 45 s**; **the teardown helper observed in `/proc` with `Uid: h u h u` and `CapEff`/`CapPrm`
+zero**; the run child in **its own session** (session id = its pid); and **a zombie thread-group
+leader with a live thread (`SYS_exit` on the main thread) recorded in `residual_pids`, killed,
+and the upper layer no longer growing**; and **a descendant that set its `comm` to `\xff`
+recorded in `residual_pids` (verified — `unverified_pids` empty), killed, and the upper layer no
+longer growing**.
+
+**Mutation-tested, not just run green**, by editing the guest copy:
+
+- removing `pivot_root` + the old-root detach fails 4 tests (the reachability probe lists the
+  scratch, lower, `/tmp`, `/proc`, `/sys` and `/dev` paths — and shows, separately, that the
+  `0700` scratch directory alone kept `upper/` and `work/` hidden from the dropped uid);
+- starting `close_range` above the leaked fd fails the fd test (`{"0","1","2","6"}`);
+- removing `make-rprivate` fails all of them at `pivot_root` with `EINVAL` — **and leaked 8
+  overlay mounts into the guest's own namespace**, which is the failure that step exists to
+  prevent (unmounted by hand; recorded in ADR-016);
+- making the uid sweep a no-op that reports success fails the escape test (the escapee is listed
+  in `survivors`, so the run is *not* reported clean even then) and the stdout-holder test;
+- removing only the end-of-run sweep (round 1, when teardown also swept) fails the stdout-holder
+  test;
+- **round 5:** restoring "exited with `Threads <= 1` is dead" (in `classify_leader`, an exited
+  `Threads: 0` leader read as a zombie) fails the new unit test deterministically
+  (`a_threads_0_leader_is_stale_and_present_and_only_threads_1_is_a_real_zombie`; the other 18
+  pass). It fails the stale-leader root test in 3 of 5 runs (`not_ours` = 1, 3, 1 over ~5,300–
+  6,600 reads each). The race is real under TCG, but a race: unmutated, the same test read a
+  stale `(Z,0)`/`(X,0)` leader about once per 9,000 reads (counts above) with `not_ours` always
+  0. The unit test is what pins the rule;
+- **round 4:** restoring the round-3 read (`read_to_string`, any error = no process) fails both
+  non-UTF-8-name tests — the integration test reproduces the reviewer's false clean exactly
+  (`residual_pids: [], unverified_pids: []`). A UTF-8 read that merely *fails closed* fails the
+  lib test (the process is only unverifiable, not verified) and makes every concurrent
+  integration spawn fail with `RunAsOccupied`: the unparseable processes became false positives,
+  never a false empty — the rule working as designed, and the reason the byte-wise parse is
+  needed as well;
+- **round 3:** restoring "a zombie leader is dead" (`process_view` ignoring `Threads`) fails
+  both zombie tests — the integration test reproduces the reviewer's false clean exactly
+  (`residual_pids: []` while the thread was alive). The first attempt at this check *hung* the
+  suite: the unit test panicked before killing its child, which held the test's stdout pipe, so
+  `cargo test` never saw EOF; the child now has null stdio and a kill-on-drop guard. **Not
+  mutation-checked, by design:** the pass-confirmed stop condition (CPU starvation of the helper
+  cannot be produced reliably without cgroups) and the capability checks (they guard against an
+  inherited `SECBIT_NO_SETUID_FIXUP`, which the test environment does not have); the observed
+  helper's `CapEff`/`CapPrm` being zero is asserted instead;
+- **round 2:** helper credentials back to `u/u/u` fails the helper-credential test (*no process
+  with the helper uid was ever observed*); making `kill_if_uid` a no-op fails the `kill_if_uid`
+  unit test; both together fail that unit test too (cargo stops at the lib target). **Disclosed:
+  the adversarial escapee test passes under all three**, because with a `u/u/u` helper a single
+  escapee only wins if it signals the helper in the microseconds between the helper's
+  `setresuid` and its first `kill(-1)` pass, and the first pass usually kills it first. The
+  reviewer's attack is real but a race; the credential and unit tests are what pin the fix
+  deterministically, and the escapee test stays as an end-to-end check that a fighting run is
+  still killed in bounded time. The `kill_if_uid` mutation first *hung* that unit test on an
+  unbounded `wait()`; its waits are now bounded at 10 s.
+
+Three test-side lessons, for whoever repeats this: `scripts/vm-test.sh`'s `rsync -a` preserves the
+worktree's older mtimes, so after a guest-side edit cargo's fingerprint keeps the *mutated*
+build — run `cargo clean -p sandbox` in the guest afterwards, **under `bash -lc`** (a bare
+`vm.sh ssh 'cargo clean …'` does not set `CARGO_TARGET_DIR` and cleans the wrong directory;
+round 5 lost one batch of root runs to exactly that); copying an example binary and then
+exec'ing it from a multithreaded test binary can fail with `ETXTBSY`, because a concurrent
+test's `fork` briefly holds the copy's write fd (round 5, once three tests did it; `spawn_example`
+now retries); and a test that reads a sandbox
+pipe to EOF must bound the read, or the regression it guards against hangs the suite instead of
+failing it (the escape and stdout-holder tests both do).
+
+**Gates.** WSL2 host: `cargo build --workspace`, `cargo clippy --workspace --all-targets -- -D
+warnings` and `cargo purity` clean; `cargo test --workspace` **501 passed, 0 failed, 20
+ignored** (round 5). Pinned guest (`scripts/vm-test.sh build test clippy purity`), round 5: all
+four PASS, `cargo test --workspace --no-fail-fast` **501 passed, 0 failed, 20 ignored**. The
+`discovery` pacing tests passed under TCG this time; they are wall-clock sensitive and not
+reliable there. Round 4 had **498 passed, 2 failed, 19 ignored**, both failures being
+`discovery` wall-clock pacing tests under TCG (in round 4 the same module's
+`pace::tests::requests_within_one_sequence_are_spaced_and_the_first_is_not` failed alongside
+the usual one, as it did once in round 1); the usual one is
+`discovery`'s `an_unpaced_client_sends_the_same_sequence_with_no_delay`, which bounds a
+request sequence by a 120 ms wall-clock interval and measured ~260 ms, because **the guest ran
+under TCG emulation**: `/dev/kvm` exists in WSL but nested virtualisation is no longer exposed
+(`svm` absent from `/proc/cpuinfo`, QEMU: "failed to initialize kvm: No such device"), unlike when
+ADR-010's Windows record was written. The guest kernel is the pin series either way
+(6.8.0-146-generic through round 4, 6.8.0-147-generic in round 5 — an unattended-upgrade, see
+F-08's open finding; booted from the same disk with `-accel tcg -cpu max` from a throwaway
+launcher, not a repo change); only speed and the CPU model differ. `discovery` is untouched by
+this work, and the same test passes on the host. Restoring KVM (a Windows-side setting) is
+outside this task.
+
+- [x] Mount namespace + overlayfs upper layer — privileged, pinned options, `nouserxattr`,
+      upper/work on the host and unreachable from inside (tested, mutation-checked)
+- [x] Hard timeout — pidfd watchdog plus uid sweep, bounding the whole run and the host's stdio
+      reads; `RunRecord::timed_out`; not configurable off
+- [x] MCP **client stays on the host**, server runs in the sandbox, protocol crosses over
+      stdio (architecture.md §5 — keeps protocol handling outside the blast radius) —
+      `SandboxStdio`, round trip tested
+- [x] Must not emit any verdict — `RunRecord` is facts only; no `normalise`/`verdict` edge
 
 ### P1-04 Observation collector — upper layer
 
@@ -2982,9 +3463,19 @@ code and no verdict.
 ADR-004 — the gate is a hard precondition and **not configurable off**. A timed-out run with
 an empty changeset is not `readOnlyHint: holds`; that is the worst available failure mode.
 
-- [ ] `containment_uncertain` on orphan PIDs
+- [ ] `containment_uncertain` on orphan PIDs — for a P1-03 run: `teardown.residual_pids`
+      non-empty, `uid_sweep_completed` false, or `confirmed_empty` false
 - [ ] `timeout` on hard-timeout kill
+- [ ] **Carry the containment basis with every result** (from P1-03's fourth review round):
+      until P2-02, a clean teardown means "no descendant was *observed*" — the `/proc` scans
+      can miss a fork-and-exit chain allocated below the readdir cursor after a pid wrap. Record
+      `containment_basis = "proc_scan"` on the gate result and keep it attached to any verdict
+      derived from the run, through publication.
 - [ ] Not bypassable by configuration. Test that it cannot be disabled.
+- [ ] **Carry-forward from P1-03's fifth-round review:** `residual_outside_namespace` can be a
+      false positive for a process mid-`exec` (see the P1-03 known gaps). Treat it as a fact
+      that makes the run `containment_uncertain`, like any other residual — not as evidence of
+      an escape attempt.
 
 ### P1-06 Normaliser + ruleset v1
 
@@ -3804,6 +4295,37 @@ Named tests and what they pin, beyond the per-row table tests:
 **Exit:** One real `readOnlyHint` verdict on one real tool from one real MCP server, end to
 end. **This is the Phase 1 exit criterion.**
 
+**Carried from P1-03** (recorded there; listed here so they are not rediscovered):
+
+- **A real lower layer.** P1-03's supervisor takes one lower directory by path. A real server
+  needs a rootfs with its runtime (Node for `@modelcontextprotocol/server-filesystem`), and
+  `npm install` is not byte-reproducible. HANDOFF.md §4.6's recommendation stands: an OCI image
+  unpacked **by digest** as the immutable lower layer, P1-02 specs only for seeded data on top.
+  That needs OCI `.wh.*` → overlay-whiteout conversion and either several lower layers (add them
+  to `overlay::mount_data` as an explicit list — `:` stays a forbidden byte) or a merge.
+- **`/dev` and `/proc`.** The sandbox has neither (ADR-016: a procfs without a PID namespace
+  exposes the host root). Node may want `/dev/null`/`/dev/urandom`; a minimal `/dev` (a tmpfs
+  plus bind-mounted `null`, `zero`, `urandom`) is cheap, but procfs should wait for P2-01.
+- **Arm 0 subtraction** (P1-07's carry-forward): the supervisor runs Arm 0 as "spawn, no tool
+  call, `kill_and_wait`"; subtracting its changeset before assessment is this task's to wire.
+- **Drain the server's stderr** from `SandboxStdio` with `discovery`'s bounded relay, and feed
+  `RunRecord::{timed_out, teardown}` to P1-05's gate — `containment_uncertain` whenever
+  `teardown.residual_pids` is non-empty, `teardown.uid_sweep_completed` is false, or
+  `teardown.confirmed_empty` is false. Even a clean teardown means only "no descendant observed" until P2-02:
+  record `containment_basis = "proc_scan"` with the first verdict and carry it into the result.
+- **Exec the server binary directly, not through a forking launcher.** `npx` → `node` (or any
+  wrapper that forks rather than execs) always leaves residual pids when the direct child ends,
+  which makes every such run `containment_uncertain` until P2-01's PID namespace. Resolve the
+  package's entry point at lower-layer build time and make `program` the interpreter or binary
+  that stays in the foreground.
+- **⚑ For P1-04: `upper/` is entirely tool-written, hostile input.** It may hold FIFOs, sockets,
+  symlinks pointing anywhere, sparse or enormous files, and setuid/setgid files owned by the
+  run's uid. The harvester must `lstat` and open with `O_NOFOLLOW` (and `O_NONBLOCK` for anything
+  not a regular file), never follow, open for blocking I/O, or execute anything there, and must
+  bound sizes and entry counts. Also on `RunRecord::upper`'s doc comment.
+- **Give every concurrent run its own `RunAs` uid, at least 2 apart**: a run owns `uid` and its
+  helper uid `uid + 1` exclusively (ADR-016).
+
 ### P1-09 ⚑ Replay test
 
 **Depends on:** P1-08, F-05
@@ -3827,6 +4349,11 @@ This is the property that makes ruleset iteration safe.
 **Depends on:** P2-01
 **Exit:** `memory.max`, `cpu.max`, `pids.max` enforced; a fork bomb is contained; per-run
 resource cost recorded.
+
+- [ ] **Make "no descendant existed" decidable** (from P1-03's fourth review round): end the run
+      with `cgroup.kill` and confirm `cgroup.events` `populated 0`, record `pids.peak`, and only
+      then upgrade P1-05's `containment_basis` from `"proc_scan"` to `"cgroup"`. Until this
+      lands a clean P1-03 record means "none observed".
 
 ### P2-03 Full integrity gate
 
@@ -3969,6 +4496,10 @@ the primary determinant of achievable audit scale.
 
 **Depends on:** P4-02, P2-03
 **Exit:** `adversarial_flag` present on the published record, not just in the DB.
+
+- [ ] **Carry-forward from P1-03:** `TeardownReport::residual_outside_namespace` can be a false
+      positive for a process caught mid-`exec` (see the P1-03 known gaps). Do not publish it as
+      an adversarial flag or treat it as proof of an escape attempt.
 
 ### P4-04 Worker re-imaging
 
