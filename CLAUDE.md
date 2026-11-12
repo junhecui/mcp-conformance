@@ -23,6 +23,12 @@ without cause.
 
 @docs/tasks.md
 
+## Execution plan (sequencing and subagent briefs; not imported)
+
+`docs/plan.md` orders the remaining tasks, records the judgement calls behind that order,
+and holds the standing rules and per-task brief to give each subagent. Read it before
+picking the next task. `tasks.md` still wins on disagreement.
+
 ## Working orchestration model
 
 When continuing backlog work in this repo (e.g. "continue on the task list"), operate as a
